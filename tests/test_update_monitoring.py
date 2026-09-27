@@ -70,7 +70,9 @@ def upstream(monkeypatch, servers, latest='5.6.0', build=61):
                 for s in servers}}, {'id': build, 'channel': 'STABLE'}]
         if 'viaversion' in url.lower():
             return {'tag_name': latest, 'published_at': '2026-09-18T00:00:00Z'}
-        raise httpx.ReadTimeout('sensitive upstream message')
+        # Unexpected providers should fail without triggering the GitHub
+        # release-page fallback, which would make this fixture reach the net.
+        raise ValueError('sensitive upstream message')
     monkeypatch.setattr(providers, 'get_json', get)
     return calls
 
@@ -300,6 +302,7 @@ def test_cli_one_server_all_and_explicit_notifications(db, tmp_path, monkeypatch
 def test_web_permissions(db, tmp_path, monkeypatch, path, method, permission):
     row = server(db, tmp_path)
     upstream(monkeypatch, [row])
+    monkeypatch.setattr(web_plugins, '_run_plugin_update_check', lambda *_args: None)
     app = FastAPI()
     app.include_router(web_plugins.router)
     app.dependency_overrides[get_db] = lambda: db
@@ -357,7 +360,7 @@ def test_provider_malformed_data_fails_safely_and_recovers(db, tmp_path, monkeyp
     cache = monitor.cached_releases(db, provider, NOW)
     assert cache.error
     assert 'secret' not in caplog.text
-    assert 'GitHub Releases:viaversion/viaversion' in caplog.text
+    assert 'GitHub Releases:release-page-fallback-v3:viaversion/viaversion' in caplog.text
     calls = upstream(monkeypatch, [row])
     cache = monitor.cached_releases(db, provider, NOW + timedelta(minutes=16))
     assert cache.error is None
@@ -384,6 +387,7 @@ def test_unsupported_and_failed_sources_do_not_notify(db, tmp_path, monkeypatch)
     def timeout(url):
         raise httpx.ReadTimeout('token-secret')
     monkeypatch.setattr(providers, 'get_json', timeout)
+    monkeypatch.setattr(providers.GitHub, 'fetch_from_release_page', lambda self: timeout(self.project))
     monitor.check_updates(db, now=NOW, notify=True)
     assert not sent
     assert db.query(UpdateNotification).count() == 0
@@ -745,7 +749,7 @@ def test_pinned_tls_connect_preserves_certificate_hostname(monkeypatch):
 
 
 @pytest.mark.parametrize('status,headers,body,error', [
-    (302, {'Location': 'http://127.0.0.1/'}, b'', 'redirects'),
+    (302, {'Location': 'http://127.0.0.1/'}, b'', 'public HTTPS URL'),
     (200, {'Content-Type': 'application/java-archive'}, b'jar', 'not an artifact'),
     (200, {'Content-Type': 'text/plain', 'Content-Length': str(2 * 1024 * 1024)}, b'', '1 MiB'),
     (200, {'Content-Type': 'text/plain'}, b'x' * (1024 * 1024 + 1), '1 MiB'),
@@ -758,7 +762,7 @@ def test_public_metadata_transport_limits(monkeypatch, status, headers, body, er
     stream = io.BytesIO(body)
     response = SimpleNamespace(status=status, getheader=lambda name, default=None: headers.get(name, default), read1=stream.read)
     calls = []
-    connection = SimpleNamespace(request=lambda *args, **kwargs: calls.append(args), getresponse=lambda: response, close=lambda: calls.append('closed'))
+    connection = SimpleNamespace(timeout=10, request=lambda *args, **kwargs: calls.append(args), getresponse=lambda: response, close=lambda: calls.append('closed'))
     monkeypatch.setattr(http_source, 'public_addresses', lambda host: ['93.184.216.34'])
     monkeypatch.setattr(http_source, 'PinnedHTTPSConnection', lambda host, address: connection)
     with pytest.raises(ValueError, match=error):

@@ -242,7 +242,8 @@ def test_systemd_status_parses_properties_by_name(monkeypatch):
     status = processes._systemd_status(config)
 
     assert status == {
-        "running": True, "pid": 4321, "backend": "systemd",
+        "running": True, "state": "running", "console_available": False,
+        "pid": 4321, "backend": "systemd", "active_state": "active",
         "service_name": "survival",
         "unit_name": "craftarr-server@survival.service",
         "enabled_at_boot": True,
@@ -260,7 +261,8 @@ def test_systemd_status_treats_zero_pid_as_missing(monkeypatch):
     status = processes._systemd_status(config)
 
     assert status == {
-        "running": False, "pid": None, "backend": "systemd",
+        "running": False, "state": "stopped", "console_available": False,
+        "pid": None, "backend": "systemd", "active_state": "inactive",
         "service_name": "survival",
         "unit_name": "craftarr-server@survival.service",
         "enabled_at_boot": False,

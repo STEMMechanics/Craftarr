@@ -34,7 +34,7 @@ def test_performance_page_renders_full_and_htmx_views(monkeypatch, tmp_path):
         assert full_page.status_code == 200
         assert 'class="server-performance-page"' in full_page.text
         assert 'id="metric-cpu"' in full_page.text
-        assert "STEMMechanics" in full_page.text
+        assert "Craftarr" in full_page.text
         assert 'id="notifications-toggle"' in full_page.text
         assert 'id="account-menu-toggle"' in full_page.text
 
