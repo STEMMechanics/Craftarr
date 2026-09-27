@@ -19,7 +19,7 @@ from .version import APP_VERSION
 
 GITHUB_REPO = (
     "stemmechanics/"
-    "stemcraft-console"
+    "craftarr-console"
 )
 
 GITHUB_API = (
@@ -38,7 +38,7 @@ def github_request(
                 "application/vnd.github+json",
 
             "User-Agent":
-                f"STEMCraft-Console/{APP_VERSION}",
+                f"Craftarr-Console/{APP_VERSION}",
         },
     )
 
@@ -201,7 +201,7 @@ def _download(url: str, limit: int = 256 * 1024 * 1024) -> bytes:
         "release-assets.githubusercontent.com",
     }:
         raise ValueError("Untrusted release download URL")
-    request = urllib.request.Request(url, headers={"User-Agent": f"STEMCraft-Console/{APP_VERSION}"})
+    request = urllib.request.Request(url, headers={"User-Agent": f"Craftarr-Console/{APP_VERSION}"})
     with urllib.request.urlopen(request, timeout=120) as response:
         data = response.read(limit + 1)
     if len(data) > limit:
@@ -224,7 +224,7 @@ def _safe_extract(archive_data: bytes, destination: Path) -> Path:
     for candidate in candidates:
         if (candidate / "app").is_dir() and (candidate / "alembic.ini").is_file():
             return candidate
-    raise ValueError("Release archive does not contain a STEMCraft Console application")
+    raise ValueError("Release archive does not contain a Craftarr application")
 
 
 def install_release(tag: str, project_root: Path | None = None) -> dict:
@@ -252,7 +252,7 @@ def install_release(tag: str, project_root: Path | None = None) -> dict:
     root = (project_root or Path(__file__).resolve().parent.parent).resolve()
     backup = root / ".updates" / datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     backup.mkdir(parents=True, exist_ok=False)
-    with tempfile.TemporaryDirectory(prefix="stemcraft-update-") as temp_name:
+    with tempfile.TemporaryDirectory(prefix="craftarr-update-") as temp_name:
         source = _safe_extract(archive_data, Path(temp_name))
         try:
             for name in UPDATE_ITEMS:

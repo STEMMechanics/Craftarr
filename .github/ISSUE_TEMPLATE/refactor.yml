@@ -32,7 +32,7 @@ body:
       label: What does this touch?
       description: |
         Call out anything affecting `scripts/install.sh`, the release workflow,
-        the `stemcraft-console` helper, systemd units, or paths used by existing
+        the `craftarr-console` helper, systemd units, or paths used by existing
         installations.
     validations:
       required: true

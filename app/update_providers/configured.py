@@ -76,6 +76,24 @@ class Jenkins(DocumentSource):
         self.project = self.project.rstrip('/')
 
     def fetch(self):
+        build_index = {}
+        try:
+            builds_data = json.loads(fetch_document(
+                self.project + '/api/json?tree=builds%5Bnumber%2Cresult%2CchangeSet%5Bitems%5Bid%5D%5D%5D'
+            ))
+            for build in builds_data.get('builds', []):
+                if build.get('result') not in (None, 'SUCCESS'):
+                    continue
+                for change in (build.get('changeSet') or {}).get('items', []):
+                    commit = str(change.get('id', '')).casefold()
+                    number = build.get('number')
+                    if commit and isinstance(number, int) and number >= 0:
+                        build_index[commit] = str(number)
+                        build_index[commit[:7]] = str(number)
+        except (SourceError, ValueError, TypeError, KeyError):
+            # The build index is helpful for snapshot JARs, but the normal
+            # Jenkins endpoint remains sufficient for release checks.
+            pass
         try:
             document = fetch_document(self.project + '/lastSuccessfulBuild/api/json?tree=number,timestamp,artifacts[fileName,relativePath]')
         except SourceHTTPError as error:
@@ -98,11 +116,13 @@ class Jenkins(DocumentSource):
             link = validate_url(urljoin(release_url, extract(self.link_pattern, document, 'url')))
         else:
             artifacts = [a for a in data.get('artifacts', []) if str(a.get('fileName', '')).endswith('.jar')]
-            if len(artifacts) == 1:
-                path = artifacts[0].get('relativePath', '')
+            paper_artifacts = [a for a in artifacts if re.search(r'(^|[-_.])paper([-_.]|$)', str(a.get('fileName', '')), re.IGNORECASE)]
+            selected = paper_artifacts[0] if len(paper_artifacts) == 1 else artifacts[0] if len(artifacts) == 1 else None
+            if selected:
+                path = selected.get('relativePath', '')
                 if isinstance(path, str) and path and not path.startswith('/') and all(p not in {'.', '..', ''} for p in path.split('/')):
                     link = validate_url(release_url + 'artifact/' + quote(path, safe='/'))
-        return [Release(version, release_url, date, download_url=link)]
+        return [Release(version, release_url, date, checksums=build_index or None, download_url=link)]
 
 
     def page_metadata(self, document):
@@ -175,6 +195,11 @@ class ConfiguredProvider(Provider):
                 match = re.search(pattern, str(value or ''))
                 if match:
                     return match[1], origin
+            # Snapshot JARs often carry the source commit in plugin.yml while
+            # their filenames are identical across Jenkins builds.
+            commit = re.search(r'(?i)\+([0-9a-f]{7,40})(?:$|[+ ])', str(installed or ''))
+            if commit:
+                return f'commit:{commit[1].casefold()}', 'JAR metadata'
             raise SourceError('No installed Jenkins build number found in JAR metadata or filename; use an installed version expression or a version-based source')
         return installed, 'JAR metadata'
 
@@ -182,7 +207,25 @@ class ConfiguredProvider(Provider):
         return self.installed_details(installed, filename)[0]
 
     def compare(self, installed, release, filename=None):
-        return compare_versions(self.installed_value(installed, filename), release.version)
+        value = self.installed_value(installed, filename)
+        if value.startswith('commit:'):
+            build = (release.checksums or {}).get(value.removeprefix('commit:'))
+            if not build:
+                return None
+            value = build
+        return compare_versions(value, release.version)
+
+    def display_installed(self, installed, release=None, filename=None):
+        value = self.installed_value(installed, filename)
+        if isinstance(value, str) and value.startswith('commit:'):
+            if release:
+                build = (release.checksums or {}).get(value.removeprefix('commit:'))
+                if build:
+                    return f'build {build}'
+            return installed or value
+        if isinstance(self.source, Jenkins) and not self.version_pattern and value:
+            return f'build {value}'
+        return value if value is not None else installed
 
     def display_version(self, release):
         return f'build {release.version}' if isinstance(self.source, Jenkins) and not self.version_pattern else release.version

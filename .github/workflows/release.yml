@@ -40,11 +40,11 @@ jobs:
           mkdir -p dist
           git archive \
             --format=tar.gz \
-            --prefix="stemcraft-console-$version/" \
-            --output="dist/stemcraft-console-$version.tar.gz" \
+            --prefix="craftarr-console-$version/" \
+            --output="dist/craftarr-console-$version.tar.gz" \
             HEAD
           cd dist
-          sha256sum "stemcraft-console-$version.tar.gz" > "stemcraft-console-$version.tar.gz.sha256"
+          sha256sum "craftarr-console-$version.tar.gz" > "craftarr-console-$version.tar.gz.sha256"
 
       - name: Publish GitHub release
         env:
@@ -53,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ steps.version.outputs.version }}"
-          archive="dist/stemcraft-console-$version.tar.gz"
+          archive="dist/craftarr-console-$version.tar.gz"
           checksum="$archive.sha256"
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "$archive" "$checksum" --clobber

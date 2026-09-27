@@ -50,7 +50,7 @@ def delete_managed_server(
         resolved = server_path.resolve()
         if server_path.is_symlink() or resolved == root or not resolved.is_relative_to(root):
             raise ValueError("Server files can only be deleted from the managed server directory")
-        staged_path = resolved.with_name(f".stemcraft-delete-{server.id}-{uuid.uuid4().hex}")
+        staged_path = resolved.with_name(f".craftarr-delete-{server.id}-{uuid.uuid4().hex}")
         resolved.rename(staged_path)
 
     try:

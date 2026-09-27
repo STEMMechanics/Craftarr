@@ -4,11 +4,13 @@ import ipaddress
 import socket
 import ssl
 import time
-from urllib.parse import urlsplit, urlunsplit, parse_qsl
+from urllib.parse import urljoin, urlsplit, urlunsplit, parse_qsl
 
 from ..paper import USER_AGENT
 
 MAX_BODY = 1024 * 1024
+MAX_REDIRECTS = 5
+REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
 
 class SourceError(ValueError):
@@ -85,48 +87,62 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
 
 
 def fetch_document(url):
-    parts = urlsplit(validate_url(url))
-    if parts.path.lower().endswith(('.jar', '.zip', '.exe', '.gz')):
-        raise SourceError('Configure a metadata page or API, not an artifact URL')
-    addresses = public_addresses(parts.hostname)
-    connection = PinnedHTTPSConnection(parts.hostname, addresses[0])
+    current_url = validate_url(url)
     deadline = time.monotonic() + 30
-    try:
-        target = urlunsplit(('', '', parts.path, parts.query, ''))
-        connection.request('GET', target, headers={
-            'User-Agent': USER_AGENT, 'Accept': 'application/json, text/html, text/plain',
-            'Accept-Encoding': 'identity',
-        })
-        response = connection.getresponse()
-        if 300 <= response.status < 400:
-            raise SourceError('Source redirects; configure its final HTTPS URL instead')
-        if response.status != 200:
-            raise SourceHTTPError(response.status)
-        content_type = response.getheader('Content-Type', '').split(';')[0].strip().lower()
-        if not (content_type.startswith('text/') or content_type in {'application/json', 'application/xml'}
-                or content_type.endswith(('+json', '+xml'))):
-            raise SourceError('Source must return text, HTML, XML or JSON metadata, not an artifact')
-        size = response.getheader('Content-Length')
-        if size and int(size) > MAX_BODY:
-            raise SourceError('Source response exceeds the 1 MiB limit')
-        if response.getheader('Content-Encoding', 'identity').lower() != 'identity':
-            raise SourceError('Compressed source responses are not supported')
-        body = bytearray()
-        while True:
-            if time.monotonic() >= deadline:
-                raise SourceError('Source request exceeded the time limit')
-            chunk = response.read1(min(65536, MAX_BODY + 1 - len(body)))
-            if not chunk:
-                break
-            if not body and chunk.startswith(b'PK\x03\x04'):
-                raise SourceError('Source returned an archive rather than metadata')
-            body.extend(chunk)
-            if len(body) > MAX_BODY:
+    for redirect_count in range(MAX_REDIRECTS + 1):
+        parts = urlsplit(current_url)
+        if parts.path.lower().endswith(('.jar', '.zip', '.exe', '.gz')):
+            raise SourceError('Configure a metadata page or API, not an artifact URL')
+        addresses = public_addresses(parts.hostname)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise SourceError('Source request exceeded the time limit')
+        connection = PinnedHTTPSConnection(parts.hostname, addresses[0])
+        connection.timeout = min(connection.timeout, remaining)
+        try:
+            target = urlunsplit(('', '', parts.path, parts.query, ''))
+            connection.request('GET', target, headers={
+                'User-Agent': USER_AGENT, 'Accept': 'application/json, text/html, text/plain',
+                'Accept-Encoding': 'identity',
+            })
+            response = connection.getresponse()
+            if response.status in REDIRECT_STATUSES:
+                if redirect_count >= MAX_REDIRECTS:
+                    raise SourceError('Source redirected too many times')
+                location = response.getheader('Location')
+                if not location:
+                    raise SourceError('Source returned a redirect without a destination')
+                current_url = validate_url(urljoin(current_url, location))
+                continue
+            if 300 <= response.status < 400:
+                raise SourceHTTPError(response.status)
+            if response.status != 200:
+                raise SourceHTTPError(response.status)
+            content_type = response.getheader('Content-Type', '').split(';')[0].strip().lower()
+            if not (content_type.startswith('text/') or content_type in {'application/json', 'application/xml'}
+                    or content_type.endswith(('+json', '+xml'))):
+                raise SourceError('Source must return text, HTML, XML or JSON metadata, not an artifact')
+            size = response.getheader('Content-Length')
+            if size and int(size) > MAX_BODY:
                 raise SourceError('Source response exceeds the 1 MiB limit')
-        return body.decode('utf-8', errors='replace')
-    except SourceError:
-        raise
-    except (OSError, ValueError, http.client.HTTPException):
-        raise SourceError('Unable to read source metadata; check HTTPS access and response format') from None
-    finally:
-        connection.close()
+            if response.getheader('Content-Encoding', 'identity').lower() != 'identity':
+                raise SourceError('Compressed source responses are not supported')
+            body = bytearray()
+            while True:
+                if time.monotonic() >= deadline:
+                    raise SourceError('Source request exceeded the time limit')
+                chunk = response.read1(min(65536, MAX_BODY + 1 - len(body)))
+                if not chunk:
+                    break
+                if not body and chunk.startswith(b'PK\x03\x04'):
+                    raise SourceError('Source returned an archive rather than metadata')
+                body.extend(chunk)
+                if len(body) > MAX_BODY:
+                    raise SourceError('Source response exceeds the 1 MiB limit')
+            return body.decode('utf-8', errors='replace')
+        except SourceError:
+            raise
+        except (OSError, ValueError, http.client.HTTPException):
+            raise SourceError('Unable to read source metadata; check HTTPS access and response format') from None
+        finally:
+            connection.close()

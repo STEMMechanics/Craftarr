@@ -1,8 +1,10 @@
 from fastapi import (
     APIRouter,
     Depends,
+    File,
     HTTPException,
     Request,
+    UploadFile,
 )
 
 from fastapi.responses import (
@@ -53,6 +55,13 @@ from .java_runtime import (
 )
 from .advanced_properties import discover_advanced_properties, save_advanced_property
 from .file_manager import yaml_sanity_warning
+from .server_archives import (
+    SETTINGS_EXPORT_FILENAME,
+    MAX_SETTINGS_EXPORT_BYTES,
+    parse_settings_document,
+    server_settings_document,
+    validate_portable_settings,
+)
 
 
 router = APIRouter()
@@ -260,6 +269,93 @@ def properties_data(
             "enabled_at_boot": status.get("enabled_at_boot"),
             "systemd_available": systemd_available(),
         },
+    }
+
+
+@router.get("/servers/{server_id:int}/settings-export")
+def export_server_settings(
+    server_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return RedirectResponse("/login")
+    if not server or not has_permission(user, "servers.properties"):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    filename = SETTINGS_EXPORT_FILENAME
+    return JSONResponse(
+        server_settings_document(server),
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.post("/api/web/servers/{server_id}/settings/import")
+async def import_server_settings(
+    server_id: int,
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not server or not has_permission(user, "servers.properties"):
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+
+    try:
+        content = await file.read(MAX_SETTINGS_EXPORT_BYTES + 1)
+        settings = parse_settings_document(content)
+        defaults = {
+            key: getattr(server, key)
+            for key in (
+                "minecraft_version", "paper_build", "memory", "min_memory",
+                "jar_name", "java_args", "stop_commands",
+            )
+        }
+        values = validate_portable_settings(
+            settings,
+            server.directory,
+            defaults=defaults,
+        )
+    except (OSError, ValueError) as error:
+        return JSONResponse({"error": str(error)}, status_code=400)
+    finally:
+        await file.close()
+
+    running = bool(server_status(server.id).get("running"))
+    old_values = {
+        key: getattr(server, key)
+        for key in values
+    }
+    try:
+        for key, value in values.items():
+            setattr(server, key, value)
+        register_server(server)
+        db.commit()
+    except Exception as error:
+        db.rollback()
+        for key, value in old_values.items():
+            setattr(server, key, value)
+        register_server(server)
+        return JSONResponse(
+            {"error": f"Unable to import settings: {error}"},
+            status_code=400,
+        )
+
+    return {
+        "success": True,
+        "running": running,
+        "restart_required": running,
+        "message": (
+            "Settings imported. Restart the server to apply them."
+            if running
+            else "Settings imported. They will apply the next time the server starts."
+        ),
     }
 
 

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="520" height="118" viewBox="0 0 520 118" role="img" aria-labelledby="title desc">
+  <title id="title">Craftarr</title>
+  <desc id="desc">Craftarr Minecraft server management</desc>
+  <g transform="translate(13 10)">
+    <rect x="0" y="0" width="98" height="98" rx="24" fill="#e8f7ed"/>
+    <path d="m49 17 30 17v34L49 85 19 68V34z" fill="#16884c"/>
+    <path d="m49 17 30 17-30 17-30-17z" fill="#62c783"/>
+    <path d="M19 34v34l30 17V51z" fill="#218f54"/>
+    <path d="M79 34v34L49 85V51z" fill="#126b3b"/>
+    <path d="m49 51 30-17v8L49 60 19 42v-8z" fill="#d7f6df" opacity=".9"/>
+  </g>
+  <text x="132" y="80" fill="#173b2a" font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="68" font-weight="750" letter-spacing="-3">Craftarr</text>
+</svg>

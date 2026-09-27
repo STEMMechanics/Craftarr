@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest something STEMCraft Console doesn't do yet.
+description: Suggest something Craftarr doesn't do yet.
 labels: ["enhancement", "needs-triage"]
 body:
   - type: markdown
@@ -22,7 +22,7 @@ body:
   - type: textarea
     id: solution
     attributes:
-      label: What would you like STEMCraft Console to do?
+      label: What would you like Craftarr to do?
     validations:
       required: true
 
@@ -35,7 +35,7 @@ body:
   - type: input
     id: setup
     attributes:
-      label: How do you run STEMCraft Console?
+      label: How do you run Craftarr?
       description: |
         Optional, but useful. Include the number of servers, Minecraft versions,
         and whether they use systemd.

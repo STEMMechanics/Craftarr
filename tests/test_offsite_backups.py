@@ -118,7 +118,7 @@ def test_missing_rclone_has_actionable_error(monkeypatch):
 
 
 def test_website_can_create_and_update_b2_remote(monkeypatch, tmp_path):
-    monkeypatch.setenv("STEMCRAFT_RCLONE_CONFIG", str(tmp_path / "rclone.conf"))
+    monkeypatch.setenv("CRAFTARR_RCLONE_CONFIG", str(tmp_path / "rclone.conf"))
     monkeypatch.setattr(
         offsite_backups, "_run_rclone",
         lambda *args, input_text=None: completed("obscured-value\n"),
@@ -144,7 +144,7 @@ def test_website_can_create_and_update_b2_remote(monkeypatch, tmp_path):
 def test_website_can_remove_remote(monkeypatch, tmp_path):
     config_path = tmp_path / "rclone.conf"
     config_path.write_text("[old]\ntype = sftp\nhost = example.test\n")
-    monkeypatch.setenv("STEMCRAFT_RCLONE_CONFIG", str(config_path))
+    monkeypatch.setenv("CRAFTARR_RCLONE_CONFIG", str(config_path))
 
     offsite_backups.delete_remote("old")
 

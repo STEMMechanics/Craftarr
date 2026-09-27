@@ -1,5 +1,5 @@
-# Default plugin update sources. Edit this file when a project's release source changes.
-# Per-server settings on the Plugins page override these entries, including Disabled.
+# Shared plugin update sources. Manage this repository from App Settings or edit the YAML.
+# Per-server manual or disabled settings override these entries.
 # Names and aliases match plugin.yml/paper-plugin.yml metadata, not JAR filenames.
 # Paper is monitored separately in the server version UI, not as a plugin.
 version: 1
@@ -40,6 +40,10 @@ plugins:
   PlaceholderAPI:
     provider: github
     project: https://github.com/PlaceholderAPI/PlaceholderAPI
+  Pl3xMap:
+    provider: modrinth
+    project: https://modrinth.com/plugin/pl3xmap
+    notes: Uses beta releases when Pl3xMap has no stable Bukkit/Paper release on Modrinth.
   PlotSquared:
     aliases: [PlotSquared Premium]
     provider: github

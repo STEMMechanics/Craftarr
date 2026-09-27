@@ -47,7 +47,7 @@ def check_system_alerts(db, now: datetime | None = None) -> list[str]:
             last = None
         if last and now - last < timedelta(minutes=settings["cooldown_minutes"]):
             continue
-        subject = f"STEMCraft alert: {resource} usage is {percent:.1f}%"
+        subject = f"Craftarr alert: {resource} usage is {percent:.1f}%"
         body = (
             f"{resource.title()} usage reached {percent:.1f}%.\n"
             f"Configured threshold: {thresholds[resource]}%.\n"

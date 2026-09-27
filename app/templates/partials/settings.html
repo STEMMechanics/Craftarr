@@ -223,6 +223,28 @@
 
     <section class="overview-card settings-section">
         <div class="card-header">
+            <span>Shared plugin update settings</span>
+            <a class="settings-header-button" href="/api/web/settings/plugin-monitoring-repository/download"><i class="fa-solid fa-download" aria-hidden="true"></i> Download</a>
+        </div>
+        <div class="settings-content plugin-monitoring-repository-content">
+            <p class="modal-note full-width">These settings are available to every server. Plugin settings can use this shared source or keep a server-specific source. Uploading replaces the shared repository. Use version 1 YAML, up to 256 KiB.</p>
+            <label class="property-field full-width" for="plugin-monitoring-repository-editor">
+                <span>Repository file (YAML)</span>
+                <textarea id="plugin-monitoring-repository-editor" rows="20" spellcheck="false" autocapitalize="off"></textarea>
+            </label>
+            <input id="plugin-monitoring-repository-file" type="file" accept=".yml,.yaml,text/yaml,text/plain" hidden onchange="uploadPluginMonitoringRepository(this)">
+            <div class="settings-save-row full-width">
+                <span id="plugin-monitoring-repository-status" class="muted-small" role="status"></span>
+                <div class="plugin-monitoring-repository-actions">
+                    <button class="button" type="button" onclick="document.getElementById('plugin-monitoring-repository-file').click()"><i class="fa-solid fa-upload" aria-hidden="true"></i> Upload</button>
+                    <button class="button success" type="button" onclick="savePluginMonitoringRepository()">Save shared settings</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="overview-card settings-section">
+        <div class="card-header">
             <span>Off-site Backups - <small id="offsite-settings-status">Checking...</small></span>
             <div class="card-header-buttons">
                 <button class="settings-header-button" type="button" onclick="openOffsiteRemoteModal()"><i class="fa-solid fa-plus"></i> Add destination</button>
@@ -370,7 +392,7 @@
 
                 <span>From Name</span>
 
-                <input id="smtp-from-name" value="STEMCraft Console">
+                <input id="smtp-from-name" value="Craftarr">
 
             </label>
 

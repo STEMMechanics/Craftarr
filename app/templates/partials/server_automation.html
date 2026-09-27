@@ -1,4 +1,4 @@
-<div class="automation-page" data-server-id="{{ server.id }}" data-timezone="{{ schedule_timezone }}" data-can-manage="{{ 'true' if user.can('automation.manage') else 'false' }}" data-page-title="Scheduling">
+<div class="automation-page" data-server-id="{{ server.id }}" data-timezone="{{ schedule_timezone }}" data-can-manage="{{ 'true' if user.can('automation.manage') else 'false' }}" data-page-title="Tasks">
   <div class="automation-panels">
     <section class="overview-card automation-card">
       <div class="card-header"><span><i class="fa-solid fa-terminal"></i> Commands</span>{% if user.can("automation.manage") %}<button class="panel-header-button" type="button" onclick="openServerScheduleModal('command')"><i class="fa-solid fa-plus"></i> Add command</button>{% endif %}</div>

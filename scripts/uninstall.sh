@@ -13,7 +13,7 @@ else
   error() { printf '[ERROR] %s\n' "$*" >&2; }
 fi
 
-banner "STEMCraft Console Uninstaller"
+banner "Craftarr Uninstaller"
 
 usage() {
   cat <<EOF
@@ -65,13 +65,13 @@ if [[ "$CONFIRMED" != true ]]; then
   exit 1
 fi
 
-INSTALL_DIR=/opt/stemcraft-console
-CONFIG_DIR=/etc/stemcraft-console
-DATA_DIR=/var/lib/stemcraft-console
+INSTALL_DIR=/opt/craftarr
+CONFIG_DIR=/etc/craftarr
+DATA_DIR=/var/lib/craftarr
 SERVER_DIR=/srv/minecraft
-RUNTIME_DIR=/run/stemcraft-console
-SERVICE_USER=stemcraft
-SERVICE_GROUP=stemcraft
+RUNTIME_DIR=/run/craftarr
+SERVICE_USER=craftarr
+SERVICE_GROUP=craftarr
 
 remove_tree() {
   local target=$1
@@ -89,16 +89,16 @@ remove_tree() {
 }
 
 section "Stopping and disabling services"
-systemctl disable --now stemcraft-console.service 2>/dev/null || true
+systemctl disable --now craftarr-console.service 2>/dev/null || true
 
 if [[ "$PURGE_ALL" == true ]]; then
   info "Stopping all managed Minecraft services"
-  systemctl disable --now 'stemcraft-server@*.service' 2>/dev/null || true
+  systemctl disable --now 'craftarr-server@*.service' 2>/dev/null || true
 fi
 
-rm -f /etc/systemd/system/stemcraft-console.service /etc/systemd/system/stemcraft-server@.service
-rm -f /etc/polkit-1/rules.d/50-stemcraft-console.rules
-rm -f /usr/bin/stemcraft-console /usr/local/sbin/stemcraft-console
+rm -f /etc/systemd/system/craftarr-console.service /etc/systemd/system/craftarr-server@.service
+rm -f /etc/polkit-1/rules.d/50-craftarr-console.rules
+rm -f /usr/bin/craftarr-console /usr/local/sbin/craftarr-console
 systemctl daemon-reload
 
 section "Removing application files"
@@ -119,7 +119,7 @@ if [[ "$PURGE_ALL" == true ]]; then
     groupdel "$SERVICE_GROUP" 2>/dev/null || true
   fi
 
-  banner "STEMCraft Console was completely removed"
+  banner "Craftarr was completely removed"
   cat <<EOF
 
 Deleted permanently:
@@ -133,7 +133,7 @@ EOF
   exit 0
 fi
 
-banner "STEMCraft Console was removed"
+banner "Craftarr was removed"
 cat <<EOF
 Application files were removed successfully.
 

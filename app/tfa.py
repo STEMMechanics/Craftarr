@@ -16,7 +16,7 @@ from .models import (
 )
 
 
-ISSUER_NAME = "STEMCraft Console"
+ISSUER_NAME = "Craftarr"
 
 
 def generate_totp_secret() -> str:

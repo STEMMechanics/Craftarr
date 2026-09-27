@@ -1,20 +1,44 @@
 <div
     class="properties-page"
     data-server-id="{{ server.id }}"
-    data-page-title="Properties"
+    data-page-title="Settings"
 >
+    <section class="overview-card property-section server-transfer-section">
+        <div class="card-header"><span>Import and Export</span></div>
+        <div class="server-transfer-body">
+            <div class="server-transfer-actions">
+                <a class="button" href="/servers/{{ server.id }}/settings-export" download>
+                    <i class="fa-solid fa-file-arrow-down" aria-hidden="true"></i> Export settings
+                </a>
+                <label class="button secondary" for="server-settings-import-file">
+                    <i class="fa-solid fa-file-arrow-up" aria-hidden="true"></i> Import settings
+                </label>
+                <input id="server-settings-import-file" class="visually-hidden" type="file" accept=".json,application/json" onchange="handleServerSettingsFile(this)">
+                {% if user.can('files.view') %}
+                <a class="button success" href="/servers/{{ server.id }}/export">
+                    <i class="fa-solid fa-file-zipper" aria-hidden="true"></i> Export server ZIP
+                </a>
+                {% endif %}
+            </div>
+            <p>Settings exports include startup memory, the selected JAR, Java options, stop commands, and Minecraft version metadata. They exclude files stored in the server folder and host-specific Java paths or service settings.</p>
+            {% if user.can('files.view') %}<p>Server ZIP exports include the full server folder and a settings export. If the server is running, Minecraft saves are briefly paused while the ZIP is created.</p>{% endif %}
+            <p id="server-settings-transfer-status" class="muted-small" role="status" aria-live="polite"></p>
+        </div>
+    </section>
+
     {% if user.can("servers.properties") %}
     <section class="overview-card property-section paper-management" data-server-id="{{ server.id }}">
-        <div class="card-header"><span>Paper Server Version</span><span id="paper-version-detail" class="plugin-count">Checking releases...</span></div>
+        <div class="card-header"><span>Minecraft server version</span><span id="paper-version-detail" class="server-inline-update-status is-pending"><i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i><span>Checking update status…</span></span></div>
         <div class="paper-management-body">
             <div>
                 <strong class="paper-installed-version">Installed: Paper <span id="paper-installed-version">{{ server.minecraft_version or "Unknown" }}{% if server.paper_build %} <small>(build {{ server.paper_build }})</small>{% endif %}</span></strong>
-                <p>Download the latest stable build, replace the configured server JAR, or change Minecraft versions. The server must be stopped.</p>
+                <p>Install a newer server version or choose a different Minecraft version. Stop the server first.</p>
             </div>
             <label class="property-field"><span>Minecraft version</span><select id="paper-version-select" onchange="loadPaperBuilds(this.value)"><option>Loading versions...</option></select></label>
             <label class="property-field"><span>Paper build</span><select id="paper-build-select"><option>Loading builds...</option></select></label>
-            <button id="paper-update-button" class="button success is-unavailable" onclick="installPaperVersion()" type="button" aria-disabled="true" data-unavailable-reason="Checking server status...">Download and replace JAR</button>
+            <button id="paper-update-button" class="button success is-unavailable" onclick="installPaperVersion()" type="button" aria-disabled="true" data-unavailable-reason="Checking server status…"><i class="fa-solid fa-download" aria-hidden="true"></i> Download and install</button>
         </div>
+        {% if user.can("backups.manage") %}<p class="paper-safety-note"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i> For safety, make a backup before updating. <a href="/servers/{{ server.id }}/backups" hx-get="/servers/{{ server.id }}/backups" hx-target="#page-content" hx-push-url="true">Open Backups</a></p>{% endif %}
         <p id="paper-update-message" class="paper-update-message muted-small"></p>
     </section>
     {% endif %}
@@ -47,7 +71,7 @@
         <section class="overview-card property-section">
 
             <div class="card-header">
-                Process Management
+                How the server runs
             </div>
 
             <div id="property-systemd-unavailable" class="plugin-restart-alert process-management-notice" hidden>
@@ -93,8 +117,8 @@
 
                 <label id="property-systemd-enabled-row" class="property-toggle full-width">
                     <div>
-                        <strong>Start automatically at boot</strong>
-                        <small>Enable the systemd service without starting or stopping it now.</small>
+                        <strong>Start when this computer turns on</strong>
+                        <small>Start the Minecraft server automatically when the computer starts.</small>
                     </div>
                     <span class="switch">
                         <input id="property-systemd-enabled" type="checkbox">
@@ -109,32 +133,32 @@
         <section class="overview-card property-section">
 
             <div class="card-header">
-                Startup and Memory
+                Start and memory
             </div>
 
             <div class="property-grid">
 
                 <label class="property-field">
-                    <span>Initial RAM</span>
+                    <span>Starting memory</span>
                     <select id="property-min-memory" onchange="updateStartupCommandPreview()"><option value="1G">1 GB</option><option value="2G">2 GB</option><option value="4G">4 GB</option><option value="6G">6 GB</option><option value="8G">8 GB</option><option value="12G">12 GB</option><option value="16G">16 GB</option></select>
                     <small>Java <code>-Xms</code>. Memory reserved when the server starts.</small>
                 </label>
 
                 <label class="property-field">
-                    <span>Maximum RAM</span>
+                    <span>Memory limit</span>
                     <select id="property-max-memory" onchange="updateStartupCommandPreview()"><option value="1G">1 GB</option><option value="2G">2 GB</option><option value="4G">4 GB</option><option value="6G">6 GB</option><option value="8G">8 GB</option><option value="12G">12 GB</option><option value="16G">16 GB</option></select>
                     <small>Java <code>-Xmx</code>. The upper memory allocation limit.</small>
                 </label>
 
                 <label class="property-field">
-                    <span>Server JAR</span>
+                    <span>Server file (.jar)</span>
                     <input id="property-jar-name" type="text" list="server-jar-files" placeholder="paper.jar" oninput="updateStartupCommandPreview()">
                     <datalist id="server-jar-files"></datalist>
-                    <small>JAR file in the server directory.</small>
+                    <small>This is the file Minecraft uses to start the server.</small>
                 </label>
 
                 <label class="property-field full-width">
-                    <span>Java Startup Options</span>
+                    <span>Extra Java options</span>
                     <input id="property-java-args" type="text" placeholder="No additional options (default)" oninput="updateStartupCommandPreview()">
                     <small>Optional JVM arguments inserted before <code>-jar</code>. RAM flags are managed above.</small>
                 </label>
@@ -170,7 +194,7 @@
 
                 <label class="property-field full-width">
 
-                    <span>MOTD</span>
+                    <span>Server message</span>
 
                     <input
                         id="property-motd"
@@ -201,7 +225,7 @@
 
                 <label class="property-field">
 
-                    <span>Max Players</span>
+                    <span>Player limit</span>
 
                     <input
                         id="property-max-players"
@@ -331,7 +355,7 @@
 
                 <label class="property-field">
 
-                    <span>Level Name</span>
+                    <span>World name</span>
 
                     <input
                         id="property-level-name"
@@ -370,7 +394,7 @@
 
                 <label class="property-field">
 
-                    <span>Simulation Distance</span>
+                    <span>Game update distance</span>
 
                     <input
                         id="property-simulation-distance"
@@ -519,7 +543,7 @@
 
                     <div>
                         <strong>Whitelist</strong>
-                        <small>Only whitelisted players can join.</small>
+                        <small>Only players on this list can join.</small>
                     </div>
 
                     <span class="switch">
@@ -634,6 +658,18 @@
 
     </form>
 
+    <div id="server-settings-import-modal" class="modal-backdrop" hidden>
+        <div class="modal-card">
+            <h2>Import server settings?</h2>
+            <p id="server-settings-import-summary">This replaces the panel-managed startup settings for this server.</p>
+            <p class="modal-note">The server name, folder, Java runtime, service mode, and settings stored in the server files are not changed.</p>
+            <div class="modal-actions">
+                <button class="button" type="button" onclick="closeServerSettingsImport()">Cancel</button>
+                <button id="confirm-server-settings-import" class="button success" type="button" onclick="confirmServerSettingsImport()">Import settings</button>
+            </div>
+        </div>
+    </div>
+
     <div id="properties-restart-modal" class="modal-backdrop" hidden>
         <div class="modal-card">
             <h2>Restart server to apply changes?</h2>
@@ -662,7 +698,7 @@
     <div id="delete-server-modal" class="modal-backdrop" hidden>
         <div class="modal-card">
             <h2>Delete {{ server.name }}?</h2>
-            <p>The server will be stopped, then removed from STEMCraft Console along with its access assignments, schedules, backup history, and performance history.</p>
+            <p>The server will be stopped, then removed from Craftarr along with its access assignments, schedules, backup history, and performance history.</p>
             <label class="modal-checkbox">
                 <input id="delete-server-files" type="checkbox">
                 <span>Also permanently delete all server data in <code>{{ server.directory }}</code></span>

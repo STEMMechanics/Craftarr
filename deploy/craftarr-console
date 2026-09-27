@@ -8,7 +8,7 @@ rerun_as_root() {
   self_path=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || true)
   [[ -n "$self_path" ]] || self_path=$(command -v -- "${BASH_SOURCE[0]}" 2>/dev/null || true)
   if [[ -z "$self_path" ]]; then
-    echo "Unable to resolve the stemcraft-console command path." >&2
+    echo "Unable to resolve the craftarr-console command path." >&2
     exit 1
   fi
   exec sudo -- "$self_path" "${ORIGINAL_ARGS[@]}"
@@ -17,9 +17,9 @@ rerun_as_root() {
 usage() {
   cat <<'EOF'
 Usage:
-  stemcraft-console {status|start|stop|restart|logs}
-  stemcraft-console reset-password [USERNAME]
-  stemcraft-console server NAME {status|start|stop|restart|logs}
+  craftarr-console {status|start|stop|restart|logs}
+  craftarr-console reset-password [USERNAME]
+  craftarr-console server NAME {status|start|stop|restart|logs}
 
 The server NAME is the systemd service name configured in the panel.
 EOF
@@ -52,10 +52,10 @@ if [[ ${1:-} == reset-password ]]; then
     echo "Invalid username." >&2
     exit 2
   }
-  cd /opt/stemcraft-console
-  exec runuser -u stemcraft -- env \
-    STEMCRAFT_CONSOLE_ENV=/etc/stemcraft-console/console.env \
-    /opt/stemcraft-console/.venv/bin/python -m app.admin_cli reset-password "$username"
+  cd /opt/craftarr
+  exec runuser -u craftarr -- env \
+    CRAFTARR_CONSOLE_ENV=/etc/craftarr/console.env \
+    /opt/craftarr/.venv/bin/python -m app.admin_cli reset-password "$username"
 elif [[ ${1:-} == server ]]; then
   [[ $# -eq 3 ]] || { usage >&2; exit 2; }
   name=$2
@@ -63,9 +63,10 @@ elif [[ ${1:-} == server ]]; then
     echo "Invalid server service name." >&2
     exit 2
   }
-  run_unit_command "stemcraft-server@${name}.service" "$3"
+  server_unit="craftarr-server@${name}.service"
+  run_unit_command "$server_unit" "$3"
 elif [[ $# -eq 1 ]]; then
-  run_unit_command stemcraft-console.service "$1"
+  run_unit_command craftarr-console.service "$1"
 else
   usage >&2
   exit 2

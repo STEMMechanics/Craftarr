@@ -10,6 +10,7 @@ import configparser
 import tempfile
 import threading
 from pathlib import Path
+from .env import getenv
 
 
 class OffsiteBackupError(RuntimeError):
@@ -24,10 +25,10 @@ _TRANSFER_PERCENT = re.compile(r",\s*(\d{1,3})%[,\s]")
 
 
 def managed_config_path() -> Path:
-    configured = os.getenv("STEMCRAFT_RCLONE_CONFIG", "").strip()
+    configured = getenv("CRAFTARR_RCLONE_CONFIG", "").strip()
     if configured:
         return Path(configured).expanduser().resolve()
-    database = Path(os.getenv("STEMCRAFT_CONSOLE_DATABASE", "stemcraft-console.db")).expanduser().resolve()
+    database = Path(getenv("CRAFTARR_CONSOLE_DATABASE", "craftarr.db")).expanduser().resolve()
     return database.parent / "rclone.conf"
 
 
@@ -46,7 +47,7 @@ def _run_rclone(*args: str, input_text=None, timeout_seconds=None) -> subprocess
             _rclone_command(*args), capture_output=True, text=True, check=False,
             input=input_text,
             timeout=(timeout_seconds if timeout_seconds is not None else
-                     max(30, int(os.getenv("STEMCRAFT_RCLONE_TIMEOUT_SECONDS", "3600")))),
+                     max(30, int(getenv("CRAFTARR_RCLONE_TIMEOUT_SECONDS", "3600")))),
         )
     except subprocess.TimeoutExpired as error:
         raise OffsiteBackupError("Off-site transfer timed out") from error
@@ -64,7 +65,7 @@ def _transfer_percent(line: str) -> int | None:
 
 
 def _run_rclone_with_progress(*args: str, progress_callback) -> None:
-    timeout = max(30, int(os.getenv("STEMCRAFT_RCLONE_TIMEOUT_SECONDS", "3600")))
+    timeout = max(30, int(getenv("CRAFTARR_RCLONE_TIMEOUT_SECONDS", "3600")))
     command = _rclone_command(
         *args, "--stats", "1s", "--stats-one-line", "--stats-unit", "bytes",
         "--stats-log-level", "NOTICE",

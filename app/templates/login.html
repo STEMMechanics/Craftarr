@@ -6,9 +6,10 @@
 
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
-    <title>Login | STEMCraft Console</title>
+    <title>Login | Craftarr</title>
 
-    <link rel="stylesheet" href="/static/style.css?v=20260811-1">
+    <link rel="stylesheet" href="/static/style.css?v=20260927-6">
+    <link rel="stylesheet" href="/static/server-manager.css?v=20260927-5">
 </head>
 
 <body class="login-body">
@@ -17,7 +18,7 @@
 
         <div class="login-logo-wrap">
 
-            <img src="/static/images/logo.svg" alt="STEMMechanics" class="login-logo">
+            <img src="/static/images/logo.png" alt="Craftarr" class="login-logo">
 
         </div>
 
@@ -29,6 +30,10 @@
             <p>
                 {{ login_message }}
             </p>
+
+            {% if request.query_params.get('expired') %}
+            <div class="login-notice" role="status">Your session expired. Sign in again to continue.</div>
+            {% endif %}
 
 
             {% if error %}
@@ -79,7 +84,7 @@
     </div>
 
     <div class="login-version">
-        v{{ app_version }} · <a href="https://github.com/stemmechanics/stemcraft-console" target="_blank" rel="noopener noreferrer">GitHub</a>
+        v{{ app_version }} · <a href="https://github.com/STEMMechanics/Craftarr" target="_blank" rel="noopener noreferrer">GitHub</a>
     </div>
     <script src="/static/form_feedback.js?v=20260809-1"></script>
 </body>

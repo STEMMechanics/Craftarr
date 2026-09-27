@@ -1,16 +1,16 @@
 <div class="players-page" data-server-id="{{ server.id }}" data-can-manage="{{ 'true' if user.can('players.manage') else 'false' }}" data-page-title="Players">
   <div class="player-summary-grid">
-    <div class="overview-card summary-card"><span class="card-label">Online Now</span><div id="players-online-count" class="summary-value success-text">-</div></div>
-    <div class="overview-card summary-card"><span class="card-label">Whitelisted</span><div id="players-whitelist-count" class="summary-value">-</div></div>
-    <div class="overview-card summary-card"><span class="card-label">Operators</span><div id="players-op-count" class="summary-value accent">-</div></div>
-    <div class="overview-card summary-card"><span class="card-label">Banned</span><div id="players-ban-count" class="summary-value danger-text">-</div></div>
+    <div class="overview-card summary-card"><span class="card-label">Online now</span><div id="players-online-count" class="summary-value success-text">-</div></div>
+    <div class="overview-card summary-card"><span class="card-label">Allowed players</span><div id="players-whitelist-count" class="summary-value">-</div></div>
+    <div class="overview-card summary-card"><span class="card-label">Server admins</span><div id="players-op-count" class="summary-value accent">-</div></div>
+    <div class="overview-card summary-card"><span class="card-label">Blocked players</span><div id="players-ban-count" class="summary-value danger-text">-</div></div>
   </div>
 
   <section class="overview-card player-management-card">
     <div class="card-header player-management-header">
-      <div><span>Player Management</span><small>Whitelist, permissions, and moderation</small></div>
+      <div><span>Players</span><small>Choose who can join and what they can do.</small></div>
       {% if user.can("players.manage") %}<label class="whitelist-control">
-        <span><strong>Whitelist</strong><small>Only listed players may join</small></span>
+        <span><strong>Whitelist</strong><small>Only listed players can join</small></span>
         <span class="switch"><input id="whitelist-toggle" type="checkbox" onchange="toggleWhitelist()"><span class="switch-slider"></span></span>
       </label>{% endif %}
     </div>
@@ -20,36 +20,41 @@
         <div class="player-filters">
           <button class="button player-filter active" data-filter="all">All <span id="filter-all-count">0</span></button>
           <button class="button player-filter" data-filter="online">Online <span id="filter-online-count">0</span></button>
-          <button class="button player-filter" data-filter="whitelisted">Whitelisted <span id="filter-whitelist-count">0</span></button>
-          <button class="button player-filter" data-filter="operator">Operators <span id="filter-op-count">0</span></button>
-          <button class="button player-filter" data-filter="banned">Banned <span id="filter-ban-count">0</span></button>
+          <button class="button player-filter" data-filter="whitelisted">Allowed <span id="filter-whitelist-count">0</span></button>
+          <button class="button player-filter" data-filter="operator">Server admins <span id="filter-op-count">0</span></button>
+          <button class="button player-filter" data-filter="banned">Blocked <span id="filter-ban-count">0</span></button>
         </div>
         <input id="player-search" class="player-search" type="search" placeholder="Search players...">
       </div>
 
       {% if user.can("players.manage") %}<div class="player-add-row">
         <input id="player-add-name" type="text" placeholder="Player name" maxlength="16">
-        <button class="button" onclick="addPlayerAction('whitelist')">Add to whitelist</button>
-        <button class="button secondary" onclick="addPlayerAction('op')">Make operator</button>
-        <button class="button danger" onclick="addPlayerAction('ban')">Ban player</button>
+        <button class="button" onclick="addPlayerAction('whitelist')">Allow to join</button>
+        <button class="button secondary" onclick="addPlayerAction('op')">Make server admin</button>
+        <button class="button danger" onclick="addPlayerAction('ban')">Block player</button>
       </div>{% endif %}
 
       <div id="player-list" class="player-list"><div class="empty-message">Loading players...</div></div>
+      <nav id="player-pagination" class="player-pagination" hidden aria-label="Player list pages">
+        <button class="button secondary player-page-button" type="button" data-page-direction="previous" aria-label="Previous player page"><i class="fa-solid fa-chevron-left" aria-hidden="true"></i> Previous</button>
+        <span class="player-pagination-summary" aria-live="polite"></span>
+        <button class="button secondary player-page-button" type="button" data-page-direction="next" aria-label="Next player page">Next <i class="fa-solid fa-chevron-right" aria-hidden="true"></i></button>
+      </nav>
     </div>
   </section>
 
   <section class="overview-card ip-bans-card">
     <div class="card-header">
-      <span>IP Bans (<span id="ip-ban-count">0</span>)</span>
+      <span>Blocked IP addresses (<span id="ip-ban-count">0</span>)</span>
     </div>
     <div class="ip-ban-content">
       {% if user.can("players.manage") %}
         <form class="ip-ban-entry" onsubmit="banIpAddress(event)">
           <label class="property-field"><span>IP address</span><input name="ip" placeholder="IPv4 or IPv6 address" required><small>Enter the address to prevent it from connecting to this server.</small></label>
-          <div class="ip-ban-entry-actions"><button class="button danger" type="submit"><i class="fa-solid fa-ban"></i> Ban IP</button></div>
+          <div class="ip-ban-entry-actions"><button class="button danger" type="submit"><i class="fa-solid fa-ban"></i> Block IP</button></div>
       </form>
       {% endif %}
-      <div id="ip-ban-list" class="ip-ban-list"><div class="empty-message">No IP bans.</div></div>
+      <div id="ip-ban-list" class="ip-ban-list"><div class="empty-message">No blocked IP addresses.</div></div>
     </div>
   </section>
 </div>

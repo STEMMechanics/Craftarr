@@ -1,11 +1,128 @@
 const recentToasts = new Map();
+let connectionFailureLatched = false;
+let lastConnectionFailureToastAt = 0;
+let authRedirectInProgress = false;
+const observedServerStates = new Map();
 
-function showToast(message, type = "info", timeout = 4500) {
+function redirectToLogin() {
+  if (authRedirectInProgress || ["/login", "/login/tfa"].includes(window.location.pathname)) return;
+  authRedirectInProgress = true;
+  window.location.replace("/login?expired=1");
+}
+
+function handleAuthenticationResponse(response) {
+  let responsePath = "";
+  try {
+    responsePath = new URL(response.url, window.location.href).pathname;
+  } catch {
+    // Ignore malformed response URLs and still check the status code.
+  }
+
+  if (response.status === 401 || (response.redirected && ["/login", "/login/tfa"].includes(responsePath))) {
+    redirectToLogin();
+    return true;
+  }
+
+  if (response.redirected && responsePath === "/change-password") {
+    window.location.replace(response.url);
+    return true;
+  }
+  return false;
+}
+
+function setToastMessage(content, message, link) {
+  const text = String(message || "");
+  content.replaceChildren();
+  const label = link?.label;
+  const index = label ? text.indexOf(label) : -1;
+  if (index < 0) {
+    content.textContent = text;
+    return;
+  }
+
+  content.append(document.createTextNode(text.slice(0, index)));
+  const anchor = document.createElement("a");
+  anchor.className = "toast-link";
+  anchor.href = link.href;
+  anchor.textContent = label;
+  anchor.setAttribute("hx-get", link.href);
+  anchor.setAttribute("hx-target", "#page-content");
+  anchor.setAttribute("hx-push-url", "true");
+  content.append(anchor, document.createTextNode(text.slice(index + label.length)));
+  window.htmx?.process(anchor);
+}
+
+function setToastProgress(toast, progress) {
+  let track = toast.querySelector(".toast-progress-track");
+  if (!progress) {
+    track?.remove();
+    return;
+  }
+  if (!track) {
+    track = document.createElement("div");
+    track.className = "toast-progress-track";
+    track.setAttribute("role", "progressbar");
+    track.setAttribute("aria-label", "Plugin update progress");
+    const bar = document.createElement("div");
+    bar.className = "toast-progress-bar";
+    track.append(bar);
+    toast.append(track);
+  }
+  const total = Number(progress.total) || 0;
+  const completed = Math.max(0, Number(progress.completed) || 0);
+  const indeterminate = total <= 0;
+  track.classList.toggle("is-indeterminate", indeterminate);
+  if (indeterminate) {
+    track.removeAttribute("aria-valuenow");
+    track.removeAttribute("aria-valuemax");
+  } else {
+    track.setAttribute("aria-valuemax", String(total));
+    track.setAttribute("aria-valuenow", String(Math.min(completed, total)));
+  }
+  track.firstElementChild.style.width = indeterminate
+    ? "35%"
+    : `${Math.min(100, (completed / total) * 100)}%`;
+}
+
+function setToastTimeout(toast, timeout) {
+  window.clearTimeout(toast._toastTimeout);
+  window.clearTimeout(toast._toastRemoveTimeout);
+  toast._toastTimeout = null;
+  toast._toastRemoveTimeout = null;
+  if (timeout <= 0) return;
+  toast._toastTimeout = window.setTimeout(() => {
+    toast.classList.remove("visible");
+    toast._toastRemoveTimeout = window.setTimeout(() => toast.remove(), 200);
+  }, timeout);
+}
+
+function updateToast(toast, message, type = "info", options = {}) {
+  if (!toast) return;
+  toast.className = `toast toast-${type} visible`;
+  toast.setAttribute("role", type === "error" ? "alert" : "status");
+  const icon = toast.querySelector(":scope > i");
+  if (icon) {
+    icon.className = type === "success"
+      ? "fa-solid fa-circle-check"
+      : type === "error"
+        ? "fa-solid fa-circle-exclamation"
+        : type === "warning"
+          ? "fa-solid fa-triangle-exclamation"
+          : "fa-solid fa-circle-info";
+  }
+  setToastMessage(toast.querySelector(".toast-message"), message, options.link);
+  setToastProgress(toast, options.progress);
+  setToastTimeout(toast, options.timeout ?? 4500);
+}
+
+function showToast(message, type = "info", timeout = 4500, options = {}) {
   const text = String(message || "").trim();
   if (!text) return;
   const now = Date.now();
-  if (now - (recentToasts.get(`${type}:${text}`) || 0) < 1200) return;
-  recentToasts.set(`${type}:${text}`, now);
+  if (!options.persistent) {
+    if (now - (recentToasts.get(`${type}:${text}`) || 0) < 1200) return;
+    recentToasts.set(`${type}:${text}`, now);
+  }
 
   let region = document.getElementById("toast-region");
   if (!region) {
@@ -27,7 +144,7 @@ function showToast(message, type = "info", timeout = 4500) {
         ? "fa-solid fa-triangle-exclamation"
       : "fa-solid fa-circle-info";
   const content = document.createElement("span");
-  content.textContent = text;
+  content.className = "toast-message";
   const close = document.createElement("button");
   close.type = "button";
   close.className = "toast-close";
@@ -35,12 +152,16 @@ function showToast(message, type = "info", timeout = 4500) {
   close.innerHTML = "&times;";
   close.addEventListener("click", () => toast.remove());
   toast.append(icon, content, close);
+  setToastMessage(content, text, options.link);
+  setToastProgress(toast, options.progress);
+  close.addEventListener("click", () => {
+    window.clearTimeout(toast._toastTimeout);
+    window.clearTimeout(toast._toastRemoveTimeout);
+  });
   region.append(toast);
   requestAnimationFrame(() => toast.classList.add("visible"));
-  window.setTimeout(() => {
-    toast.classList.remove("visible");
-    window.setTimeout(() => toast.remove(), 200);
-  }, timeout);
+  setToastTimeout(toast, options.persistent ? 0 : timeout);
+  return toast;
 }
 
 function clearFieldError(field) {
@@ -104,6 +225,9 @@ const nativeFetch = window.fetch.bind(window);
 window.fetch = async (...args) => {
   try {
     const response = await nativeFetch(...args);
+    connectionFailureLatched = false;
+    if (handleAuthenticationResponse(response)) return response;
+
     const request = args[0];
     const options = args[1] || {};
     const method = String(options.method || request?.method || "GET").toUpperCase();
@@ -125,13 +249,36 @@ window.fetch = async (...args) => {
     }
     return response;
   } catch (error) {
-    showToast("Unable to connect to the server.", "error");
+    const now = Date.now();
+    if (!connectionFailureLatched && now - lastConnectionFailureToastAt >= 60000) {
+      connectionFailureLatched = true;
+      lastConnectionFailureToastAt = now;
+      showToast("Unable to connect to the server.", "error", 6500);
+    } else connectionFailureLatched = true;
     throw error;
   }
 };
 
+window.addEventListener("online", () => {
+  connectionFailureLatched = false;
+});
+
 document.addEventListener("htmx:afterRequest", (event) => {
   const detail = event.detail || {};
+  let responsePath = "";
+  try {
+    responsePath = new URL(detail.xhr?.responseURL || "", window.location.href).pathname;
+  } catch {
+    // Ignore malformed response URLs.
+  }
+  if (detail.xhr?.status === 401 || ["/login", "/login/tfa"].includes(responsePath)) {
+    redirectToLogin();
+    return;
+  }
+  if (responsePath === "/change-password") {
+    window.location.replace(detail.xhr.responseURL);
+    return;
+  }
   const verb = String(detail.requestConfig?.verb || "GET").toUpperCase();
   if (new Set(["GET", "HEAD", "OPTIONS"]).has(verb)) return;
   let data = {};
@@ -151,40 +298,50 @@ document.addEventListener("htmx:afterRequest", (event) => {
 
 function updateActiveNavigation() {
   const path = window.location.pathname;
+  const links = Array.from(document.querySelectorAll(".nav-link"));
+  const linkPath = (link) => {
+    try {
+      return new URL(link.getAttribute("href"), window.location.href).pathname;
+    } catch {
+      return "";
+    }
+  };
+  const matchesPath = (href) => href && (href === path || path.startsWith(`${href}/`));
+  const activeHref = links
+    .map(linkPath)
+    .filter(matchesPath)
+    .sort((first, second) => second.length - first.length)[0];
 
-  document
-    .querySelectorAll(".nav-link")
-    .forEach((link) => {
-      link.classList.remove("active");
+  links.forEach((link) => {
+    const active = Boolean(activeHref && linkPath(link) === activeHref);
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
 
-      const href = link.getAttribute("href");
-
-      if (!href) {
-        return;
-      }
-
-      if (href === path) {
-        link.classList.add("active");
-      }
-    });
+  const moreLinkIsActive = Boolean(document.querySelector("#more-pages-menu .nav-link.active"));
+  document.querySelectorAll(".more-pages-toggle").forEach((toggle) => {
+    toggle.classList.toggle("active", moreLinkIsActive);
+  });
 }
 
-function setMobileSidebar(open) {
-  const sidebar = document.getElementById("sidebar");
-  const backdrop = document.getElementById("sidebar-backdrop");
-  const toggle = document.querySelector(".mobile-menu-toggle");
-  sidebar?.classList.toggle("mobile-open", open);
-  backdrop?.classList.toggle("open", open);
-  document.body.classList.toggle("mobile-nav-open", open);
-  toggle?.setAttribute("aria-expanded", String(open));
+function setMorePages(open) {
+  const menu = document.getElementById("more-pages-menu");
+  if (!menu) return;
+  menu.hidden = !open;
+  document.body.classList.toggle("mobile-more-open", open && window.innerWidth <= 900);
+  document.querySelectorAll(".more-pages-toggle").forEach((toggle) => {
+    toggle.setAttribute("aria-expanded", String(open));
+  });
 }
 
-function toggleMobileSidebar() {
-  setMobileSidebar(!document.getElementById("sidebar")?.classList.contains("mobile-open"));
+function toggleMorePages() {
+  const menu = document.getElementById("more-pages-menu");
+  setMorePages(Boolean(menu?.hidden));
 }
 
-function closeMobileSidebar() {
-  setMobileSidebar(false);
+function closeMorePages() {
+  setMorePages(false);
 }
 
 function normalizeButtonClasses() {
@@ -253,8 +410,8 @@ async function reviewServerImport() {
     report.innerHTML = facts + errors + warnings;
     title.textContent = data.ready ? "Server found" : "Server cannot be imported";
     summary.textContent = data.ready
-      ? "STEMCraft found this server and can manage it. Review the details before importing."
-      : "STEMCraft found the following issues. Resolve them before trying again.";
+      ? "Craftarr found this server and can manage it. Review the details before importing."
+      : "Craftarr found the following issues. Resolve them before trying again.";
     confirm.hidden = !data.ready;
     confirm.disabled = !data.ready;
   } catch (error) {
@@ -277,23 +434,499 @@ function confirmServerImport() {
   form.requestSubmit();
 }
 
+let serverZipImportLocked = false;
+let serverZipImportInProgress = false;
+let serverZipImportPageUrl = "";
+let serverZipImportHistoryState = null;
+let serverZipImportPreviousFocus = null;
+let serverZipImportShellWasInert = false;
+
+document.body.addEventListener("htmx:beforeRequest", (event) => {
+  if (serverZipImportLocked) event.preventDefault();
+});
+
+window.addEventListener("popstate", (event) => {
+  if (!serverZipImportLocked) return;
+  event.stopImmediatePropagation();
+  if (serverZipImportPageUrl) {
+    window.history.pushState(serverZipImportHistoryState, "", serverZipImportPageUrl);
+  }
+}, true);
+
+document.addEventListener("keydown", (event) => {
+  if (!serverZipImportLocked || !["Escape", "Tab"].includes(event.key)) return;
+  event.preventDefault();
+  document.getElementById("file-operation-progress-dialog")?.focus({preventScroll: true});
+});
+
+function lockServerZipImportNavigation() {
+  serverZipImportLocked = true;
+  serverZipImportInProgress = true;
+  serverZipImportPageUrl = window.location.href;
+  serverZipImportHistoryState = window.history.state;
+  serverZipImportPreviousFocus = document.activeElement;
+  const shell = document.querySelector(".app-shell");
+  serverZipImportShellWasInert = Boolean(shell?.inert);
+  if (shell) shell.inert = true;
+  document.getElementById("file-operation-progress-dialog")?.focus({preventScroll: true});
+}
+
+function unlockServerZipImportNavigation() {
+  serverZipImportLocked = false;
+  serverZipImportInProgress = false;
+  const shell = document.querySelector(".app-shell");
+  if (shell) shell.inert = serverZipImportShellWasInert;
+  serverZipImportShellWasInert = false;
+  serverZipImportPageUrl = "";
+  serverZipImportHistoryState = null;
+  const previousFocus = serverZipImportPreviousFocus;
+  serverZipImportPreviousFocus = null;
+  if (previousFocus?.isConnected) previousFocus.focus({preventScroll: true});
+}
+
+async function importServerZip(event) {
+  event.preventDefault();
+  const form = document.getElementById("import-server-zip-form");
+  const button = document.getElementById("import-server-zip-submit");
+  const status = document.getElementById("import-server-zip-status");
+  const file = document.getElementById("import-server-archive")?.files?.[0];
+  if (!form || !button || !status || !file || !form.reportValidity()) return;
+  const maxUploadBytes = Number(form.dataset.maxUploadBytes);
+  if (Number.isFinite(maxUploadBytes) && maxUploadBytes > 0 && file.size > maxUploadBytes) {
+    const message = `This ZIP is ${formatUploadBytes(file.size)}. The configured limit is ${formatUploadBytes(maxUploadBytes)}; no upload was started.`;
+    status.textContent = message;
+    showToast(message, "error", 7000);
+    return;
+  }
+
+  const formData = new FormData(form);
+  let lastUploadPercent = 0;
+  let lastUploadDetail = `0 B of ${formatUploadBytes(file.size)} uploaded`;
+  button.disabled = true;
+  status.textContent = `Uploading ${file.name}…`;
+  showFileOperationProgress(
+    "Importing server ZIP",
+    `Uploading ${file.name}. Keep this tab open while it finishes.`,
+    0,
+    `0 B of ${formatUploadBytes(file.size)} uploaded`,
+  );
+  lockServerZipImportNavigation();
+
+  try {
+    const response = await uploadFileWithProgress(
+      "/api/web/servers/import/archive",
+      formData,
+      (loaded, total) => {
+        const fraction = total > 0 ? Math.min(1, loaded / total) : 0;
+        const uploadComplete = fraction >= 1;
+        const percent = uploadComplete ? 100 : Math.min(99, Math.floor(fraction * 100));
+        const uploaded = Math.min(file.size, Math.floor(file.size * fraction));
+        const uploadedText = `${formatUploadBytes(uploaded)} of ${formatUploadBytes(file.size)} uploaded`;
+        lastUploadPercent = percent;
+        lastUploadDetail = uploadComplete ? `${formatUploadBytes(file.size)} uploaded` : uploadedText;
+        if (uploadComplete) {
+          showFileOperationProgress(
+            "Checking server ZIP",
+            "The upload is complete. Validating the archive and importing the server… Keep this tab open.",
+            100,
+            `${formatUploadBytes(file.size)} uploaded`,
+          );
+          status.textContent = "Upload complete. Checking the ZIP contents and importing the server…";
+        } else {
+          showFileOperationProgress(
+            "Importing server ZIP",
+            `Uploading ${file.name}. Keep this tab open while it finishes.`,
+            percent,
+            uploadedText,
+          );
+        }
+      },
+    );
+    let data = {};
+    try {
+      const parsed = JSON.parse(response.responseText || "{}");
+      if (parsed && typeof parsed === "object") data = parsed;
+    } catch {
+      // Use the status code when the server response isn't JSON.
+    }
+    if (response.status < 200 || response.status >= 300) {
+      const message = response.status === 413
+        ? "The ZIP archive is larger than this installation's upload limit."
+        : data.error || "Unable to import this ZIP archive.";
+      throw new Error(message);
+    }
+    showFileOperationProgress(
+      "Checking server ZIP",
+      "The upload is complete. Validating the archive and importing the server… Keep this tab open.",
+      100,
+      `${formatUploadBytes(file.size)} uploaded`,
+    );
+    status.textContent = "Upload complete. Checking the ZIP contents and importing the server…";
+    const importMessage = data.settings_imported
+      ? "Server and embedded Craftarr settings imported. Opening the server…"
+      : "Server imported. Opening the server…";
+    const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+    status.textContent = [importMessage, ...warnings].join(" ");
+    if (warnings.length) {
+      showFileOperationProgress("Server imported", [importMessage, ...warnings].join(" "), 100, "Opening the server…");
+      window.setTimeout(() => {
+        hideFileOperationProgress();
+        unlockServerZipImportNavigation();
+        window.location.assign(data.redirect_url);
+      }, 2200);
+    } else {
+      hideFileOperationProgress();
+      unlockServerZipImportNavigation();
+      window.location.assign(data.redirect_url);
+    }
+  } catch (error) {
+    const message = error.message || "Unable to import this ZIP archive.";
+    status.textContent = message;
+    button.disabled = false;
+    serverZipImportInProgress = false;
+    if (/session expired/i.test(message)) {
+      hideFileOperationProgress();
+      unlockServerZipImportNavigation();
+      return;
+    }
+    const failureDetail = message.toLowerCase().includes("larger than the configured upload limit")
+      ? `${formatUploadBytes(file.size)} transferred. Configured limit: ${formatUploadBytes(maxUploadBytes)}.`
+      : lastUploadDetail;
+    showFileOperationProgress("ZIP import failed", message, lastUploadPercent, failureDetail, true);
+    document.getElementById("file-operation-progress-close")?.focus({preventScroll: true});
+  }
+}
+
+function formatUploadBytes(bytes) {
+  const size = Number(bytes);
+  if (!Number.isFinite(size) || size <= 0) return "0 B";
+
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = size;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${unitIndex === 0 ? Math.floor(value) : value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function suggestServerZipName(input) {
+  const nameInput = document.getElementById("import-server-zip-name");
+  const filename = input?.files?.[0]?.name;
+  if (!nameInput || !filename || nameInput.value.trim()) return;
+  nameInput.value = filename
+    .replace(/\.zip$/i, "")
+    .replace(/-server$/i, "")
+    .replace(/[-_]+/g, " ")
+    .trim();
+}
+
+let pendingServerSettingsFile = null;
+
+async function handleServerSettingsFile(input) {
+  const file = input?.files?.[0];
+  const status = document.getElementById("server-settings-transfer-status");
+  if (!file) return;
+  if (file.size > 1024 * 1024) {
+    if (status) status.textContent = "The settings export file is too large.";
+    input.value = "";
+    return;
+  }
+
+  try {
+    const documentData = JSON.parse(await file.text());
+    if (
+      documentData?.format !== "craftarr-server-settings" ||
+      documentData?.version !== 1 ||
+      !documentData.settings ||
+      typeof documentData.settings !== "object" ||
+      Array.isArray(documentData.settings) ||
+      !Object.keys(documentData.settings).length
+    ) {
+      throw new Error("Choose a supported Craftarr server settings export.");
+    }
+    pendingServerSettingsFile = file;
+    const summary = document.getElementById("server-settings-import-summary");
+    if (summary) {
+      summary.textContent = `${file.name} will replace this server’s panel-managed startup settings.`;
+    }
+    const modal = document.getElementById("server-settings-import-modal");
+    if (modal) modal.hidden = false;
+    if (status) status.textContent = "Review the settings import to continue.";
+  } catch (error) {
+    pendingServerSettingsFile = null;
+    if (status) status.textContent = error.message || "The settings export could not be read.";
+    input.value = "";
+  }
+}
+
+function closeServerSettingsImport() {
+  const modal = document.getElementById("server-settings-import-modal");
+  const input = document.getElementById("server-settings-import-file");
+  if (modal) modal.hidden = true;
+  if (input) input.value = "";
+  pendingServerSettingsFile = null;
+}
+
+async function confirmServerSettingsImport() {
+  const page = document.querySelector(".properties-page");
+  const button = document.getElementById("confirm-server-settings-import");
+  const status = document.getElementById("server-settings-transfer-status");
+  if (!page || !button || !pendingServerSettingsFile || button.disabled) return;
+
+  button.disabled = true;
+  button.textContent = "Importing…";
+  if (status) status.textContent = "Importing settings…";
+  try {
+    const formData = new FormData();
+    formData.append("file", pendingServerSettingsFile, pendingServerSettingsFile.name);
+    const response = await fetch(
+      `/api/web/servers/${page.dataset.serverId}/settings/import`,
+      { method: "POST", body: formData },
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to import settings.");
+
+    closeServerSettingsImport();
+    await updatePropertiesPage();
+    if (status) status.textContent = data.message;
+
+    const restartAlert = document.getElementById("properties-restart-alert");
+    if (restartAlert && data.restart_required) {
+      restartAlert.hidden = false;
+      const message = document.getElementById("properties-pending-message");
+      const label = document.getElementById("properties-pending-label");
+      if (message) message.textContent = "Imported startup settings are pending. Restart the server to apply them.";
+      if (label) label.textContent = "Restart required";
+    } else if (restartAlert) {
+      restartAlert.hidden = true;
+    }
+    showToast(data.message, data.restart_required ? "warning" : "success");
+  } catch (error) {
+    const message = error.message || "Unable to import settings.";
+    const summary = document.getElementById("server-settings-import-summary");
+    if (summary) summary.textContent = message;
+    if (status) status.textContent = message;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Import settings";
+  }
+}
+
 function toggleServerMenu() {
-  document
-    .getElementById("server-menu")
-    .classList.toggle("open");
+  const menu = document.getElementById("server-menu");
+  const toggle = document.getElementById("server-selector-toggle");
+  if (!menu || !toggle) return;
+  const open = !menu.classList.contains("open");
+  menu.classList.toggle("open", open);
+  toggle.setAttribute("aria-expanded", String(open));
+}
+
+function closeServerMenu() {
+  document.getElementById("server-menu")?.classList.remove("open");
+  document.getElementById("server-selector-toggle")?.setAttribute("aria-expanded", "false");
+}
+
+function setNotificationsOpen(open) {
+  const panel = document.getElementById("notifications-panel");
+  const toggle = document.getElementById("notifications-toggle");
+  if (!panel || !toggle) return;
+  panel.hidden = !open;
+  toggle.setAttribute("aria-expanded", String(open));
+  if (open) {
+    closeAccountMenu();
+    refreshNotifications();
+  }
+}
+
+function toggleNotifications() {
+  const panel = document.getElementById("notifications-panel");
+  setNotificationsOpen(Boolean(panel?.hidden));
+}
+
+function closeNotifications() {
+  setNotificationsOpen(false);
+}
+
+const notificationCenter = document.querySelector(".notification-center");
+const notificationUserId = notificationCenter?.dataset.userId || "anonymous";
+const notificationReadKey = `craftarr.notification-read.v1.${notificationUserId}`;
+const notificationEventsKey = `craftarr.notification-events.v1.${notificationUserId}`;
+let notificationReadIds = new Set();
+let notificationEvents = [];
+let updateNotifications = [];
+let previousUpdateNotificationIds = null;
+
+try {
+  notificationReadIds = new Set(JSON.parse(localStorage.getItem(notificationReadKey) || "[]"));
+} catch {
+  notificationReadIds = new Set();
+}
+try {
+  const storedEvents = JSON.parse(localStorage.getItem(notificationEventsKey) || "[]");
+  notificationEvents = Array.isArray(storedEvents) ? storedEvents.filter((item) => item && item.id).slice(0, 50) : [];
+} catch {
+  notificationEvents = [];
+}
+
+function allNotifications() {
+  return [...notificationEvents, ...updateNotifications]
+    .sort((first, second) => String(second.checked_at || "").localeCompare(String(first.checked_at || "")));
+}
+
+function saveNotificationReadIds() {
+  try {
+    const ids = [...notificationReadIds].slice(-200);
+    notificationReadIds = new Set(ids);
+    localStorage.setItem(notificationReadKey, JSON.stringify(ids));
+  } catch {
+    // Notifications remain usable for this page even when storage is unavailable.
+  }
+}
+
+function updateNotificationBadge() {
+  const unread = allNotifications().filter((item) => !notificationReadIds.has(item.id)).length;
+  const count = document.getElementById("notifications-count");
+  const toggle = document.getElementById("notifications-toggle");
+  const markRead = document.getElementById("notifications-mark-read");
+  if (count) {
+    count.hidden = unread === 0;
+    count.textContent = unread > 9 ? "9+" : String(unread);
+  }
+  if (toggle) toggle.setAttribute("aria-label", unread ? `Notifications, ${unread} unread` : "Notifications");
+  if (markRead) markRead.hidden = unread === 0;
+}
+
+function renderNotifications() {
+  const list = document.getElementById("notification-list");
+  const empty = document.getElementById("notification-empty");
+  if (!list || !empty) return;
+
+  const items = allNotifications();
+  empty.hidden = items.length > 0;
+  list.hidden = items.length === 0;
+  list.innerHTML = items.map((item) => {
+    const href = typeof item.url === "string" && item.url.startsWith("/") && !item.url.startsWith("//")
+      ? item.url
+      : "/dashboard";
+    const unreadClass = notificationReadIds.has(item.id) ? "" : " is-unread";
+    const icon = item.kind === "server-state"
+      ? "fa-server"
+      : String(item.kind).startsWith("paper-")
+        ? "fa-cubes-stacked"
+        : String(item.kind).startsWith("backup-")
+          ? "fa-box-archive"
+          : "fa-puzzle-piece";
+    const time = item.checked_at && !Number.isNaN(Date.parse(item.checked_at))
+      ? new Date(item.checked_at).toLocaleString()
+      : "";
+    return `<a class="notification-item${unreadClass}" href="${escapeHtml(href)}" role="listitem" data-notification-id="${escapeHtml(item.id)}">
+      <span class="notification-item-icon" aria-hidden="true"><i class="fa-solid ${icon}"></i></span>
+      <span class="notification-item-copy"><strong>${escapeHtml(item.title || "Update available")}</strong><small>${escapeHtml(item.message || "")}</small>${time ? `<time datetime="${escapeHtml(item.checked_at)}">${escapeHtml(time)}</time>` : ""}</span>
+      <span class="notification-unread-dot" aria-hidden="true"></span>
+    </a>`;
+  }).join("");
+  updateNotificationBadge();
+}
+
+function markNotificationRead(id) {
+  if (!id) return;
+  notificationReadIds.add(id);
+  saveNotificationReadIds();
+  document.querySelectorAll("[data-notification-id]").forEach((item) => {
+    if (item.dataset.notificationId === id) item.classList.remove("is-unread");
+  });
+  updateNotificationBadge();
+}
+
+function markAllNotificationsRead() {
+  allNotifications().forEach((item) => notificationReadIds.add(item.id));
+  saveNotificationReadIds();
+  renderNotifications();
+}
+
+function recordInAppNotification(item) {
+  if (!item?.id || notificationEvents.some((existing) => existing.id === item.id)) return;
+  notificationEvents.unshift(item);
+  notificationEvents = notificationEvents.slice(0, 50);
+  try {
+    localStorage.setItem(notificationEventsKey, JSON.stringify(notificationEvents));
+  } catch {
+    // Keep the new event for the current page if storage is unavailable.
+  }
+  renderNotifications();
+}
+
+async function refreshNotifications(announceNew = true) {
+  if (!document.getElementById("notification-list")) return;
+  try {
+    const response = await fetch("/api/web/notifications", { cache: "no-store" });
+    if (!response.ok) return;
+    const data = await response.json();
+    const next = Array.isArray(data.notifications) ? data.notifications : [];
+    const currentIds = new Set(next.map((item) => item.id));
+    if (announceNew && previousUpdateNotificationIds) {
+      const added = next.filter((item) => !previousUpdateNotificationIds.has(item.id) && !notificationReadIds.has(item.id));
+      const updates = added.filter((item) => ["plugin-update", "paper-update"].includes(item.kind));
+      const backups = added.filter((item) => String(item.kind).startsWith("backup-"));
+      if (updates.length) {
+        showToast(updates.length === 1 ? updates[0].title : `${updates.length} new updates are available.`, "info", 6500);
+      }
+      if (backups.length) {
+        const interrupted = backups.some((item) => item.kind !== "backup-complete");
+        showToast(
+          backups.length === 1 ? backups[0].title : `${backups.length} backup jobs finished.`,
+          interrupted ? "warning" : "success",
+          6500,
+        );
+      }
+    }
+    previousUpdateNotificationIds = currentIds;
+    updateNotifications = next;
+    renderNotifications();
+  } catch {
+    // The shared connection notice handles an unavailable notification poll.
+  }
+}
+
+document.getElementById("notification-list")?.addEventListener("click", (event) => {
+  const item = event.target.closest("[data-notification-id]");
+  if (item) {
+    markNotificationRead(item.dataset.notificationId);
+    closeNotifications();
+  }
+});
+
+renderNotifications();
+refreshNotifications();
+setInterval(refreshNotifications, 30000);
+
+function setAccountMenuOpen(open) {
+  const panel = document.getElementById("account-menu-panel");
+  const toggle = document.getElementById("account-menu-toggle");
+  if (!panel || !toggle) return;
+  panel.hidden = !open;
+  toggle.setAttribute("aria-expanded", String(open));
+  if (open) closeNotifications();
+}
+
+function toggleAccountMenu() {
+  const panel = document.getElementById("account-menu-panel");
+  setAccountMenuOpen(Boolean(panel?.hidden));
+}
+
+function closeAccountMenu() {
+  setAccountMenuOpen(false);
 }
 
 document.addEventListener(
   "click",
   function (event) {
-    if (event.target.closest("#sidebar a")) {
-      closeMobileSidebar();
-    }
     if (event.target.closest("#server-menu a")) {
-      document
-        .getElementById("server-menu")
-        ?.classList.remove("open");
+      closeServerMenu();
     }
+    if (event.target.closest("#more-pages-menu a")) closeMorePages();
 
     const dropdown = document.querySelector(
       ".server-selector",
@@ -305,20 +938,62 @@ document.addEventListener(
         event.target,
       )
     ) {
-      document
-        .getElementById(
-          "server-menu",
-        )
-        ?.classList.remove(
-          "open",
-        );
+      closeServerMenu();
     }
+
+    const accountMenu = document.querySelector(".account-menu");
+    if (accountMenu && !accountMenu.contains(event.target)) closeAccountMenu();
+
+    const notifications = document.querySelector(".notification-center");
+    if (notifications && !notifications.contains(event.target)) closeNotifications();
+
+    const moreMenu = document.getElementById("more-pages-menu");
+    if (
+      moreMenu &&
+      !moreMenu.hidden &&
+      !moreMenu.contains(event.target) &&
+      !event.target.closest(".more-pages-toggle")
+    ) closeMorePages();
+
+    document.querySelectorAll(".plugin-more-actions[open]").forEach((menu) => {
+      if (!menu.contains(event.target)) menu.open = false;
+    });
   },
 );
 
-window.addEventListener("resize", () => {
-  if (window.innerWidth > 900) closeMobileSidebar();
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    if (serverZipImportLocked) return;
+    const fileImagePreview = document.getElementById("file-image-preview-modal");
+    if (fileImagePreview && !fileImagePreview.hidden) {
+      event.preventDefault();
+      closeFileImagePreview();
+      return;
+    }
+    const pluginUpdateModal = document.getElementById("plugin-update-modal");
+    if (pluginUpdateModal && !pluginUpdateModal.hidden) {
+      event.preventDefault();
+      closePluginUpdateModal();
+      return;
+    }
+    const pluginMonitoringModal = document.getElementById("plugin-monitoring-modal");
+    if (pluginMonitoringModal && !pluginMonitoringModal.hidden) {
+      event.preventDefault();
+      closePluginMonitoring();
+      return;
+    }
+    const accountOpen = !document.getElementById("account-menu-panel")?.hidden;
+    const notificationsOpen = !document.getElementById("notifications-panel")?.hidden;
+    closeMorePages();
+    closeServerMenu();
+    closeAccountMenu();
+    closeNotifications();
+    if (accountOpen) document.getElementById("account-menu-toggle")?.focus();
+    else if (notificationsOpen) document.getElementById("notifications-toggle")?.focus();
+  }
 });
+
+window.addEventListener("resize", closeMorePages);
 
 async function updateSystemStats() {
   const cpuValue = document.getElementById("cpu-value");
@@ -389,18 +1064,24 @@ async function updateSystemStats() {
         ? minecraft.instances.map((server) => `
                     <div class="system-instance-row">
                       <div><span class="server-status-dot ${
-          server.running ? "running" : ""
-        }" data-server-id="${Number(server.id)}"></span><strong>${
+          statusClass(server.state || (server.running ? "running" : "stopped"))
+        }" data-server-id="${Number(server.id)}" aria-hidden="true"></span><strong>${
           escapeHtml(server.name)
         }</strong>
-                      <small>Paper ${
+                      <small class="system-instance-state">${
+          escapeHtml(serverStateLabel(server.state || (server.running ? "running" : "stopped"), server.console_available))
+        }</small><small>Paper ${
           escapeHtml(server.version || "unknown")
         } · Java ${server.java || "unknown"} · ${server.players} online</small></div>
                       <button class="server-control-button ${
-          server.running ? "stop" : "start"
-        }" aria-label="${server.running ? "Stop" : "Start"} ${escapeHtml(server.name)}" title="${server.running ? "Stop" : "Start"} server" onclick="systemServerAction(${Number(server.id)}, '${
-          server.running ? "stop" : "start"
-        }')"><i class="fa-solid fa-${server.running ? "stop" : "play"}" aria-hidden="true"></i></button>
+          server.state === "stopped" || (!server.state && !server.running) ? "start" : "stop"
+        }" aria-label="${server.state === "stopped" || (!server.state && !server.running) ? "Start" : "Stop"} ${escapeHtml(server.name)}" title="${server.state === "stopped" || (!server.state && !server.running) ? "Start" : "Stop"} server" ${
+          server.state === "stopped" || (!server.state && !server.running)
+            ? ""
+            : (["starting", "running"].includes(server.state || "running") && server.console_available !== false ? "" : "disabled")
+        } onclick="systemServerAction(${Number(server.id)}, '${
+          server.state === "stopped" || (!server.state && !server.running) ? "start" : "stop"
+        }', this)"><i class="fa-solid fa-${server.state === "stopped" || (!server.state && !server.running) ? "play" : "stop"}" aria-hidden="true"></i></button>
                     </div>`).join("")
         : '<div class="empty-message">No accessible Minecraft instances.</div>';
     }
@@ -421,11 +1102,9 @@ document.body.addEventListener(
   function () {
     const serverPage = document.querySelector("#page-content > [data-server-id]");
     const topbar = document.querySelector(".topbar[data-server-id]");
-    if (
-      serverPage?.dataset.serverId &&
-      topbar?.dataset.serverId &&
-      serverPage.dataset.serverId !== topbar.dataset.serverId
-    ) {
+    const pageServerId = serverPage?.dataset.serverId || "";
+    const topbarServerId = topbar?.dataset.serverId || "";
+    if (serverPage && topbar && pageServerId !== topbarServerId) {
       window.location.reload();
       return;
     }
@@ -461,32 +1140,83 @@ document.body.addEventListener(
   },
 );
 
-async function updateServerStatus() {
-  const startButton = document.getElementById("topbar-start");
+function statusClass(state) {
+  return ({
+    running: "is-online",
+    stopped: "is-offline",
+    starting: "is-starting",
+    stopping: "is-stopping",
+  })[state] || "is-unknown";
+}
 
-  const restartButton = document.getElementById("topbar-restart");
+function serverStateLabel(state, consoleAvailable = true) {
+  if (state === "starting") return "Starting…";
+  if (state === "stopping") return "Shutting down…";
+  if (state === "stopped") return "Offline";
+  if (state === "running" && consoleAvailable === false) return "Online · console unavailable";
+  if (state === "running") return "Online";
+  return "Status unknown";
+}
 
-  const stopButton = document.getElementById("topbar-stop");
-
-  const statusText = document.getElementById(
-    "topbar-status-text",
-  );
-
-  const statusDot = document.getElementById(
-    "topbar-status-dot",
-  );
-
-  if (!statusText || !statusDot) {
-    return;
+function normalizeServerState(data) {
+  if (["running", "stopped", "starting", "stopping"].includes(data?.state)) {
+    return data.state;
   }
+  if (typeof data?.running === "boolean") return data.running ? "running" : "stopped";
+  return "unknown";
+}
 
+function setOverviewServerState(state, consoleAvailable = true) {
+  const pill = document.getElementById("overview-server-state");
+  const label = document.getElementById("overview-server-state-text");
+  if (!pill || !label) return;
+  pill.classList.remove("is-online", "is-offline", "is-starting", "is-stopping", "is-unknown");
+  pill.classList.add(statusClass(state));
+  label.textContent = serverStateLabel(state, consoleAvailable);
+}
+
+async function updateServerStatus() {
+  const startButton = document.getElementById("dashboard-start");
+  const restartButton = document.getElementById("dashboard-restart");
+  const stopButton = document.getElementById("dashboard-stop");
   const topbar = document.querySelector(".topbar");
-
-  const serverId = topbar?.dataset.serverId;
-
+  const page = document.querySelector("#page-content > [data-server-id]");
+  const serverId = topbar?.dataset.serverId || page?.dataset.serverId;
   if (!serverId) {
     return;
   }
+
+  const setControls = (state, consoleAvailable) => {
+    if (startButton) startButton.disabled = state !== "stopped";
+    if (stopButton) stopButton.disabled = !consoleAvailable || !["starting", "running"].includes(state);
+    if (restartButton) restartButton.disabled = !consoleAvailable || state !== "running";
+
+    if (startButton) {
+      startButton.title = state === "starting"
+        ? "Server is starting"
+        : state === "stopping"
+          ? "Server is shutting down"
+          : "Start server";
+    }
+    if (stopButton) {
+      stopButton.title = state === "stopping"
+        ? "Server is shutting down"
+        : !consoleAvailable
+          ? "Server console unavailable"
+          : state === "starting"
+            ? "Stop server startup"
+            : "Stop server";
+    }
+    if (restartButton) {
+      restartButton.title = state === "starting"
+        ? "Wait for the server to finish starting"
+        : state === "stopping"
+          ? "Server is shutting down"
+          : !consoleAvailable
+            ? "Server console unavailable"
+            : "Restart server";
+    }
+  };
 
   try {
     const response = await fetch(
@@ -501,43 +1231,38 @@ async function updateServerStatus() {
 
     const data = await response.json();
 
+    const state = normalizeServerState(data);
+    const consoleAvailable = data.console_available !== false;
+    const confirmedRunning = state === "running" ? true : state === "stopped" ? false : null;
+    if (confirmedRunning !== null) {
+      const previousState = observedServerStates.get(serverId);
+      if (previousState !== undefined && previousState !== confirmedRunning) {
+        const serverName = document.querySelector(".sidebar-server-copy strong")?.textContent?.trim() || "Server";
+        const now = new Date().toISOString();
+        const stateLabel = confirmedRunning ? "started" : "stopped";
+        recordInAppNotification({
+          id: `server-state:${serverId}:${confirmedRunning ? "running" : "stopped"}:${Date.now()}`,
+          kind: "server-state",
+          title: `${serverName} ${stateLabel}`,
+          message: `${serverName} is now ${confirmedRunning ? "running" : "stopped"}.`,
+          url: `/servers/${encodeURIComponent(serverId)}`,
+          checked_at: now,
+        });
+      }
+      observedServerStates.set(serverId, confirmedRunning);
+    }
+
     const pluginsPage = document.querySelector(".plugins-page");
     if (pluginsPage?.dataset.serverId === serverId) {
-      pluginServerRunning = data.running === true;
+      pluginServerRunning = state === "running";
       showPluginRestartAlert();
     }
 
-    if (data.running) {
-      statusText.textContent = "Running";
-
-      statusText.style.color = "#21b45b";
-
-      statusDot.style.background = "#21b45b";
-
-      startButton.style.display = "none";
-      restartButton.style.display = "";
-      stopButton.style.display = "";
-    } else {
-      statusText.textContent = "Stopped";
-
-      statusText.style.color = "#ef5050";
-
-      statusDot.style.background = "#ef5050";
-
-      startButton.style.display = "";
-      restartButton.style.display = "none";
-      stopButton.style.display = "none";
-    }
+    setControls(state, consoleAvailable);
+    setOverviewServerState(state, data.console_available);
   } catch (error) {
-    statusText.textContent = "Unknown";
-
-    statusText.style.color = "#888";
-
-    statusDot.style.background = "#999";
-
-    startButton.style.display = "none";
-    restartButton.style.display = "none";
-    stopButton.style.display = "none";
+    setControls("unknown", false);
+    setOverviewServerState("unknown", false);
   }
 }
 
@@ -549,29 +1274,61 @@ setInterval(
 );
 
 async function updateServerDots() {
-  const dots = document.querySelectorAll(
-    ".server-status-dot",
-  );
+  const dots = [...document.querySelectorAll(
+    ".server-choice .server-status-dot, .sidebar-server-status .server-status-dot, .server-card-status .server-status-dot, .system-instance-row .server-status-dot",
+  )];
+  const serverIds = [...new Set(dots.map((dot) => dot.dataset.serverId).filter(Boolean))];
 
-  for (const dot of dots) {
-    const serverId = dot.dataset.serverId;
-
+  for (const serverId of serverIds) {
     try {
       const response = await fetch(
         `/api/web/servers/${serverId}/status`,
       );
-
+      if (!response.ok) continue;
       const data = await response.json();
+      const state = normalizeServerState(data);
+      if (state === "unknown") continue;
+      const classes = ["is-online", "is-offline", "is-starting", "is-stopping", "is-unknown"];
 
-      dot.style.background = data.running ? "#21b45b" : "#ef5050";
+      dots
+        .filter((dot) => dot.dataset.serverId === serverId)
+        .forEach((dot) => {
+          dot.classList.remove(...classes, "running");
+          dot.classList.add(statusClass(state));
+          dot.classList.toggle("running", state === "running");
+        });
+
+      document.querySelectorAll(
+        `.server-card-status[data-server-id="${serverId}"]`,
+      ).forEach((status) => {
+        status.classList.remove(...classes);
+        status.classList.add(statusClass(state));
+        const label = status.querySelector(".server-card-status-text");
+        if (label) label.textContent = serverStateLabel(state, data.console_available);
+      });
+
+      document.querySelectorAll(
+        `.system-instance-row [data-server-id="${serverId}"].server-status-dot`,
+      ).forEach((dot) => {
+        const row = dot.closest(".system-instance-row");
+        const label = row?.querySelector(".system-instance-state");
+        if (label) label.textContent = serverStateLabel(state, data.console_available);
+        const button = row?.querySelector(".server-control-button");
+        if (button) {
+          const action = button.classList.contains("start") ? "start" : "stop";
+          button.disabled = action === "start"
+            ? state !== "stopped"
+            : data.console_available === false || !["starting", "running"].includes(state);
+        }
+      });
 
       document.querySelectorAll(
         `.server-status-text[data-server-id="${serverId}"]`,
       ).forEach((label) => {
-        label.textContent = data.running ? "Running" : "Stopped";
+        label.textContent = serverStateLabel(state, data.console_available);
       });
     } catch {
-      dot.style.background = "#999";
+      // Keep the last confirmed state when one status poll fails.
     }
   }
 }
@@ -584,14 +1341,20 @@ setInterval(
 );
 
 let consoleLines = [];
-let consoleFilter = "ALL";
+const consoleLevels = ["INFO", "WARN", "ERROR", "DEBUG"];
+let consoleFilters = new Set();
 let lastConsoleSignature = "";
 let playerData = null;
 let playerFilter = "all";
+let playerPage = 1;
+const PLAYER_PAGE_SIZE = 25;
 let pluginData = [];
-let selectedPluginFilenames = new Set();
+let pluginMonitoringPreviousFocus = null;
 let pluginPendingRemoval = null;
 let pluginPendingReplacement = null;
+let pluginPendingUpdates = [];
+let pluginUpdatePreviousFocus = null;
+let pluginUpdateInProgress = false;
 let pluginRestartRequired = false;
 let pluginServerRunning = false;
 let pluginDuplicateGroups = [];
@@ -599,9 +1362,10 @@ let duplicatePluginFilenames = new Set();
 let duplicatePluginDetails = new Map();
 let latestInstalledPluginFilename = null;
 let sessionAcknowledgedPluginDuplicates = new Set();
-const acknowledgedPluginDuplicatesKey = "stemcraft.acknowledgedPluginDuplicates";
+const acknowledgedPluginDuplicatesKey = "craftarr.acknowledgedPluginDuplicates";
 
 let pendingFilePath = null;
+let fileImagePreviewPreviousFocus = null;
 
 function currentFilesPage() {
   return document.querySelector(
@@ -642,6 +1406,60 @@ function openNewFolderModal() {
 
   input.value = "";
   input.focus();
+}
+
+function openCreateFileModal() {
+  const modal = document.getElementById("create-file-modal");
+  const input = document.getElementById("create-file-name");
+  const error = document.getElementById("create-file-error");
+  if (!modal || !input) return;
+  input.value = "";
+  if (error) {
+    error.textContent = "";
+    error.hidden = true;
+  }
+  modal.hidden = false;
+  input.focus();
+}
+
+function closeCreateFileModal() {
+  const modal = document.getElementById("create-file-modal");
+  if (modal) modal.hidden = true;
+}
+
+async function createNewFile(event) {
+  event.preventDefault();
+  const page = currentFilesPage();
+  const input = document.getElementById("create-file-name");
+  const error = document.getElementById("create-file-error");
+  const button = document.getElementById("create-file-submit");
+  if (!page || !input || !button || !input.reportValidity()) return;
+  button.disabled = true;
+  if (error) {
+    error.textContent = "";
+    error.hidden = true;
+  }
+  try {
+    const response = await fetch(`/api/web/servers/${page.dataset.serverId}/files/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: page.dataset.currentPath || "", name: input.value.trim() }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to create the file.");
+    closeCreateFileModal();
+    showToast("File created. Open it to add content.", "success");
+    reloadFilesPage();
+  } catch (createError) {
+    if (error) {
+      error.textContent = createError.message;
+      error.hidden = false;
+    } else {
+      showToast(createError.message, "error");
+    }
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function closeNewFolderModal() {
@@ -950,9 +1768,8 @@ document.addEventListener("drop", async (event) => {
   event.preventDefault();
   clearPluginWindowDrag();
   const files = Array.from(event.dataTransfer?.files || []);
-  const status = document.getElementById("plugin-install-status");
   if (files.length !== 1 || !files[0].name.toLowerCase().endsWith(".jar")) {
-    if (status) status.textContent = "Drop one JAR file at a time.";
+    showToast("Drop one JAR file at a time.", "warning");
     return;
   }
   await installUploadedPlugin(files[0]);
@@ -968,36 +1785,45 @@ async function uploadPluginJar(input) {
 
 async function installUploadedPlugin(file, replace = false) {
   const page = document.querySelector(".plugins-page");
-  const status = document.getElementById("plugin-install-status");
   const button = document.querySelector(".plugin-upload-button");
-  if (!page || !status || !file) return;
+  if (!page || !file) return;
 
   if (button) button.disabled = true;
-  status.textContent = replace ? "Replacing and validating..." : "Uploading and validating...";
+  showFileOperationProgress("Uploading plugin", `Uploading ${file.name}…`, 0);
   try {
     const formData = new FormData();
     formData.append("plugin", file, file.name);
-    const response = await fetch(
+    const response = await uploadFileWithProgress(
       `/api/web/servers/${page.dataset.serverId}/plugins/upload${replace ? "?replace=true" : ""}`,
-      { method: "POST", body: formData },
+      formData,
+      (loaded, total) => showFileOperationProgress(
+        "Uploading plugin",
+        `Uploading ${file.name}…`,
+        total ? (loaded / total) * 100 : 0,
+      ),
     );
-    const data = await response.json();
+    let data;
+    try {
+      data = JSON.parse(response.responseText || "{}");
+    } catch {
+      data = {};
+    }
     if (response.status === 409 && data.code === "plugin_file_exists") {
+      hideFileOperationProgress();
       openPluginReplaceModal({ type: "upload", file }, data);
-      status.textContent = "Confirm whether to replace the existing plugin.";
       return;
     }
-    if (!response.ok) throw new Error(data.error || "Plugin upload failed");
-    status.textContent = `${data.plugin.name} ${replace ? "replaced" : "installed"}.${
-      data.action_requires_restart ? " Restart required." : ""
-    }`;
+    if (response.status < 200 || response.status >= 400) throw new Error(data.error || "Plugin upload failed");
+    const action = replace ? "replaced" : "installed";
+    showToast(`${data.plugin.name} ${action}.${data.action_requires_restart ? " Restart required." : ""}`, data.action_requires_restart ? "warning" : "success");
     latestInstalledPluginFilename = data.plugin.filename;
     pluginRestartRequired = data.restart_required === true;
     showPluginRestartAlert();
     await updatePluginsPage(true);
   } catch (error) {
-    status.textContent = error.message;
+    showToast(error.message || "Plugin upload failed.", "error");
   } finally {
+    hideFileOperationProgress();
     if (button) button.disabled = false;
   }
 }
@@ -1009,10 +1835,8 @@ async function downloadPluginUrl(event) {
 
 async function installPluginUrl(url, replace = false) {
   const page = document.querySelector(".plugins-page");
-  const status = document.getElementById("plugin-install-status");
   const form = document.querySelector('.plugin-install-form input[name="url"]')?.form;
-  if (!page || !status || !form) return;
-  status.textContent = replace ? "Replacing and validating..." : "Downloading and validating...";
+  if (!page || !form) return;
   try {
     const response = await fetch(
       `/api/web/servers/${page.dataset.serverId}/plugins/url`,
@@ -1025,20 +1849,18 @@ async function installPluginUrl(url, replace = false) {
     const data = await response.json();
     if (response.status === 409 && data.code === "plugin_file_exists") {
       openPluginReplaceModal({ type: "url", url }, data);
-      status.textContent = "Confirm whether to replace the existing plugin.";
       return;
     }
     if (!response.ok) throw new Error(data.error || "Plugin download failed");
-    status.textContent = `${data.plugin.name} ${replace ? "replaced" : "installed"}.${
-      data.action_requires_restart ? " Restart required." : ""
-    }`;
+    const action = replace ? "replaced" : "installed";
+    showToast(`${data.plugin.name} ${action}.${data.action_requires_restart ? " Restart required." : ""}`, data.action_requires_restart ? "warning" : "success");
     latestInstalledPluginFilename = data.plugin.filename;
     form.reset();
     pluginRestartRequired = data.restart_required === true;
     showPluginRestartAlert();
     await updatePluginsPage(true);
   } catch (error) {
-    status.textContent = error.message;
+    showToast(error.message || "Plugin download failed.", "error");
   }
 }
 
@@ -1080,6 +1902,148 @@ async function confirmPluginReplacement() {
   }
 }
 
+function openPluginUpdateModal(filename = null) {
+  if (pluginUpdateInProgress) {
+    showToast("A plugin update is already in progress.", "info");
+    return;
+  }
+  const targets = pluginData.filter((plugin) =>
+    pluginHasDownloadableUpdate(plugin) && (!filename || plugin.filename === filename)
+  );
+  if (!targets.length) {
+    showToast("There are no downloadable plugin updates to install.", "warning");
+    return;
+  }
+
+  const modal = document.getElementById("plugin-update-modal");
+  const title = document.getElementById("plugin-update-modal-title");
+  const summary = document.getElementById("plugin-update-modal-summary");
+  const list = document.getElementById("plugin-update-modal-list");
+  const state = document.getElementById("plugin-update-modal-state");
+  const confirm = document.getElementById("confirm-plugin-update");
+  const keepPrevious = document.getElementById("plugin-update-keep-previous");
+  if (!modal || !title || !summary || !list || !state || !confirm || !keepPrevious) return;
+
+  pluginPendingUpdates = targets.map((plugin) => ({...plugin}));
+  pluginUpdatePreviousFocus = document.activeElement;
+  const count = targets.length;
+  title.textContent = count === 1 ? `Update ${targets[0].name}?` : `Update ${count} plugins?`;
+  summary.textContent = count === 1
+    ? "This will download and install the update directly on this server."
+    : `This will download and install ${count} updates directly on this server, one at a time.`;
+  list.innerHTML = targets.map((plugin) => {
+    const installed = plugin.version || plugin.update?.installed_version || "Unknown";
+    const latest = plugin.update?.latest_version || "New version";
+    return `<li><strong>${escapeHtml(plugin.name)}</strong><span>${escapeHtml(installed)} <i class="fa-solid fa-arrow-right" aria-hidden="true"></i> ${escapeHtml(latest)}</span></li>`;
+  }).join("");
+  keepPrevious.checked = true;
+  state.textContent = pluginServerRunning
+    ? "The server is running. If an enabled plugin changes, restart it to load the new version."
+    : "If a plugin is currently disabled, its updated JAR will stay disabled.";
+  confirm.querySelector("span").textContent = count === 1 ? "Update plugin" : `Update ${count} plugins`;
+  modal.hidden = false;
+  document.getElementById("cancel-plugin-update")?.focus();
+}
+
+function closePluginUpdateModal() {
+  const modal = document.getElementById("plugin-update-modal");
+  if (modal) modal.hidden = true;
+  pluginPendingUpdates = [];
+  const previousFocus = pluginUpdatePreviousFocus;
+  pluginUpdatePreviousFocus = null;
+  if (previousFocus?.isConnected) previousFocus.focus({preventScroll: true});
+}
+
+async function confirmPluginUpdate() {
+  if (!pluginPendingUpdates.length || pluginUpdateInProgress) return;
+  const targets = pluginPendingUpdates;
+  const keepPrevious = document.getElementById("plugin-update-keep-previous")?.checked === true;
+  const button = document.getElementById("confirm-plugin-update");
+  if (button) button.disabled = true;
+  closePluginUpdateModal();
+  try {
+    await installPluginUpdates(targets, keepPrevious);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function installPluginUpdates(plugins, keepPrevious) {
+  const page = document.querySelector(".plugins-page");
+  if (!page || !plugins.length) return;
+  pluginUpdateInProgress = true;
+  renderPlugins();
+  const total = plugins.length;
+  const successes = [];
+  const failures = [];
+  let progress = showToast(
+    `Preparing ${total === 1 ? plugins[0].name : `${total} plugin updates`}…`,
+    "info",
+    0,
+    {persistent: true, progress: {completed: 0, total}},
+  );
+
+  try {
+    for (let index = 0; index < total; index += 1) {
+      const plugin = plugins[index];
+      updateToast(progress, `Updating ${plugin.name} (${index + 1} of ${total})…`, "info", {
+        timeout: 0,
+        progress: {completed: index, total},
+      });
+      try {
+        const response = await nativeFetch(`/api/web/servers/${page.dataset.serverId}/plugins/update`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({filename: plugin.filename, keep_previous: keepPrevious}),
+        });
+        if (handleAuthenticationResponse(response)) {
+          progress?.remove();
+          return;
+        }
+        let data = {};
+        try { data = await response.json(); } catch { /* Use the HTTP status below. */ }
+        if (!response.ok) throw new Error(data.error || "Plugin update failed");
+        successes.push(plugin.name);
+        pluginRestartRequired = pluginRestartRequired || data.restart_required === true;
+      } catch (error) {
+        failures.push(`${plugin.name}: ${error.message || "Update failed"}`);
+      }
+      updateToast(progress, `Processed ${index + 1} of ${total} plugin updates.`, "info", {
+        timeout: 0,
+        progress: {completed: index + 1, total},
+      });
+    }
+
+    showPluginRestartAlert();
+    await updatePluginsPage(false);
+    await refreshNotifications(false);
+    const summary = successes.length
+      ? `Updated ${successes.length} of ${total} plugin${total === 1 ? "" : "s"}.${pluginRestartRequired ? " Restart the server to load enabled updates." : ""}`
+      : `No plugins were updated.`;
+    const failureDetail = failures.length ? ` Failed: ${failures.join("; ")}` : "";
+    if (successes.length) {
+      const serverName = document.querySelector(".sidebar-server-copy strong")?.textContent?.trim() || "Server";
+      recordInAppNotification({
+        id: `plugin-install:${page.dataset.serverId}:${Date.now()}`,
+        kind: "plugin-install",
+        title: successes.length === 1 ? "Plugin update installed" : "Plugin updates installed",
+        message: `${serverName}: ${successes.join(", ")}${pluginRestartRequired ? " · restart required" : ""}`,
+        url: `/servers/${encodeURIComponent(page.dataset.serverId)}/plugins`,
+        checked_at: new Date().toISOString(),
+      });
+    }
+    updateToast(
+      progress,
+      `${summary}${failureDetail}`,
+      failures.length ? (successes.length ? "warning" : "error") : (pluginRestartRequired ? "warning" : "success"),
+      {timeout: 9000, progress: {completed: total, total}},
+    );
+  } finally {
+    pluginUpdateInProgress = false;
+    renderPlugins();
+  }
+}
+
 function renderPlugins() {
   const list = document.getElementById(
     "plugin-list",
@@ -1110,6 +2074,20 @@ function renderPlugins() {
         .includes(search),
   );
 
+  const visiblePlugins = plugins;
+  const page = document.querySelector(".plugins-page");
+  const canManage = page?.dataset.canManage === "true";
+  const canViewFiles = page?.dataset.canViewFiles === "true";
+  const canEditFiles = page?.dataset.canEditFiles === "true";
+  const updates = pluginData.filter((plugin) => pluginHasDownloadableUpdate(plugin));
+  const updateAllButton = document.getElementById("plugin-update-all");
+  if (updateAllButton) {
+    updateAllButton.hidden = !canManage || updates.length === 0;
+    const label = updateAllButton.querySelector("span");
+    if (label) label.textContent = `Update all (${updates.length})`;
+    updateAllButton.disabled = pluginUpdateInProgress;
+  }
+
   const count = document.getElementById(
     "plugin-count",
   );
@@ -1120,157 +2098,202 @@ function renderPlugins() {
     }`;
   }
 
-  if (!plugins.length) {
+  if (!visiblePlugins.length) {
     list.innerHTML = `<div class="empty-message">
-                No plugins found.
+                ${search ? "No plugin found. Try another name." : "No plugins yet. Choose a plugin file above."}
             </div>`;
 
     return;
   }
 
-  list.innerHTML = plugins.map(
-    (plugin, pluginIndex) => `
-                <div class="
-                    plugin-row
-                    ${plugin.enabled ? "" : "disabled"}
-                    ${duplicatePluginFilenames.has(plugin.filename) ? "duplicate" : ""}
-                ">
-
-                    ${document.querySelector('.plugins-page')?.dataset.canManage === "true" ? `
-                      <label class="plugin-select"><input type="checkbox" aria-label="Select ${escapeHtml(plugin.name)}"
-                        ${selectedPluginFilenames.has(plugin.filename) ? "checked" : ""}
-                        onchange="selectPlugin('${escapeJs(plugin.filename)}', this.checked)"></label>` : ""}
-
-                    <div class="plugin-main">
-
-                        <strong>
-                            ${escapeHtml(plugin.name)}
-                        </strong>
-
-                        <small>
-                            ${escapeHtml(plugin.filename)}
-                        </small>
-
-                        <div class="plugin-meta">
-
-                            ${
-      plugin.version
-        ? `
-                                    <span>
-                                        ${escapeHtml(plugin.version)}
-                                    </span>
-                                `
-        : ""
-    }
-
-                            <span>
-                                ${formatFileSize(plugin.size)}
-                            </span>
-
-                            <span>
-                                Modified ${formatPluginModified(plugin.modified_ns)}
-                            </span>
-
-                            <span class="${
-      plugin.enabled ? "plugin-active-label" : "plugin-disabled-label"
-    }">
-                                ${plugin.enabled ? "Active" : "Disabled"}
-                            </span>
-
-                            ${duplicatePluginDetails.has(plugin.filename) ? `
-                                <span class="plugin-duplicate-label" title="Another enabled JAR identifies as ${escapeHtml(plugin.name)}">
-                                    <i class="fa-solid fa-triangle-exclamation"></i>
-                                    Possible duplicate of ${escapeHtml(duplicatePluginDetails.get(plugin.filename).join(", "))}
-                                </span>
-                            ` : ""}
-
-                        </div>
-
-                        ${renderMonitoredUpdate(plugin.update)}
-                    </div>
-
-
-                    <div class="plugin-actions">
-
-                        ${document.querySelector('.plugins-page')?.dataset.canManage === "true" ?
-                          `<button class="button" type="button" onclick="openPluginMonitoring(${pluginData.indexOf(plugin)})">Monitoring</button>` : ""}
-                        ${renderPluginConfigActions(plugin, pluginIndex)}
-
-                        <button
-                            class="button"
-                            onclick="togglePlugin(
-                                '${escapeJs(plugin.filename)}',
-                                '${plugin.enabled ? "disable" : "enable"}'
-                            )"
-                        >
-                            ${plugin.enabled ? "Disable" : "Enable"}
-                        </button>
-
-
-                        <button
-                            class="button"
-                            onclick="openPluginRemoveModal(
-                                '${escapeJs(plugin.filename)}'
-                            )"
-                        >
-                            Remove
-                        </button>
-
-                    </div>
-
-                </div>
-            `,
-  )
+  list.innerHTML = visiblePlugins.map((plugin) => `
+    <article class="plugin-row ${plugin.enabled ? "" : "disabled"} ${duplicatePluginFilenames.has(plugin.filename) ? "duplicate" : ""}">
+      <span class="plugin-status-indicator ${plugin.enabled ? "is-enabled" : "is-disabled"}" aria-hidden="true" title="${plugin.enabled ? "Enabled" : "Disabled"}"></span>
+      <div class="plugin-main">
+        <div class="plugin-name-line">
+          <strong>${escapeHtml(plugin.name)}</strong>
+        </div>
+        ${renderPluginVersionStatus(plugin, canManage)}
+        <dl class="plugin-file-meta">
+          <div><dt>File name:</dt><dd>${escapeHtml(plugin.filename)}</dd></div>
+          <div><dt>File size:</dt><dd>${formatPluginFileSize(plugin.size)}</dd></div>
+        </dl>
+        ${duplicatePluginDetails.has(plugin.filename) ? `
+          <p class="plugin-duplicate-label"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> Another copy is enabled: ${escapeHtml(duplicatePluginDetails.get(plugin.filename).join(", "))}</p>
+        ` : ""}
+      </div>
+      ${canManage ? renderPluginActions(plugin, canViewFiles, canEditFiles) : ""}
+    </article>
+  `)
     .join("");
 }
 
-function selectPlugin(filename, selected) {
-  selected ? selectedPluginFilenames.add(filename) : selectedPluginFilenames.delete(filename);
-  const count = document.getElementById("plugin-selected-count");
-  if (count) count.textContent = `${selectedPluginFilenames.size} selected`;
+function renderPluginActions(plugin, canViewFiles, canEditFiles) {
+  const folderPath = plugin.config_directory ? `plugins/${plugin.config_directory}` : "";
+  const folderAction = !canViewFiles ? "" : folderPath
+    ? `<button class="plugin-menu-action" type="button" onclick="this.closest('details').open=false; openPluginFolder('${escapeJs(folderPath)}')"><i class="fa-solid fa-folder-open" aria-hidden="true"></i><span>Open Folder</span></button>`
+    : `<div class="plugin-menu-empty"><i class="fa-regular fa-folder-open" aria-hidden="true"></i><span>No data folder found</span></div>`;
+  const filename = escapeJs(plugin.filename);
+  const stateAction = plugin.enabled ? "disable" : "enable";
+  const stateLabel = plugin.enabled ? "Disable" : "Enable";
+
+  return `
+    <div class="plugin-actions">
+      <details class="plugin-more-actions">
+        <summary class="button"><i class="fa-solid fa-ellipsis" aria-hidden="true"></i><span>More</span></summary>
+        <div class="plugin-more-menu" role="group" aria-label="More actions for ${escapeHtml(plugin.name)}">
+          <button class="plugin-menu-action" type="button" onclick="this.closest('details').open=false; openPluginMonitoring(${pluginData.indexOf(plugin)})"><i class="fa-solid fa-gear" aria-hidden="true"></i><span>Update settings</span></button>
+          ${folderAction}
+          <div class="plugin-menu-separator" role="separator"></div>
+          ${renderPluginConfigActions(plugin, canEditFiles)}
+          <div class="plugin-menu-separator" role="separator"></div>
+          <button class="plugin-menu-action" type="button" onclick="this.closest('details').open=false; togglePlugin('${filename}', '${stateAction}')"><i class="fa-solid ${plugin.enabled ? "fa-toggle-off" : "fa-toggle-on"}" aria-hidden="true"></i><span>${stateLabel} plugin</span></button>
+          <div class="plugin-menu-separator" role="separator"></div>
+          <button class="plugin-menu-action is-danger" type="button" onclick="this.closest('details').open=false; openPluginRemoveModal('${filename}')"><i class="fa-solid fa-trash" aria-hidden="true"></i><span>Remove plugin</span></button>
+        </div>
+      </details>
+    </div>`;
 }
 
-async function bulkPluginAction(action) {
-  const filenames = Array.from(selectedPluginFilenames);
-  const page = document.querySelector(".plugins-page");
-  if (!page || !filenames.length) return;
-  if (action === "remove" && !confirm(`Delete ${filenames.length} selected plugin file(s)?`)) return;
-  const response = await fetch(`/api/web/servers/${page.dataset.serverId}/plugins/action`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, filenames }),
-  });
-  const data = await response.json();
-  if (!response.ok) return showToast(data.error || "Plugin action failed", "error");
-  selectedPluginFilenames.clear();
-  await updatePluginsPage();
-  showToast(`${data.affected} plugin file(s) updated.`, "success");
-}
-
-function renderPluginConfigActions(plugin, index) {
-  const files = plugin.config_files || [];
-  if (!files.length) {
-    return `<button class="button" disabled title="Start the server once to generate plugin configuration files">No YAML config</button>`;
-  }
-
-  if (files.length === 1) {
-    return `<button class="button" data-config-path="${
-      escapeHtml(files[0])
-    }" onclick="editPluginConfig(this.dataset.configPath)">Edit Config</button>`;
-  }
-
-  const selectId = `plugin-config-${index}`;
-  const pluginDirectory = plugin.config_directory
-    ? `plugins/${plugin.config_directory}/`
+function renderPluginComparisonDetails(details) {
+  if (!details) return "";
+  const input = details.installed_value || "(empty)";
+  const source = details.installed_source || "JAR metadata";
+  const expression = details.installed_pattern
+    ? `installed expression <code>${escapeHtml(details.installed_pattern)}</code>`
+    : "automatic installed version detection";
+  const matched = details.installed_comparison !== undefined
+    ? `${details.installed_pattern ? "matched" : "detected"} as <code>${escapeHtml(details.installed_comparison)}</code>`
+    : `did not match${details.match_error ? ` (${escapeHtml(details.match_error)})` : ""}`;
+  const filename = details.installed_filename
+    ? ` from <code>${escapeHtml(details.installed_filename)}</code>`
     : "";
-  const options = files.map((path) => {
-    const displayPath = pluginDirectory && path.startsWith(pluginDirectory)
-      ? path.slice(pluginDirectory.length)
-      : path;
-    return `<option value="${escapeHtml(path)}" title="${escapeHtml(path)}">${
-      escapeHtml(displayPath)
-    }</option>`;
+  const release = details.release_value || "(empty)";
+  const releaseExpression = details.release_pattern
+    ? ` using release expression <code>${escapeHtml(details.release_pattern)}</code>`
+    : "";
+  return `<div class="plugin-update-diagnostic"><strong>Match details:</strong> ${escapeHtml(source)} value <code>${escapeHtml(input)}</code>${filename} with ${expression} ${matched}; latest release value <code>${escapeHtml(release)}</code>${releaseExpression}.</div>`;
+}
+
+function pluginHasDownloadableUpdate(plugin) {
+  return plugin?.rollback_copy !== true
+    && plugin?.update?.update_available === true
+    && typeof plugin.update.download_url === "string"
+    && plugin.update.download_url.startsWith("https://");
+}
+
+function renderPluginVersionStatus(plugin, canManage = false) {
+  const update = plugin.update;
+  const updateInstalledVersion = plugin.version_source === "filename"
+    ? null
+    : update?.installed_version;
+  const installedVersion = [plugin.version, updateInstalledVersion]
+    .filter((version, index, versions) => version && versions.indexOf(version) === index)
+    .join(" | ") || "Unknown";
+  const versionPill = `<span class="server-version-pill plugin-version-pill" title="Installed plugin version"><i class="fa-solid fa-cube" aria-hidden="true"></i><span class="visually-hidden">Installed version: </span>${escapeHtml(installedVersion)}</span>`;
+  if (plugin.rollback_copy) {
+    return `<div class="plugin-version-status-row">${versionPill}<span class="server-inline-update-status plugin-update-status is-pending" title="Previous JAR kept disabled for rollback"><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i>Rollback copy</span></div>`;
+  }
+  if (!update) return `<div class="plugin-version-status-row">${versionPill}</div>`;
+
+  let label;
+  let icon;
+  let statusClass;
+  if (update.update_available) {
+    label = update.latest_version ? `New version ${update.latest_version}` : "New version available";
+    icon = "fa-circle-up";
+    statusClass = "is-update";
+  } else if (update.status === "Current") {
+    label = "Up to date";
+    icon = "fa-circle-check";
+    statusClass = "is-current";
+  } else if (update.status === "Check failed") {
+    label = "Could not check";
+    icon = "fa-triangle-exclamation";
+    statusClass = "is-error";
+  } else if (update.status === "Incompatible") {
+    label = "May not fit this server";
+    icon = "fa-triangle-exclamation";
+    statusClass = "is-warning";
+  } else if (update.status === "Monitoring disabled") {
+    label = "Update checks off";
+    icon = "fa-circle-minus";
+    statusClass = "is-pending";
+  } else if (update.status === "Unsupported/unmonitored") {
+    label = "Set up update checks";
+    icon = "fa-circle-question";
+    statusClass = "is-pending";
+  } else {
+    label = "Not checked yet";
+    icon = "fa-circle-question";
+    statusClass = "is-pending";
+  }
+
+  const statusTitle = update.error || label;
+  const statusMarkup = `<i class="fa-solid ${icon}" aria-hidden="true"></i>${escapeHtml(label)}`;
+  const statusPill = update.update_available && update.release_url?.startsWith("https://")
+    ? `<a class="server-inline-update-status plugin-update-status ${statusClass}" href="${escapeHtml(update.release_url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(statusTitle)}">${statusMarkup}</a>`
+    : `<span class="server-inline-update-status plugin-update-status ${statusClass}" title="${escapeHtml(statusTitle)}">${statusMarkup}</span>`;
+  const download = canManage && pluginHasDownloadableUpdate(plugin)
+    ? `<button class="plugin-update-install" type="button" onclick="openPluginUpdateModal('${escapeHtml(escapeJs(plugin.filename))}')" aria-label="Install update for ${escapeHtml(plugin.name)} on the server" title="Install update on server" ${pluginUpdateInProgress ? "disabled" : ""}><i class="fa-solid fa-cloud-arrow-down" aria-hidden="true"></i></button>`
+    : "";
+  const errorDetail = update.status === "Check failed" && update.error
+    ? `<div class="plugin-update-error"><div><strong>Reason:</strong> ${escapeHtml(update.error)}</div>${renderPluginComparisonDetails(update.comparison_details)}</div>`
+    : "";
+  return `<div class="plugin-version-status-row">${versionPill}${statusPill}${download}${errorDetail}</div>`;
+}
+
+function formatPluginFileSize(size) {
+  const bytes = Number(size);
+  if (!Number.isFinite(bytes) || bytes < 0) return "Unknown";
+
+  const units = ["Bytes", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  return unitIndex === 0
+    ? `${value} ${units[unitIndex]}`
+    : `${value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function renderPluginConfigActions(plugin, canEditFiles) {
+  const allFiles = Array.isArray(plugin.config_files) ? plugin.config_files : [];
+  const pluginDirectory = plugin.config_directory ? `plugins/${plugin.config_directory}/` : "";
+  const rootFiles = allFiles.filter((path) => {
+    if (typeof path !== "string" || !pluginDirectory || !path.startsWith(pluginDirectory)) return false;
+    const filename = path.slice(pluginDirectory.length);
+    return filename && !filename.includes("/");
+  });
+
+  if (!rootFiles.length) {
+    return `<div class="plugin-menu-empty">No root-level configuration files found</div>`;
+  }
+
+  if (!canEditFiles) {
+    return `<div class="plugin-menu-empty">File edit access is needed</div>`;
+  }
+
+  const modifiedFiles = plugin.config_file_modified_ns || {};
+  rootFiles.sort((left, right) => {
+    const modifiedDifference = Number(modifiedFiles[right] || 0) / 1_000_000
+      - Number(modifiedFiles[left] || 0) / 1_000_000;
+    return modifiedDifference || left.localeCompare(right);
+  });
+
+  const visibleFiles = rootFiles.slice(0, 5);
+  const fileActions = visibleFiles.map((path) => {
+    const filename = path.slice(pluginDirectory.length);
+    return `<button class="plugin-menu-action plugin-config-file" type="button" title="${escapeHtml(path)}" onclick="this.closest('.plugin-more-actions').open=false; editPluginConfig('${escapeJs(path)}')"><i class="fa-regular fa-file-lines" aria-hidden="true"></i><span>${escapeHtml(filename)}</span></button>`;
   }).join("");
-  return `<span class="plugin-config-picker"><button class="button" onclick="editSelectedPluginConfig('${selectId}')">Edit Config</button><select id="${selectId}" aria-label="Choose and open configuration file" title="Choose and open configuration file" onchange="editPluginConfig(this.value)">${options}</select></span>`;
+  const limitNote = rootFiles.length > visibleFiles.length
+    ? `<div class="plugin-menu-note">Showing the 5 most recently modified of ${rootFiles.length} root config files</div>`
+    : "";
+  return `${fileActions}${limitNote}`;
 }
 
 function pluginDuplicateGroupSignature(group) {
@@ -1478,9 +2501,15 @@ async function disableSelectedDuplicatePlugins() {
   await updatePluginsPage();
 }
 
-function editSelectedPluginConfig(selectId) {
-  const path = document.getElementById(selectId)?.value;
-  if (path) editPluginConfig(path);
+function openPluginFolder(path) {
+  const page = document.querySelector(".plugins-page[data-server-id]");
+  if (!page || !path) return;
+  const url = `/servers/${page.dataset.serverId}/files?path=${encodeURIComponent(path)}`;
+  htmx.ajax("GET", url, {
+    target: "#page-content",
+    swap: "innerHTML",
+    pushUrl: url,
+  });
 }
 
 function editPluginConfig(path) {
@@ -1522,6 +2551,7 @@ function parseConsoleLine(line) {
 }
 
 function renderConsoleLines() {
+  updateConsoleFilterButtons();
   const output = document.getElementById(
     "console-output",
   );
@@ -1530,9 +2560,9 @@ function renderConsoleLines() {
     return;
   }
 
-  const filtered = consoleFilter === "ALL" ? consoleLines : consoleLines.filter(
-    (line) => line.level === consoleFilter,
-  );
+  const filtered = consoleFilters.size
+    ? consoleLines.filter((line) => consoleFilters.has(line.level))
+    : consoleLines;
 
   if (!filtered.length) {
     output.innerHTML =
@@ -1562,6 +2592,17 @@ function renderConsoleLines() {
       );
     })
     .join("");
+}
+
+function updateConsoleFilterButtons() {
+  document.querySelectorAll(".console-filter").forEach((button) => {
+    const level = button.dataset.level;
+    const selected = level === "ALL"
+      ? consoleFilters.size === 0
+      : consoleFilters.has(level);
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  });
 }
 
 function escapeHtml(value) {
@@ -1639,11 +2680,20 @@ async function updateConsolePage() {
       renderConsoleLines();
     }
 
-    if (data.running) {
+    if (data.running && data.console_available !== false && data.state !== "stopping") {
       input.disabled = false;
       send.disabled = false;
 
       input.placeholder = "Type a command and press Enter...";
+    } else if (data.running) {
+      input.disabled = true;
+      send.disabled = true;
+
+      input.placeholder = data.state === "stopping"
+        ? "Server is shutting down"
+        : data.state === "starting"
+          ? "Server is starting; console is not ready"
+          : "Server console unavailable";
     } else {
       input.disabled = true;
       send.disabled = true;
@@ -1825,21 +2875,14 @@ document.addEventListener(
       return;
     }
 
-    document
-      .querySelectorAll(
-        ".console-filter",
-      )
-      .forEach((item) =>
-        item.classList.remove(
-          "active",
-        )
-      );
-
-    button.classList.add(
-      "active",
-    );
-
-    consoleFilter = button.dataset.level;
+    const level = button.dataset.level;
+    if (level === "ALL") {
+      consoleFilters.clear();
+    } else {
+      if (consoleFilters.has(level)) consoleFilters.delete(level);
+      else consoleFilters.add(level);
+      if (consoleFilters.size === consoleLevels.length) consoleFilters.clear();
+    }
 
     renderConsoleLines();
   },
@@ -1974,8 +3017,8 @@ function renderPlayerPage() {
         !playerData.running ? "disabled" : ""
       } onclick="ipBanAction('${
         escapeJs(item.ip)
-      }', 'pardon')">Pardon</button></div>`).join("")
-      : '<div class="empty-message">No IP bans.</div>';
+      }', 'pardon')">Unblock</button></div>`).join("")
+      : '<div class="empty-message">No blocked IP addresses.</div>';
   }
 
   const toggle = document.getElementById(
@@ -2065,15 +3108,48 @@ function renderPlayerList() {
 
   if (!players.length) {
     list.innerHTML = '<div class="empty-message">No players found.</div>';
+    const pagination = document.getElementById("player-pagination");
+    if (pagination) pagination.hidden = true;
 
     return;
   }
+
+  const pageCount = Math.ceil(players.length / PLAYER_PAGE_SIZE);
+  playerPage = Math.min(Math.max(playerPage, 1), pageCount);
+  const pagination = document.getElementById("player-pagination");
+  if (pagination) {
+    const start = (playerPage - 1) * PLAYER_PAGE_SIZE + 1;
+    const end = Math.min(playerPage * PLAYER_PAGE_SIZE, players.length);
+    const summary = pagination.querySelector(".player-pagination-summary");
+    const previous = pagination.querySelector('[data-page-direction="previous"]');
+    const next = pagination.querySelector('[data-page-direction="next"]');
+    pagination.hidden = pageCount <= 1;
+    if (summary) summary.textContent = `Showing ${start}–${end} of ${players.length}`;
+    if (previous) previous.disabled = playerPage <= 1;
+    if (next) next.disabled = playerPage >= pageCount;
+  }
+  players = players.slice((playerPage - 1) * PLAYER_PAGE_SIZE, playerPage * PLAYER_PAGE_SIZE);
 
   list.innerHTML = players.map(
     (player) => {
       const avatar = player.uuid
         ? `https://mc-heads.net/avatar/${encodeURIComponent(player.uuid)}/40`
         : "";
+      const lastOnlineDate = player.last_online ? new Date(player.last_online) : null;
+      const lastOnlineLabel = lastOnlineDate && !Number.isNaN(lastOnlineDate.getTime())
+        ? `Last online ${new Intl.DateTimeFormat(undefined, {dateStyle: "medium", timeStyle: "short"}).format(lastOnlineDate)}${player.last_online_estimated ? " (estimated)" : ""}`
+        : "Last online unknown";
+      const lastOnlineTitle = !player.last_online
+        ? "No saved player data was found"
+        : player.last_online_estimated
+        ? "Estimated from the last saved player data"
+        : "Read from Minecraft player data";
+      const canManagePlayers = document.querySelector(".players-page")?.dataset.canManage === "true";
+      const statusBadges = [
+        player.whitelisted ? '<span class="player-state-badge is-allowed"><i class="fa-solid fa-check" aria-hidden="true"></i>Allowed</span>' : "",
+        player.operator ? `<span class="player-state-badge is-admin"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i>Server admin${player.op_level == null ? "" : ` · L${escapeHtml(player.op_level)}`}</span>` : "",
+        player.banned ? '<span class="player-state-badge is-blocked"><i class="fa-solid fa-ban" aria-hidden="true"></i>Blocked</span>' : "",
+      ].filter(Boolean).join("") || '';
 
       return `
                     <div class="player-row">
@@ -2108,7 +3184,7 @@ function renderPlayerList() {
                                 </strong>
 
                                 <small>
-                                    ${player.online ? "Online" : "Offline"}
+                                    ${player.online ? "Online" : `<span title="${escapeHtml(lastOnlineTitle)}">Offline · ${escapeHtml(lastOnlineLabel)}</span>`}
                                 </small>
 
                             </div>
@@ -2116,7 +3192,7 @@ function renderPlayerList() {
                         </div>
 
 
-                        <div class="player-actions">
+                        ${canManagePlayers && playerData.running ? `<div class="player-actions">
 
                             <button
                                 class="
@@ -2134,7 +3210,7 @@ function renderPlayerList() {
                                 "
                             >
                                 ${
-        player.whitelisted ? "✓ Whitelisted" : "+ Whitelist"
+        player.whitelisted ? "✓ Allowed" : "+ Allow to join"
       }
                             </button>
 
@@ -2152,7 +3228,7 @@ function renderPlayerList() {
                                     )
                                 "
                             >
-                                ${player.operator ? "✓ Op" : "+ Op"}
+                                ${player.operator ? "✓ Admin" : "+ Admin"}
                             </button>
 
 
@@ -2179,7 +3255,7 @@ function renderPlayerList() {
                                             )
                                         "
                                     >
-                                        Kick
+                                        Remove from game
                                     </button>
                                 `
           : ""
@@ -2198,7 +3274,7 @@ function renderPlayerList() {
                                             )
                                         "
                                     >
-                                        Pardon
+                                        Unblock
                                     </button>
                                 `
           : `
@@ -2212,12 +3288,14 @@ function renderPlayerList() {
                                             )
                                         "
                                     >
-                                        Ban
+                                        Block
                                     </button>
                                 `
       }
 
-                        </div>
+                        </div>` : `<div class="player-readonly-state">
+                          <div class="player-state-badges">${statusBadges}</div>
+                        </div>`}
 
                     </div>
                 `;
@@ -2344,6 +3422,13 @@ async function toggleWhitelist() {
 document.addEventListener(
   "click",
   function (event) {
+    const pageButton = event.target.closest(".player-page-button");
+    if (pageButton && !pageButton.disabled) {
+      playerPage += pageButton.dataset.pageDirection === "next" ? 1 : -1;
+      renderPlayerList();
+      return;
+    }
+
     const button = event.target.closest(
       ".player-filter",
     );
@@ -2368,6 +3453,7 @@ document.addEventListener(
     );
 
     playerFilter = button.dataset.filter;
+    playerPage = 1;
 
     renderPlayerList();
   },
@@ -2380,6 +3466,7 @@ document.addEventListener(
       event.target.id ===
         "player-search"
     ) {
+      playerPage = 1;
       renderPlayerList();
     }
   },
@@ -2453,28 +3540,6 @@ setInterval(
   updateOverviewPlayers,
   3000,
 );
-
-function formatFileSize(bytes) {
-  if (bytes < 1024) {
-    return `${bytes} Bytes`;
-  }
-
-  if (bytes < 1024 * 1024) {
-    return `${
-      (
-        bytes / 1024
-      ).toFixed(0)
-    } KB`;
-  }
-
-  return `${
-    (
-      bytes /
-      1024 /
-      1024
-    ).toFixed(1)
-  } MB`;
-}
 
 function formatPluginModified(modifiedNs) {
   if (!modifiedNs) return "Unknown";
@@ -2667,8 +3732,7 @@ document.addEventListener(
   "input",
   function (event) {
     if (
-      event.target.id ===
-        "plugin-search"
+      event.target.id === "plugin-search"
     ) {
       renderPlugins();
     }
@@ -2747,36 +3811,35 @@ function updateDocumentTitle() {
     "#page-content [data-page-title]",
   );
 
-  const title = document.getElementById(
-    "topbar-title",
-  );
-
-  if (!page || !title) {
-    return;
-  }
+  if (!page) return;
 
   const pageTitle = page.dataset.pageTitle;
-
-  title.textContent = pageTitle;
-
-  document.title = `${pageTitle} | Server Console`;
+  let pageHasHeading = Boolean(page.querySelector("h1, .page-heading"));
+  if (!pageHasHeading && pageTitle) {
+    const heading = document.createElement("h1");
+    heading.className = "page-title-heading";
+    heading.textContent = pageTitle;
+    page.prepend(heading);
+    pageHasHeading = true;
+  }
+  document.title = `${pageTitle} | Craftarr`;
 }
 
 updateDocumentTitle();
 
 function initializeCodeEditors(root = document) {
-  if (!window.STEMCodeEditor) return;
+  if (!window.CraftarrCodeEditor) return;
   root.querySelectorAll("textarea.file-editor").forEach((textarea) => {
     const page = textarea.closest(".file-editor-page");
     const path = textarea.form?.querySelector('[name="path"]')?.value || textarea.dataset.filename || "";
-    const storageKey = `stemcraft.editor.${page?.dataset.serverId || ""}.${path}`;
+    const storageKey = `craftarr.editor.${page?.dataset.serverId || ""}.${path}`;
     const warningElement = root.querySelector("[data-editor-warning]");
     const warning = warningElement ? {
       message: warningElement.dataset.message,
       line: Number(warningElement.dataset.line),
       column: Number(warningElement.dataset.column),
     } : null;
-    const view = window.STEMCodeEditor.create(textarea, {
+    const view = window.CraftarrCodeEditor.create(textarea, {
       filename: textarea.dataset.filename,
       warning,
       storageKey,
@@ -2785,7 +3848,7 @@ function initializeCodeEditors(root = document) {
     if (form && !form.dataset.editorPositionReady) {
       form.dataset.editorPositionReady = "true";
       form.addEventListener("submit", () => {
-        window.STEMCodeEditor?.savePosition(view, storageKey);
+        window.CraftarrCodeEditor?.savePosition(view, storageKey);
       });
     }
     if (form && !form.dataset.yamlCheckReady && /\.ya?ml$/i.test(textarea.dataset.filename || "")) {
@@ -2796,7 +3859,7 @@ function initializeCodeEditors(root = document) {
 }
 
 function showEditorYamlWarning(textarea, warning) {
-  window.STEMCodeEditor?.showWarning(textarea._codeEditor, warning);
+  window.CraftarrCodeEditor?.showWarning(textarea._codeEditor, warning);
   let banner = document.querySelector("[data-editor-warning]");
   if (!warning) {
     if (banner) banner.remove();
@@ -2840,7 +3903,7 @@ async function validateFileYamlBeforeSave(event, textarea) {
 }
 
 initializeCodeEditors();
-window.addEventListener("stemcraft:editor-ready", () => initializeCodeEditors());
+window.addEventListener("craftarr:editor-ready", () => initializeCodeEditors());
 document.body.addEventListener("htmx:afterSwap", (event) => {
   initializeCodeEditors(event.detail.target || document);
 });
@@ -2881,6 +3944,81 @@ function filesWithPaths(files, folderUpload = false) {
 function currentFileNames() {
   return new Set(Array.from(document.querySelectorAll("#file-browser .file-row[data-name]"))
     .map((row) => row.dataset.name));
+}
+
+function showFileOperationProgress(title, message, percent = null, detail = "", allowClose = false) {
+  const modal = document.getElementById("file-operation-progress");
+  const bar = document.getElementById("file-operation-progress-bar");
+  const label = document.getElementById("file-operation-progress-percent");
+  const detailLabel = document.getElementById("file-operation-progress-detail");
+  const actions = document.getElementById("file-operation-progress-actions");
+  const track = modal?.querySelector('[role="progressbar"]');
+  if (!modal || !bar || !label) return;
+  document.getElementById("file-operation-progress-title").textContent = title;
+  document.getElementById("file-operation-progress-message").textContent = message;
+  if (detailLabel) {
+    detailLabel.textContent = detail;
+    detailLabel.hidden = !detail;
+  }
+  if (actions) actions.hidden = !allowClose;
+  bar.classList.toggle("upload-progress-failed", allowClose);
+  bar.classList.toggle("indeterminate", percent === null);
+  if (percent === null) {
+    bar.style.width = "35%";
+    label.textContent = "In progress";
+    track?.removeAttribute("aria-valuenow");
+    track?.removeAttribute("aria-valuetext");
+  } else {
+    const value = Math.max(0, Math.min(100, Number(percent) || 0));
+    bar.style.width = `${value}%`;
+    label.textContent = `${Math.round(value)}%`;
+    track?.setAttribute("aria-valuenow", String(Math.round(value)));
+    track?.setAttribute("aria-valuetext", detail || `${Math.round(value)}% complete`);
+  }
+  modal.hidden = false;
+}
+
+function hideFileOperationProgress() {
+  const modal = document.getElementById("file-operation-progress");
+  if (modal) modal.hidden = true;
+  const actions = document.getElementById("file-operation-progress-actions");
+  if (actions) actions.hidden = true;
+  document.getElementById("file-operation-progress-bar")?.classList.remove("upload-progress-failed");
+}
+
+function closeFileOperationProgress() {
+  hideFileOperationProgress();
+  if (serverZipImportLocked) unlockServerZipImportNavigation();
+}
+
+function uploadFileWithProgress(url, form, onProgress) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", url);
+    request.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable) onProgress(event.loaded, event.total);
+    });
+    request.addEventListener("load", () => {
+      let responsePath = "";
+      try {
+        responsePath = new URL(request.responseURL, window.location.href).pathname;
+      } catch {
+        // Use the status code when the response URL cannot be parsed.
+      }
+      if (request.status === 401 || ["/login", "/login/tfa"].includes(responsePath)) {
+        redirectToLogin();
+        reject(new Error("Your session expired. Sign in again to continue."));
+        return;
+      }
+      if (responsePath === "/change-password") {
+        window.location.replace(request.responseURL);
+      }
+      resolve(request);
+    });
+    request.addEventListener("error", () => reject(new Error("Upload failed. Check the connection and try again.")));
+    request.addEventListener("abort", () => reject(new Error("Upload was cancelled.")));
+    request.send(form);
+  });
 }
 
 function joinFilePath(parent, child) {
@@ -2939,40 +4077,41 @@ async function uploadFiles(files, folderUpload = false) {
       await deleteUploadConflicts(page, conflicts);
     }
 
-  for (const upload of uploads) {
-    const form = new FormData();
-
-    form.append(
-      "path",
-      page.dataset.currentPath || "",
+    const totalBytes = uploads.reduce((total, upload) => total + upload.file.size, 0);
+    let completedBytes = 0;
+    showFileOperationProgress(
+      folderUpload ? "Uploading folder" : "Uploading files",
+      `Uploading 0 of ${uploads.length} files…`,
+      0,
     );
 
-    form.append(
-      "file",
-      upload.file,
-    );
+    for (let index = 0; index < uploads.length; index += 1) {
+      const upload = uploads[index];
+      const form = new FormData();
+      form.append("path", page.dataset.currentPath || "");
+      form.append("file", upload.file);
+      form.append("relative_path", upload.path);
+      form.append("replace", mode === "merge" ? "true" : "false");
 
-    form.append("relative_path", upload.path);
-    form.append("replace", mode === "merge" ? "true" : "false");
-
-    const response = await fetch(
-      `/servers/${page.dataset.serverId}/files/upload`,
-      {
-        method: "POST",
-        body: form,
-      },
-    );
-
-    if (!response.ok) {
-      alert(
-        `Unable to upload ${upload.file.name}: ${await response.text()}`,
+      await uploadFileWithProgress(
+        `/servers/${page.dataset.serverId}/files/upload`,
+        form,
+        (loaded) => {
+          const percent = totalBytes ? ((completedBytes + loaded) / totalBytes) * 100 : 100;
+          showFileOperationProgress(
+            folderUpload ? "Uploading folder" : "Uploading files",
+            `Uploading ${index + 1} of ${uploads.length}: ${upload.file.name}`,
+            percent,
+          );
+        },
       );
 
-      return;
+      completedBytes += upload.file.size;
     }
-  }
+    hideFileOperationProgress();
 
   } catch (error) {
+    hideFileOperationProgress();
     alert(error.message || "Unable to upload files");
     return;
   }
@@ -2992,16 +4131,72 @@ function openUnknownTextFile(event, path) {
   return false;
 }
 
+function openFileImagePreview(path, name) {
+  const page = currentFilesPage();
+  const modal = document.getElementById("file-image-preview-modal");
+  const image = document.getElementById("file-image-preview-image");
+  const title = document.getElementById("file-image-preview-title");
+  const status = document.getElementById("file-image-preview-status");
+  const error = document.getElementById("file-image-preview-error");
+  if (!page || !modal || !image) return;
+
+  fileImagePreviewPreviousFocus = document.activeElement;
+  title.textContent = name;
+  image.alt = name;
+  image.hidden = false;
+  image.onload = () => { status.hidden = true; };
+  image.onerror = () => {
+    image.hidden = true;
+    status.hidden = true;
+    error.hidden = false;
+  };
+  status.hidden = false;
+  error.hidden = true;
+  modal.hidden = false;
+  document.getElementById("file-image-preview-close")?.focus({preventScroll: true});
+  image.src = `/servers/${page.dataset.serverId}/files/preview?path=${encodeURIComponent(path)}`;
+}
+
+function closeFileImagePreview() {
+  const modal = document.getElementById("file-image-preview-modal");
+  const image = document.getElementById("file-image-preview-image");
+  const status = document.getElementById("file-image-preview-status");
+  const error = document.getElementById("file-image-preview-error");
+  if (!modal) return;
+  modal.hidden = true;
+  if (image) {
+    image.onload = null;
+    image.onerror = null;
+    image.removeAttribute("src");
+  }
+  if (status) status.hidden = false;
+  if (error) error.hidden = true;
+  if (fileImagePreviewPreviousFocus?.isConnected) fileImagePreviewPreviousFocus.focus();
+  fileImagePreviewPreviousFocus = null;
+}
+
+document.addEventListener("click", (event) => {
+  const previewButton = event.target.closest(".file-image-preview-button");
+  if (previewButton) openFileImagePreview(previewButton.dataset.previewPath, previewButton.dataset.previewName);
+});
+
 async function zipFileEntry(path) {
   const page = currentFilesPage();
-  const response = await fetch(`/api/web/servers/${page.dataset.serverId}/files/zip`, {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({path}),
-  });
-  const data = await response.json();
-  if (!response.ok) return alert(data.error || "Unable to create ZIP");
-  reloadFilesPage();
+  showFileOperationProgress("Creating ZIP", `Compressing ${path}…`);
+  try {
+    const response = await fetch(`/api/web/servers/${page.dataset.serverId}/files/zip`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({path}),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to create ZIP");
+    reloadFilesPage();
+  } catch (error) {
+    alert(error.message || "Unable to create ZIP");
+  } finally {
+    hideFileOperationProgress();
+  }
 }
 
 async function extractZipEntry(path) {
@@ -3464,32 +4659,30 @@ function renderBackups(
                     <div class="backup-actions">
 
                         <a
-                            class="button"
+                            class="button backup-action-button"
                             href="/servers/${
       document.querySelector(".backups-page").dataset.serverId
     }/backups/download?filename=${encodeURIComponent(backup.filename)}"
+                            aria-label="Download backup ${escapeHtml(backup.filename)}"
                         >
-                            Download
+                            <i class="fa-solid fa-download" aria-hidden="true"></i><span>Download</span>
                         </a>
 
                         <button
-                            class="button"
+                            class="button backup-action-button"
                             ${serverRunning ? "disabled" : ""}
                             onclick="openRestoreBackupModal(
                                 '${escapeJs(backup.filename)}'
                             )"
+                            aria-label="Restore backup ${escapeHtml(backup.filename)}"
                         >
-                            Restore
+                            <i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i><span>Restore</span>
                         </button>
 
-                        <button
-                            class="button danger"
-                            onclick="openDeleteBackupModal(
-                                '${escapeJs(backup.filename)}'
-                            )"
-                        >
-                            Delete
-                        </button>
+                        <details class="backup-more-actions">
+                          <summary aria-label="More actions for ${escapeHtml(backup.filename)}" title="More actions"><i class="fa-solid fa-ellipsis" aria-hidden="true"></i></summary>
+                          <div class="backup-more-menu"><button type="button" onclick="this.closest('details').open=false; openDeleteBackupModal('${escapeJs(backup.filename)}')"><i class="fa-solid fa-trash" aria-hidden="true"></i> Delete backup</button></div>
+                        </details>
 
                     </div>
 
@@ -3964,8 +5157,8 @@ async function loadAdvancedProperties() {
         actions.appendChild(save);
         editor.append(heading, textarea, actions);
         section.appendChild(editor);
-        if (window.STEMCodeEditor) {
-          window.STEMCodeEditor.create(textarea, {
+        if (window.CraftarrCodeEditor) {
+          window.CraftarrCodeEditor.create(textarea, {
             filename: file.path,
             languageLabel: language,
             onSave: () => saveAdvancedProperty(editor, save),
@@ -4001,7 +5194,7 @@ async function saveAdvancedProperty(editor, button) {
     );
     let data = await response.json();
     if (!response.ok) throw new Error(data.error || "Unable to check YAML.");
-    window.STEMCodeEditor?.showWarning(textarea._codeEditor, data.warning);
+    window.CraftarrCodeEditor?.showWarning(textarea._codeEditor, data.warning);
     if (data.warning) {
       status.textContent = `Potential issue · line ${data.warning.line}, column ${data.warning.column}`;
       status.classList.add("warning-text");
@@ -4027,7 +5220,7 @@ async function saveAdvancedProperty(editor, button) {
       status.textContent = data.running ? "Saved · restart required" : "Saved";
       status.classList.remove("warning-text");
     }
-    window.STEMCodeEditor?.showWarning(textarea._codeEditor, data.warning);
+    window.CraftarrCodeEditor?.showWarning(textarea._codeEditor, data.warning);
   } catch (error) {
     status.textContent = error.message;
   } finally {
@@ -4299,7 +5492,7 @@ async function submitServerRename(confirm) {
     }
     input.value = data.server_name;
     const activeName = document.querySelector(
-      ".server-selector-button .server-selector-text strong",
+      "#server-selector-toggle .sidebar-server-copy strong",
     );
     if (activeName) activeName.textContent = data.server_name;
     document.querySelectorAll(`#server-menu a[href="/servers/${page.dataset.serverId}"] strong`)
@@ -5267,6 +6460,71 @@ async function loadOffsiteBackupSettings() {
   }
 }
 
+async function loadPluginMonitoringRepository() {
+  const editor = document.getElementById("plugin-monitoring-repository-editor");
+  const status = document.getElementById("plugin-monitoring-repository-status");
+  if (!editor || !status) return;
+  status.textContent = "Loading shared settings…";
+  try {
+    const response = await fetch("/api/web/settings/plugin-monitoring-repository");
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to load shared plugin settings.");
+    editor.value = data.content || "";
+    status.textContent = data.using_bundled_defaults
+      ? "Loaded the bundled defaults. Saving creates your shared repository."
+      : "Shared repository loaded.";
+  } catch (error) {
+    status.textContent = error.message || "Unable to load shared plugin settings.";
+  }
+}
+
+async function savePluginMonitoringRepository() {
+  const editor = document.getElementById("plugin-monitoring-repository-editor");
+  const status = document.getElementById("plugin-monitoring-repository-status");
+  if (!editor || !status) return;
+  status.textContent = "Saving shared settings…";
+  try {
+    const response = await fetch("/api/web/settings/plugin-monitoring-repository", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: editor.value }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to save shared plugin settings.");
+    status.textContent = `${data.plugins} shared plugin setting${data.plugins === 1 ? "" : "s"} saved.`;
+  } catch (error) {
+    status.textContent = error.message || "Unable to save shared plugin settings.";
+  }
+}
+
+async function uploadPluginMonitoringRepository(input) {
+  const file = input.files?.[0];
+  const editor = document.getElementById("plugin-monitoring-repository-editor");
+  const status = document.getElementById("plugin-monitoring-repository-status");
+  if (!file || !editor || !status) return;
+  input.value = "";
+  if (file.size > 262144) {
+    status.textContent = "The repository file must be 256 KiB or smaller.";
+    return;
+  }
+  if (!confirm("Replace the shared plugin update settings with this file?")) return;
+  status.textContent = "Uploading shared settings…";
+  try {
+    const content = await file.text();
+    const response = await fetch("/api/web/settings/plugin-monitoring-repository/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to upload shared plugin settings.");
+    editor.value = content;
+    status.textContent = `${data.plugins} shared plugin setting${data.plugins === 1 ? "" : "s"} uploaded.`;
+  } catch (error) {
+    status.textContent = error.message || "Unable to upload shared plugin settings.";
+  }
+}
+
 function offsiteProviderName(backend) {
   return { b2: "Backblaze B2", storj: "Storj", sftp: "SFTP server" }[backend] || backend;
 }
@@ -5369,6 +6627,7 @@ async function testOffsiteBackupDestination() {
 }
 
 loadOffsiteBackupSettings();
+loadPluginMonitoringRepository();
 
 async function updateTFASettings() {
   const disabled = document.getElementById(
@@ -5862,11 +7121,19 @@ async function serverAction(
     return;
   }
 
-  const serverId = topbar.dataset.serverId;
+  const serverId = topbar.dataset.serverId ||
+    document.querySelector(".server-overview[data-server-id]")?.dataset.serverId;
 
   if (!serverId) {
     return;
   }
+
+  const controls = [
+    "dashboard-start",
+    "dashboard-stop",
+    "dashboard-restart",
+  ].map((id) => document.getElementById(id)).filter(Boolean);
+  controls.forEach((button) => { button.disabled = true; });
 
   try {
     const response = await fetch(
@@ -5876,7 +7143,10 @@ async function serverAction(
       },
     );
 
+    const data = await response.json().catch(() => ({}));
     if (!response.ok) {
+      showToast(data.error || `Unable to ${action} server`, "error");
+      await updateServerStatus();
       return;
     }
 
@@ -5893,6 +7163,8 @@ async function serverAction(
       "Server action failed:",
       error,
     );
+    showToast("Could not reach the server. Try again.", "error");
+    await updateServerStatus();
   }
 }
 
@@ -6011,7 +7283,7 @@ function formatConfiguredMemory(memory) {
 }
 
 let consoleUpdateTag = null;
-const SYSTEM_OPERATION_KEY = "stemcraftSystemOperation";
+const SYSTEM_OPERATION_KEY = "craftarrSystemOperation";
 let systemOperationActive = false;
 let localSystemOperation = false;
 let sharedSystemOperationSeen = false;
@@ -6055,7 +7327,7 @@ function failSystemOperation(message) {
   sharedSystemOperationSeen = false;
   sessionStorage.removeItem(SYSTEM_OPERATION_KEY);
   overlay.classList.add("failed");
-  document.getElementById("system-operation-title").textContent = "Operation failed";
+  document.getElementById("system-operation-title").textContent = "Something went wrong";
   document.getElementById("system-operation-message").textContent = message;
   document.getElementById("system-operation-spinner").hidden = true;
   document.getElementById("system-operation-failed-icon").hidden = false;
@@ -6076,9 +7348,11 @@ function closeSystemOperation() {
 }
 
 window.addEventListener("beforeunload", (event) => {
-  if (!systemOperationActive) return;
+  if (!systemOperationActive && !serverZipImportInProgress) return;
   event.preventDefault();
-  event.returnValue = "A system operation is still in progress.";
+  event.returnValue = serverZipImportInProgress
+    ? "A server ZIP import is still in progress."
+    : "A system operation is still in progress.";
 });
 
 function resumeSystemOperation() {
@@ -6104,21 +7378,23 @@ async function pollSharedSystemOperation() {
     const response = await nativeFetch("/api/web/settings/system-operation", {
       cache: "no-store",
     });
+    connectionFailureLatched = false;
+    if (handleAuthenticationResponse(response)) return;
     if (!response.ok) return;
     const operation = await response.json();
     if (operation.active) {
       sharedSystemOperationSeen = true;
       if (!systemOperationActive) {
         beginSystemOperation(
-          operation.title || "System operation in progress",
-          operation.message || "The console is temporarily locked.",
+          operation.title || "Getting things ready…",
+          operation.message || "Please wait while this finishes.",
           operation.phase || "working",
           false,
         );
       } else if (!localSystemOperation) {
         setSystemOperationState(
-          operation.title || "System operation in progress",
-          operation.message || "The console is temporarily locked.",
+          operation.title || "Getting things ready…",
+          operation.message || "Please wait while this finishes.",
           operation.phase || "working",
         );
       }
@@ -6207,7 +7483,7 @@ async function upgradeConsole() {
     )
   ) return;
   beginSystemOperation(
-    "Updating STEMCraft Console",
+    "Updating Craftarr",
     `Downloading and verifying ${consoleUpdateTag}. Do not close this page.`,
     "installing",
   );
@@ -6225,7 +7501,7 @@ async function upgradeConsole() {
     if (!response.ok) throw new Error(data.error || "Update failed");
     status.textContent = "Installed; restarting console...";
     setSystemOperationState(
-      "Restarting STEMCraft Console",
+      "Restarting Craftarr",
       "The update is installed. Waiting for the console service to return...",
       "restarting",
     );
@@ -6273,10 +7549,10 @@ async function waitForConsoleRestart() {
 }
 
 async function restartConsoleService() {
-  if (!confirm("Restart STEMCraft Console now?")) return;
+  if (!confirm("Restart Craftarr now?")) return;
 
   beginSystemOperation(
-    "Restarting STEMCraft Console",
+    "Restarting Craftarr",
     "Requesting a service restart. This page will reconnect automatically...",
     "restarting",
   );
@@ -6300,13 +7576,51 @@ async function restartConsoleService() {
   }
 }
 
-async function systemServerAction(serverId, action) {
-  const response = await fetch(`/api/web/servers/${serverId}/${action}`, {
-    method: "POST",
-  });
-  const data = await response.json();
-  if (!response.ok) return alert(data.error || `Unable to ${action} server`);
-  setTimeout(updateSystemStats, 500);
+async function systemServerAction(serverId, action, button = null) {
+  if (button) button.disabled = true;
+  try {
+    const response = await fetch(`/api/web/servers/${serverId}/${action}`, {
+      method: "POST",
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      alert(data.error || `Unable to ${action} server`);
+      return;
+    }
+  } catch {
+    // The shared fetch wrapper already reports connection failures.
+  } finally {
+    window.setTimeout(updateSystemStats, 500);
+  }
+}
+
+function setPaperUpdateIndicator(update) {
+  const indicator = document.getElementById("paper-version-detail");
+  if (!indicator) return;
+  indicator.classList.remove("is-current", "is-update", "is-warning", "is-error", "is-pending");
+  const installed = update?.installed_version || update?.current_version;
+  const latest = update?.latest_version;
+  indicator.title = installed
+    ? `Installed: ${installed}${update?.update_available && latest ? ` · Available: ${latest}` : ""}`
+    : update?.error || "";
+
+  if (update?.update_available) {
+    indicator.classList.add("is-update");
+    indicator.innerHTML = `<i class="fa-solid fa-circle-up" aria-hidden="true"></i><span>Update available${latest ? ` · ${escapeHtml(latest)}` : ""}</span>`;
+  } else if (update?.status === "Current") {
+    indicator.classList.add("is-current");
+    indicator.innerHTML = '<i class="fa-solid fa-circle-check" aria-hidden="true"></i><strong>Up to date</strong>';
+  } else if (update?.status === "Incompatible") {
+    indicator.classList.add("is-warning");
+    indicator.innerHTML = `<i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><span>Compatibility needs review${latest ? ` · ${escapeHtml(latest)}` : ""}</span>`;
+  } else if (update?.status === "Check failed") {
+    indicator.classList.add("is-error");
+    indicator.title = update.error || "Could not check for updates";
+    indicator.innerHTML = '<i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i><span>Could not check</span>';
+  } else {
+    indicator.classList.add("is-pending");
+    indicator.innerHTML = '<i class="fa-solid fa-circle-question" aria-hidden="true"></i><span>Status not checked</span>';
+  }
 }
 
 async function loadPaperVersionStatus() {
@@ -6322,12 +7636,14 @@ async function loadPaperVersionStatus() {
       if (!response.ok) throw new Error(data.error || "Unable to load Paper status");
       if (!page.isConnected) return;
       const installed = document.getElementById("paper-installed-version");
-      if (installed) installed.textContent = data.installed_version || "Unknown";
-      detail.innerHTML = renderMonitoredUpdate(data);
+      if (installed && data.installed_version) installed.textContent = data.installed_version;
+      setPaperUpdateIndicator(data);
+      return data;
     } catch (error) {
-      detail.textContent = error.message;
+      const result = {status: "Check failed", error: error.message};
+      setPaperUpdateIndicator(result);
+      return result;
     }
-    return;
   }
   try {
     const response = await fetch(
@@ -6343,17 +7659,29 @@ async function loadPaperVersionStatus() {
           : ""
       }`;
     }
-    const buildText = data.builds_behind === null
-      ? "build status unknown"
-      : data.builds_behind === 0
-      ? `build ${data.current_build || data.latest_build} is current`
-      : `${data.builds_behind} builds behind (${data.latest_build} latest)`;
     const sortedVersions = sortMinecraftVersions(data.versions || []);
     const newestVersion = sortedVersions[0] || data.latest_version;
-    const versionText = newestVersion && newestVersion !== data.current_version
-      ? ` · ${newestVersion} available`
-      : "";
-    detail.textContent = `${buildText}${versionText}`;
+    const versionUpdate = data.jar_inspected === true
+      && Boolean(newestVersion && data.current_version && newestVersion !== data.current_version);
+    const buildUpdate = data.jar_inspected === true && Number(data.builds_behind) > 0;
+    const updateStatus = {
+      installed_version: `Paper ${data.current_version || "Unknown"}${data.current_build ? ` build ${data.current_build}` : ""}`,
+      latest_version: versionUpdate
+        ? `Minecraft ${newestVersion}`
+        : buildUpdate
+          ? `build ${data.latest_build}`
+          : null,
+      update_available: versionUpdate || buildUpdate,
+      status: versionUpdate || buildUpdate
+        ? "Update available"
+        : data.jar_inspected === true && data.builds_behind === 0
+          ? "Current"
+          : "Not checked",
+      current_version: data.current_version,
+      current_build: data.current_build,
+      latest_build: data.latest_build,
+    };
+    setPaperUpdateIndicator(updateStatus);
     const button = document.getElementById("paper-update-button");
     const select = document.getElementById("paper-version-select");
     if (select) {
@@ -6368,14 +7696,17 @@ async function loadPaperVersionStatus() {
       setPaperUpdateAvailability(
         button,
         data.running
-          ? "Stop the server before downloading and replacing the Paper JAR."
+          ? "Stop the server before installing a Paper update."
           : !(data.builds || []).length
-            ? "No Paper builds are available for the selected version."
+            ? "No Paper updates are available for this version."
             : "",
       );
     }
+    return updateStatus;
   } catch (error) {
-    detail.textContent = error.message;
+    const result = {status: "Check failed", error: error.message};
+    setPaperUpdateIndicator(result);
+    return result;
   }
 }
 
@@ -6420,7 +7751,7 @@ function populatePaperBuilds(builds, installedBuild = null) {
   }).join("");
   const button = document.getElementById("paper-update-button");
   if (button && builds.length) {
-    button.textContent = "Download and replace JAR";
+    button.innerHTML = '<i class="fa-solid fa-download" aria-hidden="true"></i> Download and install';
   }
 }
 
@@ -6480,9 +7811,9 @@ async function loadPaperBuilds(version) {
     setPaperUpdateAvailability(
       button,
       data.running
-        ? "Stop the server before downloading and replacing the Paper JAR."
+        ? "Stop the server before installing a Paper update."
         : !data.builds?.length
-          ? "No Paper builds are available for the selected version."
+          ? "No Paper updates are available for this version."
           : "",
     );
   } catch (error) {
@@ -6504,7 +7835,7 @@ async function installPaperVersion() {
   if (button?.disabled) return;
   if (button) button.disabled = true;
   message.classList.remove("error");
-  message.textContent = "Downloading and verifying Paper...";
+  message.textContent = "Downloading and checking the new server files…";
   try {
     const response = await fetch(
       `/api/web/servers/${page.dataset.serverId}/paper`,
@@ -6518,10 +7849,39 @@ async function installPaperVersion() {
       },
     );
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Paper update failed");
-    message.textContent =
-      `Paper ${data.version} build ${data.build} installed.`;
-    setTimeout(() => window.location.reload(), 800);
+    if (!response.ok) throw new Error(data.error || "The server update did not finish.");
+    const updateStatus = await loadPaperVersionStatus();
+    const installedLabel = `Paper ${data.version} build ${data.build}`;
+    let notification;
+    if (updateStatus?.status === "Current") {
+      notification = `${installedLabel} installed. The server is up to date.`;
+      message.classList.remove("error");
+      message.textContent = notification;
+      showToast(notification, "success", 6500);
+    } else if (updateStatus?.update_available) {
+      notification = `${installedLabel} installed. A newer Paper version or build is available.`;
+      message.classList.remove("error");
+      message.textContent = notification;
+      showToast(notification, "warning", 7000);
+    } else {
+      notification = `${installedLabel} installed. The latest update status could not be confirmed.`;
+      message.classList.remove("error");
+      message.textContent = notification;
+      showToast(notification, "info", 7000);
+    }
+    const serverId = page.dataset.serverId;
+    recordInAppNotification({
+      id: `paper-install:${serverId}:${Date.now()}`,
+      kind: "paper-install",
+      title: updateStatus?.status === "Current"
+        ? "Paper update installed · server is up to date"
+        : "Paper update installed",
+      message: notification,
+      url: `/servers/${encodeURIComponent(serverId)}/properties`,
+      checked_at: new Date().toISOString(),
+    });
+    if (button) button.disabled = false;
+    await refreshNotifications(false);
   } catch (error) {
     message.textContent = error.message;
     message.classList.add("error");
@@ -6541,7 +7901,7 @@ async function rollbackConsoleUpdate() {
     !confirm("Restore the application files from before this update?")
   ) return;
   beginSystemOperation(
-    "Rolling back STEMCraft Console",
+    "Rolling back Craftarr",
     "Restoring the verified application backup. Do not close this page.",
     "installing",
   );
@@ -6559,7 +7919,7 @@ async function rollbackConsoleUpdate() {
     if (!response.ok) throw new Error(data.error || "Rollback failed");
     status.textContent = "Previous version restored; restarting console...";
     setSystemOperationState(
-      "Restarting STEMCraft Console",
+      "Restarting Craftarr",
       "The previous version is restored. Waiting for the console service to return...",
       "restarting",
     );
@@ -6575,7 +7935,7 @@ async function rollbackConsoleUpdate() {
 
 function automationPage() {
   return document.querySelector(
-    ".server-overview[data-server-id], .automation-page[data-server-id]",
+    ".server-overview[data-server-id], .automation-page[data-server-id], .server-performance-page[data-server-id]",
   );
 }
 
@@ -6593,39 +7953,75 @@ function drawMetricChart(canvasId, rows, value, label) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   const ratio = window.devicePixelRatio || 1;
-  const width = Math.max(300, canvas.clientWidth);
-  const height = 120;
+  const width = Math.max(120, canvas.clientWidth);
+  const height = Math.max(72, canvas.clientHeight || 120);
   canvas.width = width * ratio;
   canvas.height = height * ratio;
+  canvas.style.width = "100%";
   const context = canvas.getContext("2d");
   context.scale(ratio, ratio);
   context.clearRect(0, 0, width, height);
   const values = rows.map((row) => Number(value(row) || 0));
+  const rootStyle = getComputedStyle(document.documentElement);
   if (!values.length) {
-    context.fillStyle = "#94a3b8";
-    context.fillText("No historical data yet", 8, 24);
+    context.fillStyle = rootStyle.getPropertyValue("--sm-muted").trim() || "#64748b";
+    context.font = "13px Poppins, sans-serif";
+    context.fillText("No history yet", 8, 22);
+    canvas.setAttribute("aria-label", `${label}: no historical data yet`);
+    canvas.title = `${label}: no historical data yet`;
     return;
   }
   const maximum = Math.max(1, ...values);
-  context.strokeStyle = "#38bdf8";
-  context.lineWidth = 2;
+  const chartToken = {
+    "metric-cpu": "--sm-green-dark",
+    "metric-memory": "--sm-blue-dark",
+    "metric-players": "--sm-orange-dark",
+    "metric-uptime": "--sm-purple-dark",
+  }[canvasId] || "--sm-blue-dark";
+  const chartColor = rootStyle.getPropertyValue(chartToken).trim() || "#1866c5";
+  const xInset = 4;
+  const yTop = 9;
+  const yBottom = height - 24;
+  context.strokeStyle = "rgba(100, 116, 139, .15)";
+  context.lineWidth = 1;
+  [0.25, 0.55, 0.85].forEach((fraction) => {
+    const y = yTop + (yBottom - yTop) * fraction;
+    context.beginPath();
+    context.moveTo(0, y);
+    context.lineTo(width, y);
+    context.stroke();
+  });
+  context.strokeStyle = chartColor;
+  context.lineWidth = 2.5;
+  context.lineJoin = "round";
+  context.lineCap = "round";
   context.beginPath();
   values.forEach((point, index) => {
     const x = values.length === 1
-      ? 0
-      : index * (width - 2) / (values.length - 1);
-    const y = height - 18 - (point / maximum) * (height - 28);
+      ? xInset
+      : xInset + index * (width - xInset * 2) / (values.length - 1);
+    const y = yBottom - (point / maximum) * (yBottom - yTop);
     index ? context.lineTo(x, y) : context.moveTo(x, y);
   });
   context.stroke();
-  context.fillStyle = "#94a3b8";
-  context.fillText(
-    `${label}: ${
-      values.at(-1).toLocaleString()
-    }  Max: ${maximum.toLocaleString()}`,
-    8,
-    height - 3,
-  );
+  context.fillStyle = rootStyle.getPropertyValue("--sm-muted").trim() || "#64748b";
+  context.font = "12px Poppins, sans-serif";
+  context.fillText(`Latest ${values.at(-1).toLocaleString()} · peak ${maximum.toLocaleString()}`, 8, height - 5);
+
+  const summary = `${label}: latest ${values.at(-1).toLocaleString()}, peak ${maximum.toLocaleString()}, ${values.length} readings`;
+  canvas.setAttribute("aria-label", summary);
+  canvas.title = summary;
+  const describePoint = (index) => {
+    const row = rows[index];
+    const recorded = row?.recorded_at ? new Date(row.recorded_at).toLocaleString() : `Reading ${index + 1}`;
+    return `${label}: ${values[index].toLocaleString()} · ${recorded}`;
+  };
+  canvas.onmousemove = (event) => {
+    const bounds = canvas.getBoundingClientRect();
+    const position = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
+    canvas.title = describePoint(Math.round(position * (values.length - 1)));
+  };
+  canvas.onmouseleave = () => { canvas.title = summary; };
 }
 
 async function loadServerMetrics() {
@@ -6664,6 +8060,14 @@ async function loadServerMetrics() {
     );
   }
 }
+
+let metricResizeTimeout = null;
+window.addEventListener("resize", () => {
+  window.clearTimeout(metricResizeTimeout);
+  metricResizeTimeout = window.setTimeout(() => {
+    if (document.getElementById("metric-cpu")) loadServerMetrics();
+  }, 180);
+});
 
 let serverScheduleState = [];
 let scheduleRunsPage = 1;
@@ -6996,44 +8400,198 @@ document.addEventListener("visibilitychange", () => {
 });
 
 
-function renderMonitoredUpdate(update) {
-  if (!update) return "";
-  const latest = escapeHtml(update.latest_version || "Unknown");
-  // Release links are constructed by providers; still restrict the browser scheme.
-  const link = update.release_url?.startsWith("https://")
-    ? `<a href="${escapeHtml(update.release_url)}" target="_blank" rel="noopener noreferrer">${latest}</a>` : latest;
-  return `<dl class="plugin-update-details">
-    ${update.monitoring ? `<div><dt>Monitoring source</dt><dd>${escapeHtml(update.monitoring.mode === "disabled" ? "Disabled" : update.monitoring.source || "Not configured")}</dd></div>` : ""}
-    ${update.monitoring?.notes ? `<div><dt>Monitoring details</dt><dd>${escapeHtml(update.monitoring.notes)}</dd></div>` : ""}
-    <div><dt>Installed</dt><dd>${escapeHtml(update.installed_version || "Unknown")}</dd></div>
-    <div><dt>Latest</dt><dd>${link}</dd></div>
-    ${update.download_url?.startsWith("https://") ? `<div><dt>Download link</dt><dd><a href="${escapeHtml(update.download_url)}" target="_blank" rel="noopener noreferrer">View download</a></dd></div>` : ""}
-    <div><dt>Update Status</dt><dd>${escapeHtml(update.status)}</dd></div>
-    <div><dt>Compatibility</dt><dd>${escapeHtml(update.compatibility)}</dd></div>
-    <div><dt>Last Checked</dt><dd>${update.checked_at ? escapeHtml(new Date(update.checked_at).toLocaleString()) : "Never"}</dd></div>
-    ${update.error ? `<div class="update-check-error"><dt>Details</dt><dd>${escapeHtml(update.error)}</dd></div>` : ""}
-  </dl>`;
+function renderPluginMonitoringPreview(data) {
+  const isUpdate = data.update_available === true;
+  const isCurrent = data.status === "Current";
+  const hasError = data.status === "Check failed";
+  const statusClass = isUpdate ? "is-update" : isCurrent ? "is-current" : hasError ? "is-error" : "is-pending";
+  const statusIcon = isUpdate ? "fa-circle-up" : isCurrent ? "fa-circle-check" : hasError ? "fa-triangle-exclamation" : "fa-circle-question";
+  const statusLabel = isUpdate
+    ? `New version ${data.latest_version || "available"}`
+    : isCurrent ? "Up to date" : hasError ? "Could not check" : data.status || "Check complete";
+  const installed = data.installed_version || data.installed_comparison || "Unknown";
+  const latest = data.latest_version || "Unknown";
+  const release = data.release_url?.startsWith("https://")
+    ? `<a href="${escapeHtml(data.release_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(latest)}</a>`
+    : escapeHtml(latest);
+  const source = data.source_url?.startsWith("https://")
+    ? `<a href="${escapeHtml(data.source_url)}" target="_blank" rel="noopener noreferrer">Open source page</a>`
+    : "Not available";
+  const download = data.download_url?.startsWith("https://")
+    ? `<a class="monitoring-preview-action" href="${escapeHtml(data.download_url)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i> Open download</a>`
+    : `<span class="monitoring-preview-no-link">No direct download link found</span>`;
+
+  return `<div class="monitoring-preview-card ${statusClass}">
+    <div class="monitoring-preview-heading">
+      <strong><i class="fa-solid ${statusIcon}" aria-hidden="true"></i>${escapeHtml(statusLabel)}</strong>
+      <span class="monitoring-preview-only">Preview only</span>
+    </div>
+    <dl class="monitoring-preview-details">
+      <div><dt>Installed</dt><dd>${escapeHtml(installed)}</dd><small>${escapeHtml(data.installed_comparison_source || "JAR metadata")}</small></div>
+      <div><dt>Latest</dt><dd>${release}</dd></div>
+      <div><dt>Compatibility</dt><dd>${escapeHtml(data.compatibility || "Unknown")}</dd></div>
+      <div><dt>Source</dt><dd>${source}</dd></div>
+    </dl>
+    <div class="monitoring-preview-footer">${download}${data.error ? `<span class="monitoring-preview-error">${escapeHtml(data.error)}</span>` : ""}${renderPluginComparisonDetails(data.comparison_details)}</div>
+  </div>`;
+}
+
+function updateCheckFeedback(scope, updates, serverId) {
+  const results = Array.isArray(updates) ? updates : [];
+  const pluginsLink = serverId
+    ? { label: "Open Plugins", href: `/servers/${serverId}/plugins` }
+    : null;
+  if (scope === "paper") {
+    const paper = results.find((item) => item.component === "@paper") || results[0];
+    if (!paper) {
+      return { message: "Paper update check finished, but no version details were returned.", type: "warning" };
+    }
+    const installed = paper.installed_version;
+    const latest = paper.latest_version;
+    if (paper.update_available) {
+      return {
+        message: latest
+          ? `Paper update available: ${latest}${installed ? ` (installed: ${installed})` : ""}.`
+          : "A Paper update is available. Open Server settings to review it.",
+        type: "info",
+      };
+    }
+    if (paper.status === "Current") {
+      return { message: installed ? `Paper is up to date (${installed}).` : "Paper is up to date.", type: "success" };
+    }
+    if (paper.status === "Incompatible") {
+      return {
+        message: latest
+          ? `Paper ${latest} is not marked compatible with this Minecraft version.`
+          : "A newer Paper build may not be compatible with this Minecraft version.",
+        type: "warning",
+      };
+    }
+    if (paper.status === "Check failed") {
+      return { message: `Couldn't check Paper updates: ${paper.error || "Try again shortly."}`, type: "error" };
+    }
+    return { message: `Paper update check: ${paper.status || "no result"}.`, type: "warning" };
+  }
+
+  const found = results.filter((item) => item.update_available);
+  if (found.length) {
+    return {
+      message: `${found.length} plugin update${found.length === 1 ? "" : "s"} found. Open Plugins to review${found.length === 1 ? " it" : " them"}.`,
+      type: "info",
+      link: pluginsLink,
+    };
+  }
+  const incompatible = results.filter((item) => item.status === "Incompatible");
+  if (incompatible.length) {
+    return {
+      message: `${incompatible.length} plugin version${incompatible.length === 1 ? "" : "s"} may not match this Minecraft version. Open Plugins to review.`,
+      type: "warning",
+      link: pluginsLink,
+    };
+  }
+  const failures = results.filter((item) => item.status === "Check failed");
+  const checked = results.filter((item) => ["Current", "Update available", "Incompatible", "Compatibility unknown", "Check failed"].includes(item.status));
+  const skipped = results.length - checked.length;
+  if (!results.length) return { message: "No plugins were found to check.", type: "info" };
+  if (!checked.length) {
+    return { message: "No plugins are set up for update checks yet. Open Plugins to configure them.", type: "warning", link: pluginsLink };
+  }
+  if (failures.length) {
+    return {
+      message: `${checked.length} plugin${checked.length === 1 ? " was" : "s were"} checked; ${failures.length} couldn't be checked. Open Plugins for details.`,
+      type: "warning",
+      link: pluginsLink,
+    };
+  }
+  return {
+    message: skipped
+      ? `No updates found among ${checked.length} checked plugin${checked.length === 1 ? "" : "s"}; ${skipped} skipped.`
+      : `No updates found for ${checked.length} checked plugin${checked.length === 1 ? "" : "s"}.`,
+    type: "success",
+  };
 }
 
 async function checkMonitoredUpdates(button, scope) {
   const page = button.closest("[data-server-id]");
   if (!page) return;
-  const feedback = document.getElementById("update-check-feedback");
+  const icon = button.querySelector("i");
+  const label = button.querySelector("span");
+  const originalIconClass = icon?.className;
+  const originalLabel = label?.textContent;
   button.disabled = true;
-  if (feedback) feedback.textContent = "Checking official release sources…";
+  button.setAttribute("aria-busy", "true");
+  if (icon) icon.className = "fa-solid fa-spinner fa-spin";
+  if (label) label.textContent = "Checking";
+  let progressToast = null;
   try {
-    const response = await fetch(`/api/web/servers/${page.dataset.serverId}/${scope}/check-updates`, {method: "POST"});
-    const data = await response.json();
+    // Plugin checks run in the background so the toast can show per-plugin progress.
+    const response = await nativeFetch(`/api/web/servers/${page.dataset.serverId}/${scope}/check-updates`, {method: "POST"});
+    connectionFailureLatched = false;
+    if (handleAuthenticationResponse(response)) return;
+    let data = await response.json();
     if (!response.ok) throw new Error(data.error || "Unable to check for updates");
-    if (!page.isConnected) return;
-    if (scope === "plugins") await updatePluginsPage();
-    else await loadPaperVersionStatus();
-    if (feedback) feedback.textContent = "Check complete. See individual results for failures or unknown compatibility.";
+    if (scope === "plugins") {
+      progressToast = showToast(
+        `Checking plugin updates · 0 of ${data.progress?.total || 0} checked`,
+        "info",
+        0,
+        { persistent: true, progress: data.progress },
+      );
+      data = await waitForPluginUpdateCheck(page.dataset.serverId, data.job_id, progressToast);
+      if (!data) return;
+      if (document.querySelector(`.plugins-page[data-server-id="${CSS.escape(page.dataset.serverId)}"]`)) {
+        await updatePluginsPage();
+      }
+      await refreshNotifications(false);
+      const feedbackMessage = updateCheckFeedback(scope, data.updates, page.dataset.serverId);
+      updateToast(progressToast, feedbackMessage.message, feedbackMessage.type, {
+        link: feedbackMessage.link,
+        timeout: 6000,
+      });
+    } else {
+      if (page.isConnected) await loadPaperVersionStatus();
+      await refreshNotifications(false);
+      const feedbackMessage = updateCheckFeedback(scope, data.updates, page.dataset.serverId);
+      showToast(feedbackMessage.message, feedbackMessage.type, 4500, { link: feedbackMessage.link });
+    }
   } catch (error) {
-    if (feedback) feedback.textContent = error.message;
+    const message = error.message || "Unable to check for updates.";
+    if (progressToast) updateToast(progressToast, message, "error", { timeout: 6500 });
+    else showToast(message, "error");
   } finally {
+    if (icon && originalIconClass) icon.className = originalIconClass;
+    if (label && originalLabel !== undefined) label.textContent = originalLabel;
+    button.removeAttribute("aria-busy");
     button.disabled = false;
   }
+}
+
+async function waitForPluginUpdateCheck(serverId, jobId, toast) {
+  const startedAt = Date.now();
+  let lastProgressMessage = toast?.querySelector(".toast-message")?.textContent || "";
+  while (Date.now() - startedAt < 30 * 60 * 1000) {
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+    const response = await nativeFetch(`/api/web/servers/${serverId}/plugins/update-progress`, { cache: "no-store" });
+    connectionFailureLatched = false;
+    if (handleAuthenticationResponse(response)) return null;
+    const progress = await response.json();
+    if (!response.ok) throw new Error(progress.error || "Unable to read update check progress.");
+    if (progress.job_id !== jobId) throw new Error("The plugin update check is no longer available.");
+    if (progress.status === "complete") return progress;
+    if (progress.status === "failed") throw new Error(progress.error || "Unable to check plugin updates.");
+
+    const completed = Number(progress.completed) || 0;
+    const total = Number(progress.total) || 0;
+    const current = progress.current_plugin ? `Checking ${progress.current_plugin} · ` : "";
+    const message = total
+      ? `${current}${completed} of ${total} plugins checked`
+      : "Checking plugin updates…";
+    if (message !== lastProgressMessage) {
+      updateToast(toast, message, "info", { progress, timeout: 0 });
+      lastProgressMessage = message;
+    }
+  }
+  throw new Error("The plugin update check is taking longer than expected. You can review its results on the Plugins page.");
 }
 
 function openPluginMonitoring(index) {
@@ -7042,17 +8600,25 @@ function openPluginMonitoring(index) {
   const page = document.querySelector(".plugins-page");
   if (!plugin || !modal || !page) return;
   const config = plugin.update?.monitoring || {};
+  const selectedMode = config.selection || config.mode || "disabled";
+  pluginMonitoringPreviousFocus = document.activeElement;
   modal.dataset.filename = plugin.filename;
   modal.dataset.serverId = page.dataset.serverId;
+  modal.dataset.globalSettings = JSON.stringify(config.global_settings || {});
+  modal.dataset.globalAvailable = String(Boolean(config.global_available));
+  modal.dataset.globalError = config.error || "";
+  modal.dataset.monitoringMode = selectedMode;
+  modal.dataset.manualSettings = "";
   document.getElementById("plugin-monitoring-name").textContent = plugin.name;
-  document.getElementById("plugin-monitoring-mode").value = config.mode || "disabled";
+  document.getElementById("plugin-monitoring-mode").value = selectedMode;
   document.getElementById("plugin-monitoring-provider").value = config.provider || "github";
   document.getElementById("plugin-monitoring-project").value = config.project || "";
   for (const field of ["version", "link", "installed"]) {
     document.getElementById(`plugin-monitoring-${field}-pattern`).value = config[`${field}_pattern`] || "";
   }
-  document.getElementById("plugin-monitoring-error").textContent = "";
+  document.getElementById("plugin-monitoring-expressions").open = false;
   updatePluginMonitoringFields();
+  if (config.error) setPluginMonitoringFeedback(config.error, "error");
   modal.hidden = false;
   document.getElementById("plugin-monitoring-mode").focus();
 }
@@ -7060,41 +8626,100 @@ function openPluginMonitoring(index) {
 function closePluginMonitoring() {
   const modal = document.getElementById("plugin-monitoring-modal");
   if (modal) modal.hidden = true;
+  const previousFocus = pluginMonitoringPreviousFocus;
+  pluginMonitoringPreviousFocus = null;
+  if (previousFocus?.isConnected) previousFocus.focus({preventScroll: true});
 }
 
 function clearMonitoringPreview() {
   const output = document.getElementById("plugin-monitoring-preview");
-  if (output) { output.hidden = true; output.textContent = ""; }
+  if (output) { output.hidden = true; output.innerHTML = ""; }
+  setPluginMonitoringFeedback("");
+}
+
+function setPluginMonitoringFeedback(message, state = "error") {
+  const feedback = document.getElementById("plugin-monitoring-error");
+  if (!feedback) return;
+  feedback.textContent = message || "";
+  feedback.hidden = !message;
+  feedback.dataset.state = state;
+  feedback.setAttribute("role", state === "error" ? "alert" : "status");
+  feedback.setAttribute("aria-live", state === "error" ? "assertive" : "polite");
 }
 
 function updatePluginMonitoringFields(providerChanged = false) {
-  const mode = document.getElementById("plugin-monitoring-mode").value;
+  const modal = document.getElementById("plugin-monitoring-modal");
+  const modeSelect = document.getElementById("plugin-monitoring-mode");
+  const mode = modeSelect.value;
+  const previousMode = modal.dataset.monitoringMode || mode;
   const enabled = mode === "custom";
   const editable = enabled;
+  const usesGlobal = mode === "global";
+  const globalAvailable = modal.dataset.globalAvailable === "true";
+  const globalOption = modeSelect.querySelector('option[value="global"]');
+  globalOption.hidden = !globalAvailable && !usesGlobal;
+  globalOption.disabled = !globalAvailable;
+  globalOption.textContent = globalAvailable ? "Use shared settings" : "Shared settings unavailable";
+
+  const fieldNames = ["provider", "project", "version_pattern", "link_pattern", "installed_pattern"];
+  const fieldIds = ["provider", "project", "version-pattern", "link-pattern", "installed-pattern"];
+  const readFields = () => Object.fromEntries(fieldNames.map((name, index) => [name, document.getElementById(`plugin-monitoring-${fieldIds[index]}`).value]));
+  const fillFields = (fields) => fieldIds.forEach((field, index) => {
+    document.getElementById(`plugin-monitoring-${field}`).value = fields[fieldNames[index]] || "";
+  });
+  if (mode === "global" && previousMode !== "global") {
+    if (previousMode === "custom") modal.dataset.manualSettings = JSON.stringify(readFields());
+    try { fillFields(JSON.parse(modal.dataset.globalSettings || "{}")); } catch { /* Empty global settings remain blank. */ }
+  } else if (mode === "custom" && previousMode !== "custom" && modal.dataset.manualSettings) {
+    try { fillFields(JSON.parse(modal.dataset.manualSettings)); } catch { /* Keep current fields if saved values are malformed. */ }
+  }
+  modal.dataset.monitoringMode = mode;
   document.getElementById("plugin-monitoring-custom").hidden = !enabled;
+  document.getElementById("plugin-monitoring-global").hidden = !usesGlobal;
+  const globalSettings = (() => {
+    try { return JSON.parse(modal.dataset.globalSettings || "{}"); } catch { return {}; }
+  })();
+  const globalProviderNames = { github: "GitHub Releases", modrinth: "Modrinth", jenkins: "Jenkins", custom: "Custom URL" };
+  const globalSummary = document.getElementById("plugin-monitoring-global-source");
+  const globalNotes = document.getElementById("plugin-monitoring-global-notes");
+  if (globalSummary) globalSummary.textContent = globalAvailable
+    ? `${globalProviderNames[globalSettings.provider] || globalSettings.provider} · ${globalSettings.project || ""}`
+    : modal.dataset.globalError || "No shared update settings are available for this plugin.";
+  if (globalNotes) {
+    globalNotes.textContent = globalSettings.notes || "";
+    globalNotes.hidden = !globalAvailable || !globalSettings.notes;
+  }
+  const promoteButton = document.getElementById("plugin-monitoring-promote-button");
+  if (promoteButton) {
+    promoteButton.hidden = !enabled;
+    const promoteLabel = document.getElementById("plugin-monitoring-promote-label");
+    if (promoteLabel) promoteLabel.textContent = globalAvailable ? "Update global" : "Make global";
+  }
   document.getElementById("plugin-monitoring-provider").disabled = !editable;
   const provider = document.getElementById("plugin-monitoring-provider").value;
   const documentSource = ["jenkins", "custom"].includes(provider);
   const project = document.getElementById("plugin-monitoring-project");
+  const previewButton = document.getElementById("plugin-monitoring-preview-button");
   if (providerChanged) {
     project.value = "";
     for (const field of ["version", "link", "installed"]) document.getElementById(`plugin-monitoring-${field}-pattern`).value = "";
   }
   project.required = editable;
   project.disabled = !editable;
+  previewButton.hidden = !(enabled || (usesGlobal && globalAvailable));
+  previewButton.disabled = !(enabled || (usesGlobal && globalAvailable));
   const hints = {
-    github: "Enter owner/repository or its https://github.com/owner/repository URL. Checks stable releases.",
-    modrinth: "Enter a project slug, ID or Modrinth project URL. Checks stable Bukkit/Paper releases.",
-    jenkins: "Enter the public HTTPS job URL. Automatically compares successful build numbers. No expressions are needed for standard build versions or filenames.",
-    custom: "Enter a public HTTPS URL returning JSON, HTML or text. Use the final URL if the source redirects.",
+    github: "Use the plugin's GitHub project page. We check its latest stable release.",
+    modrinth: "Use the plugin's Modrinth project page. We prefer stable Paper releases and use beta only when no stable release is available.",
+    jenkins: "Use the plugin's build page. We compare successful builds automatically.",
+    custom: "Use a public plugin page that shows its latest version.",
   };
   project.placeholder = documentSource ? "https://example.org/releases" : "Project identifier or URL";
   document.getElementById("plugin-monitoring-hint").textContent = hints[provider];
   const version = document.getElementById("plugin-monitoring-version-pattern");
   version.required = editable && provider === "custom";
-  document.getElementById("plugin-monitoring-expressions").open = provider !== "jenkins";
   document.getElementById("plugin-monitoring-version-hint").textContent = provider === "jenkins"
-    ? "Optional override. Leave blank to compare Jenkins build numbers automatically. A version expression changes comparison to the extracted version."
+    ? "Usually leave this blank. Build pages are compared automatically."
     : documentSource
     ? 'Required. Match the metadata response and capture the version, for example "version"\\s*:\\s*"([^"]+)". Preview checks the first match.'
     : "Optional. Extract a comparable version from the release tag/version number, for example ^v?([0-9.]+).";
@@ -7126,24 +8751,36 @@ async function previewPluginMonitoring() {
   const settings = pluginMonitoringPayload();
   const fingerprint = JSON.stringify(settings);
   button.disabled = true;
-  output.hidden = false;
-  output.textContent = "Fetching metadata and testing expressions…";
+  output.hidden = true;
+  output.innerHTML = "";
+  setPluginMonitoringFeedback("Checking the release source…", "pending");
   try {
-    const response = await fetch(`/api/web/servers/${modal.dataset.serverId}/plugins/monitoring/preview`, {
+    const response = await nativeFetch(`/api/web/servers/${modal.dataset.serverId}/plugins/monitoring/preview`, {
       method: "POST", headers: {"Content-Type": "application/json"}, body: fingerprint,
     });
-    const data = await response.json();
+    connectionFailureLatched = false;
+    if (handleAuthenticationResponse(response)) return;
+    let data = {};
+    try { data = await response.json(); } catch { /* Use the HTTP status below. */ }
     if (!modal.isConnected || modal.hidden || JSON.stringify(pluginMonitoringPayload()) !== fingerprint) return;
     if (!response.ok) throw new Error(data.error || "Preview failed");
-    output.innerHTML = `<p>Preview only — settings have not been saved.</p>
-      <p>Source: ${escapeHtml(data.source_url || "Unknown")}</p>
-      <p>Installed value used for comparison: <strong>${escapeHtml(data.installed_comparison || "Unknown")}</strong> (${escapeHtml(data.installed_comparison_source || "JAR metadata")})</p>
-      ${renderMonitoredUpdate(data)}
-      <p>Detected download link: ${data.download_url?.startsWith("https://")
-        ? `<a href="${escapeHtml(data.download_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(data.download_url)}</a>`
-        : "None — use the release/source page."}</p>`;
+    if (data.status === "Check failed") {
+      const message = data.error || "The release was found, but its version could not be compared.";
+      setPluginMonitoringFeedback(message, "error");
+      showToast(message, "error");
+    } else {
+      setPluginMonitoringFeedback("");
+    }
+    output.innerHTML = renderPluginMonitoringPreview(data);
+    output.hidden = false;
   } catch (failure) {
-    if (modal.isConnected && JSON.stringify(pluginMonitoringPayload()) === fingerprint) output.textContent = failure.message;
+    if (modal.isConnected && JSON.stringify(pluginMonitoringPayload()) === fingerprint) {
+      const message = failure instanceof TypeError
+        ? "Unable to connect to the server."
+        : failure.message || "Unable to test these settings.";
+      setPluginMonitoringFeedback(message, "error");
+      showToast(message, "error");
+    }
   } finally {
     button.disabled = false;
   }
@@ -7152,10 +8789,9 @@ async function previewPluginMonitoring() {
 async function savePluginMonitoring(event) {
   event.preventDefault();
   const modal = document.getElementById("plugin-monitoring-modal");
-  const error = document.getElementById("plugin-monitoring-error");
   const button = event.target.querySelector('[type="submit"]');
   button.disabled = true;
-  error.textContent = "";
+  setPluginMonitoringFeedback("");
   const settings = pluginMonitoringPayload();
   try {
     const response = await fetch(`/api/web/servers/${modal.dataset.serverId}/plugins/monitoring`, {
@@ -7167,7 +8803,43 @@ async function savePluginMonitoring(event) {
     closePluginMonitoring();
     await updatePluginsPage();
   } catch (failure) {
-    error.textContent = failure.message;
+    setPluginMonitoringFeedback(failure.message || "Unable to save monitoring settings.", "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function promotePluginMonitoring() {
+  const modal = document.getElementById("plugin-monitoring-modal");
+  const button = document.getElementById("plugin-monitoring-promote-button");
+  if (!modal || !button || document.getElementById("plugin-monitoring-mode").value !== "custom") return;
+  const pluginName = document.getElementById("plugin-monitoring-name").textContent;
+  const replacingGlobal = modal.dataset.globalAvailable === "true";
+  const prompt = replacingGlobal
+    ? `Replace the shared update settings for ${pluginName}? This changes the source for every server using the shared setting.`
+    : `Share the update settings for ${pluginName} with all servers?`;
+  if (!confirm(prompt)) return;
+  button.disabled = true;
+  setPluginMonitoringFeedback("");
+  try {
+    const response = await nativeFetch(`/api/web/servers/${modal.dataset.serverId}/plugins/monitoring/global`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(pluginMonitoringPayload()),
+    });
+    connectionFailureLatched = false;
+    if (handleAuthenticationResponse(response)) return;
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to add shared plugin settings.");
+    closePluginMonitoring();
+    await updatePluginsPage();
+    showToast(data.replaced || replacingGlobal
+      ? `Shared update settings updated for ${pluginName}.`
+      : `Shared update settings added for ${pluginName}.`, "success");
+  } catch (failure) {
+    const message = failure.message || "Unable to add shared plugin settings.";
+    setPluginMonitoringFeedback(message, "error");
+    showToast(message, "error");
   } finally {
     button.disabled = false;
   }

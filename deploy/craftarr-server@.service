@@ -1,21 +1,21 @@
 [Unit]
-Description=STEMCraft Minecraft Server %i
+Description=Craftarr Minecraft Server %i
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=stemcraft
-Group=stemcraft
-WorkingDirectory=/opt/stemcraft-console
-EnvironmentFile=-/etc/stemcraft-console/console.env
+User=craftarr
+Group=craftarr
+WorkingDirectory=/opt/craftarr
+EnvironmentFile=-/etc/craftarr/console.env
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/opt/stemcraft-console/.venv/bin/python -m app.server_supervisor --service-name %i
+ExecStart=/opt/craftarr/.venv/bin/python -m app.server_supervisor --service-name %i
 Restart=on-failure
 RestartSec=10
 UMask=0027
 LimitNOFILE=65536
-RuntimeDirectory=stemcraft-console
+RuntimeDirectory=craftarr
 RuntimeDirectoryMode=0770
 RuntimeDirectoryPreserve=yes
 TimeoutStopSec=90
@@ -27,7 +27,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/var/lib/stemcraft-console /srv/minecraft /run/stemcraft-console
+ReadWritePaths=/var/lib/craftarr /srv/minecraft /run/craftarr
 
 [Install]
 WantedBy=multi-user.target

@@ -3,6 +3,7 @@ import threading
 from datetime import datetime
 
 from .backup_manager import (
+    check_backup_space,
     create_backup,
 )
 
@@ -121,10 +122,20 @@ def run_backup_job(
         job.status = "saving"
         job.progress = 0
         job.message = (
-            "Preparing world save"
+            "Checking available disk space"
         )
         job.started_at = (
             datetime.utcnow()
+        )
+
+        db.commit()
+
+        # Fail before issuing any save commands if the server volume cannot
+        # hold a conservative estimate of the resulting archive.
+        check_backup_space(server)
+
+        job.message = (
+            "Preparing world save"
         )
 
         db.commit()

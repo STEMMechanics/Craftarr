@@ -20,6 +20,19 @@ from .offsite_backups import OffsiteBackupError, configured_remotes, validate_de
 router = APIRouter()
 
 
+@router.get("/servers/{server_id:int}/performance", response_class=HTMLResponse)
+def server_performance_page(server_id: int, request: Request, db: Session = Depends(get_db)):
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return RedirectResponse("/login")
+    if not server or not has_permission(user, "servers.view"):
+        raise HTTPException(status_code=404, detail="Server not found")
+
+    context = build_web_context(db, user, active_server=server)
+    context.update({"server": server, "page_title": "Performance", "active_page": "performance"})
+    return render_page(request, "server_performance.html", "partials/server_performance.html", context)
+
+
 def _utc_iso(value: datetime | None) -> str | None:
     """Serialize database UTC datetimes with an explicit UTC designator."""
     if value is None:

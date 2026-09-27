@@ -17,6 +17,7 @@ from .auth import hash_password
 from .database import get_db
 from .models import AccessRole, Server, User
 from .permissions import has_permission
+from .web_context import build_web_context
 
 
 router = APIRouter()
@@ -93,14 +94,16 @@ def users_page(
         .all()
     )
 
+    context = build_web_context(db, admin)
+    context.update({
+        "users": users,
+        "roles": db.query(AccessRole).order_by(AccessRole.name).all(),
+    })
+
     return templates.TemplateResponse(
         request=request,
         name="users.html",
-        context={
-            "user": admin,
-            "users": users,
-            "roles": db.query(AccessRole).order_by(AccessRole.name).all(),
-        },
+        context=context,
     )
 
 
@@ -207,17 +210,18 @@ def edit_user_page(
         in edit_user.servers
     }
 
+    context = build_web_context(db, admin)
+    context.update({
+        "edit_user": edit_user,
+        "servers": servers,
+        "assigned_ids": assigned_ids,
+        "roles": db.query(AccessRole).order_by(AccessRole.name).all(),
+    })
+
     return templates.TemplateResponse(
         request=request,
         name="user_edit.html",
-        context={
-            "user": admin,
-            "edit_user": edit_user,
-            "servers": servers,
-            "assigned_ids":
-                assigned_ids,
-            "roles": db.query(AccessRole).order_by(AccessRole.name).all(),
-        },
+        context=context,
     )
 
 
@@ -429,12 +433,12 @@ def profile_page(
             "/login"
         )
 
+    context = build_web_context(db, user)
+
     return templates.TemplateResponse(
         request=request,
         name="profile.html",
-        context={
-            "user": user,
-        },
+        context=context,
     )
 
 

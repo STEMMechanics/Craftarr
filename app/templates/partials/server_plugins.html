@@ -2,8 +2,17 @@
     class="plugins-page"
     data-server-id="{{ server.id }}"
     data-can-manage="{{ 'true' if user.can('plugins.manage') else 'false' }}"
+    data-can-view-files="{{ 'true' if user.can('files.view') else 'false' }}"
+    data-can-edit-files="{{ 'true' if user.can('files.manage') else 'false' }}"
     data-page-title="Plugins"
 >
+
+    <section class="plugin-page-intro">
+        <div>
+            <h1>Plugins</h1>
+            <p>Add game features here. Enable or disable them below.</p>
+        </div>
+    </section>
 
     <div
         id="plugin-restart-alert"
@@ -27,44 +36,41 @@
 
     {% if user.can("plugins.manage") %}
     <section class="overview-card plugin-install-card">
-      <div class="card-header"><span>Install Plugin</span></div>
-      <div class="plugin-install-options">
-        <form class="plugin-install-form" onsubmit="return false">
-          <div class="plugin-install-heading"><strong>Upload a JAR</strong><small>Select a Paper or Bukkit plugin, or drop a JAR anywhere on this page.</small></div>
+      <div class="plugin-add-intro">
+        <span class="plugin-add-icon"><i class="fa-solid fa-puzzle-piece" aria-hidden="true"></i></span>
+        <div><h2>Add a plugin</h2><p>Choose a plugin file from your computer.</p></div>
+      </div>
+      <div class="plugin-add-actions">
+        <details class="plugin-link-option">
+          <summary><i class="fa-solid fa-link" aria-hidden="true"></i><span>Download plugin</span></summary>
+          <form class="plugin-link-form plugin-install-form" onsubmit="downloadPluginUrl(event)">
+            <label for="plugin-download-url">Link to the plugin file (.jar)</label>
+            <input id="plugin-download-url" name="url" type="url" placeholder="https://example.org/plugin.jar" required>
+            <button class="button" type="submit"><i class="fa-solid fa-download" aria-hidden="true"></i><span>Add plugin</span></button>
+          </form>
+        </details>
+        <form class="plugin-upload-form" onsubmit="return false">
           <input name="plugin" type="file" accept=".jar,application/java-archive" onchange="uploadPluginJar(this)" hidden>
-          <button class="button success plugin-upload-button" type="button" onclick="selectPluginJar(this)"><i class="fa-solid fa-upload"></i> Upload and install</button>
-        </form>
-        <form class="plugin-install-form" onsubmit="downloadPluginUrl(event)">
-          <div class="plugin-install-heading"><strong>Download from URL</strong><small>Use a direct, public HTTPS link ending in .jar.</small></div>
-          <input name="url" type="url" placeholder="https://example.org/plugin.jar" required>
-          <button class="button success" type="submit">Download and install</button>
+          <button class="button success plugin-upload-button" type="button" onclick="selectPluginJar(this)"><i class="fa-solid fa-folder-open" aria-hidden="true"></i><span>Choose a plugin file</span></button>
         </form>
       </div>
-      <p id="plugin-install-status" class="muted-small"></p>
     </section>
     {% endif %}
 
-
-    <p class="muted-small">Updates are checked daily. Monitoring never installs updates.</p>
-    {% if user.can("plugins.manage") %}
-    <button class="button" type="button" onclick="checkMonitoredUpdates(this, 'plugins')">Check for updates</button>
-    <span class="muted-small" id="update-check-feedback" role="status"></span>
-    {% endif %}
     <div class="plugins-toolbar">
-        <input
-            id="plugin-search"
-            type="search"
-            placeholder="Search installed plugins..."
-        >
+        <label class="plugin-search-field"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><span class="visually-hidden">Find a plugin</span><input id="plugin-search" type="search" placeholder="Find a plugin..."></label>
+        {% if user.can("plugins.manage") %}
+        <div class="plugin-update-check"><button class="button" type="button" onclick="checkMonitoredUpdates(this, 'plugins')"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><span>Check for updates</span></button><button id="plugin-update-all" class="button secondary" type="button" onclick="openPluginUpdateModal()" hidden><i class="fa-solid fa-cloud-arrow-down" aria-hidden="true"></i><span>Update all</span></button></div>
+        {% endif %}
     </div>
 
 
-    <section class="overview-card">
+    <section id="plugin-list-card" class="overview-card plugin-list-card">
 
         <div class="card-header">
 
             <span>
-                Installed Plugins
+                Plugins on this server
             </span>
 
             <span
@@ -84,27 +90,31 @@
             <div class="empty-message">Loading plugins...</div>
         </div>
 
-        {% if user.can("plugins.manage") %}
-        <div id="plugin-bulk-actions" class="plugin-bulk-actions">
-            <span id="plugin-selected-count">0 selected</span>
-            <div class="plugin-bulk-buttons">
-                <button class="button" type="button" onclick="bulkPluginAction('enable')">Enable</button>
-                <button class="button" type="button" onclick="bulkPluginAction('disable')">Disable</button>
-                <button class="button danger" type="button" onclick="bulkPluginAction('remove')">Delete</button>
-            </div>
-        </div>
-        {% endif %}
-
     </section>
 
 </div>
 
 
 {% if user.can("plugins.manage") %}
+<div id="plugin-update-modal" class="modal-backdrop" hidden>
+    <div class="modal-card plugin-update-modal-card" role="dialog" aria-modal="true" aria-labelledby="plugin-update-modal-title">
+        <span class="page-kicker">Plugin updates</span>
+        <h2 id="plugin-update-modal-title">Update plugin?</h2>
+        <p id="plugin-update-modal-summary" class="modal-note"></p>
+        <ul id="plugin-update-modal-list" class="plugin-update-confirm-list"></ul>
+        <label class="modal-checkbox plugin-update-rollback-option"><input id="plugin-update-keep-previous" type="checkbox" checked><span><strong>Keep the current JAR disabled as a rollback copy</strong><small>The new version will be installed on this server. You can re-enable the old JAR later.</small></span></label>
+        <p id="plugin-update-modal-state" class="modal-note"></p>
+        <div class="modal-actions">
+            <button id="cancel-plugin-update" class="button" type="button" onclick="closePluginUpdateModal()">Cancel</button>
+            <button id="confirm-plugin-update" class="button success" type="button" onclick="confirmPluginUpdate()"><i class="fa-solid fa-cloud-arrow-down" aria-hidden="true"></i><span>Update plugin</span></button>
+        </div>
+    </div>
+</div>
+
 <div id="plugin-replace-modal" class="modal-backdrop" hidden>
     <div class="modal-card">
-        <h2>Replace existing plugin?</h2>
-        <p><strong id="replace-plugin-filename"></strong> already exists. Continuing will replace that JAR with the new build while keeping the original filename.</p>
+        <h2>Replace this plugin?</h2>
+        <p>A file named <strong id="replace-plugin-filename"></strong> already exists. The new plugin will replace it.</p>
         <p id="replace-plugin-state" class="modal-note"></p>
         <div class="modal-actions">
             <button class="button" type="button" onclick="closePluginReplaceModal()">Cancel</button>
@@ -118,11 +128,11 @@
         <div class="plugin-duplicates-heading">
             <span class="plugin-duplicates-icon"><i class="fa-solid fa-triangle-exclamation"></i></span>
             <div>
-                <h2>Multiple plugin versions found</h2>
-                <p>More than one version of the same plugin is enabled. Leaving them all enabled may prevent one version from loading or cause the plugin to behave unexpectedly.</p>
+                <h2>More than one copy of a plugin</h2>
+                <p>Two copies are enabled. The server may have trouble if both stay enabled.</p>
             </div>
         </div>
-        <p class="plugin-duplicates-instruction">Turn off any versions you do not want Paper to load.</p>
+        <p class="plugin-duplicates-instruction">Disable the copy you do not want to use.</p>
         <div id="plugin-duplicate-groups" class="plugin-duplicate-groups"></div>
         <div class="modal-actions">
             <button class="button" type="button" onclick="keepDuplicatePluginsEnabled()">Leave all enabled</button>
@@ -201,48 +211,63 @@
 
 {% if user.can("plugins.manage") %}
 <div id="plugin-monitoring-modal" class="modal-backdrop" hidden>
-  <form class="modal-card" onsubmit="savePluginMonitoring(event)">
-    <h2>Update monitoring</h2>
+  <form class="modal-card plugin-settings-card" onsubmit="savePluginMonitoring(event)">
+    <span class="page-kicker">Plugin settings</span>
+    <h2>Check this plugin for updates</h2>
     <p id="plugin-monitoring-name"></p>
-    <p class="modal-note">These settings apply to this plugin on this server, including replacement JARs with the same plugin name.</p>
-    <label for="plugin-monitoring-mode">Monitoring</label>
+    <p class="modal-note">Choose whether the console should look for a newer version of this plugin. It will never install one by itself.</p>
+    <div id="plugin-monitoring-error" class="plugin-monitoring-feedback" role="alert" aria-live="assertive" hidden></div>
+    <label for="plugin-monitoring-mode">Should we check for updates?</label>
     <select id="plugin-monitoring-mode" onchange="updatePluginMonitoringFields()">
-      <option value="disabled">Do not monitor</option>
-      <option value="custom">Monitor a configured source</option>
+      <option value="disabled">Do not check for updates</option>
+      <option value="global">Use shared settings</option>
+      <option value="custom">Configure settings for this server</option>
     </select>
+    <div id="plugin-monitoring-global" class="plugin-monitoring-global" hidden>
+      <strong id="plugin-monitoring-global-source"></strong>
+      <small id="plugin-monitoring-global-notes"></small>
+    </div>
     <div id="plugin-monitoring-custom" hidden>
-      <label for="plugin-monitoring-provider">Provider</label>
+      <label for="plugin-monitoring-provider">Where should we look?</label>
       <select id="plugin-monitoring-provider" onchange="updatePluginMonitoringFields(true)">
         <option value="github">GitHub Releases</option>
         <option value="modrinth">Modrinth</option>
         <option value="jenkins">Jenkins</option>
         <option value="custom">Custom URL</option>
       </select>
-      <label for="plugin-monitoring-project">Project or source URL</label>
+      <label for="plugin-monitoring-project">Plugin page or project</label>
       <input id="plugin-monitoring-project" type="text" maxlength="2048" autocomplete="off" oninput="clearMonitoringPreview()">
       <p id="plugin-monitoring-hint" class="modal-note"></p>
-      <details id="plugin-monitoring-expressions">
-      <summary>Advanced version and link expressions</summary>
-      <label for="plugin-monitoring-version-pattern">Version expression</label>
-      <input id="plugin-monitoring-version-pattern" type="text" maxlength="1024" autocomplete="off" spellcheck="false" oninput="clearMonitoringPreview()">
-      <p id="plugin-monitoring-version-hint" class="modal-note"></p>
-      <div id="plugin-monitoring-link-fields">
-        <label for="plugin-monitoring-link-pattern">Download link expression (optional)</label>
-        <input id="plugin-monitoring-link-pattern" type="text" maxlength="1024" autocomplete="off" spellcheck="false" oninput="clearMonitoringPreview()">
-        <p class="modal-note">Capture a URL in the first group or a named “url” group. Relative links are resolved against the source URL. The link is displayed, never fetched.</p>
-      </div>
-      <label for="plugin-monitoring-installed-pattern">Installed version expression (optional)</label>
-      <input id="plugin-monitoring-installed-pattern" type="text" maxlength="1024" autocomplete="off" spellcheck="false" oninput="clearMonitoringPreview()">
-      <p class="modal-note">Extract the comparable part of the JAR’s version, for example ^([0-9.]+). Expressions use the first capture group or a named “version” group.</p>
+      <details id="plugin-monitoring-expressions" class="plugin-monitoring-advanced">
+        <summary>Advanced settings</summary>
+        <div class="plugin-monitoring-advanced-content">
+          <p class="modal-note">Most plugins do not need these settings. Leave them alone unless the plugin page uses an unusual format.</p>
+          <label for="plugin-monitoring-version-pattern">How to find the newest version</label>
+          <input id="plugin-monitoring-version-pattern" type="text" maxlength="1024" autocomplete="off" spellcheck="false" oninput="clearMonitoringPreview()">
+          <p id="plugin-monitoring-version-hint" class="modal-note"></p>
+          <div id="plugin-monitoring-link-fields">
+            <label for="plugin-monitoring-link-pattern">How to find the download link (optional)</label>
+            <input id="plugin-monitoring-link-pattern" type="text" maxlength="1024" autocomplete="off" spellcheck="false" oninput="clearMonitoringPreview()">
+            <p class="modal-note">Capture a URL in the first group or a named “url” group. Relative links are resolved against the source URL. The link is displayed, never fetched.</p>
+          </div>
+          <label for="plugin-monitoring-installed-pattern">How to read the installed version (optional)</label>
+          <input id="plugin-monitoring-installed-pattern" type="text" maxlength="1024" autocomplete="off" spellcheck="false" oninput="clearMonitoringPreview()">
+          <p class="modal-note">Extract the comparable part of the JAR’s version, for example ^([0-9.]+). Expressions use the first capture group or a named “version” group.</p>
+        </div>
       </details>
-      <button id="plugin-monitoring-preview-button" class="button" type="button" onclick="previewPluginMonitoring()">Preview</button>
       <div id="plugin-monitoring-preview" role="status" hidden></div>
-      <p class="modal-note">Preview fetches metadata only. It does not save settings, send email or download artifacts. Custom sources have unknown Minecraft compatibility.</p>
     </div>
-    <p id="plugin-monitoring-error" role="alert"></p>
-    <div class="modal-actions">
-      <button type="button" class="button" onclick="closePluginMonitoring()">Cancel</button>
-      <button type="submit" class="button success">Save</button>
+    <div class="modal-actions plugin-monitoring-actions">
+      <div class="plugin-monitoring-actions-left">
+        <button id="plugin-monitoring-preview-button" class="button" type="button" onclick="previewPluginMonitoring()" hidden><i class="fa-solid fa-flask" aria-hidden="true"></i> Test these settings</button>
+        {% if user.can("settings.manage") %}
+        <button id="plugin-monitoring-promote-button" class="button" type="button" onclick="promotePluginMonitoring()" hidden><i class="fa-solid fa-globe" aria-hidden="true"></i> <span id="plugin-monitoring-promote-label">Make global</span></button>
+        {% endif %}
+      </div>
+      <div class="plugin-monitoring-actions-right">
+        <button type="button" class="button" onclick="closePluginMonitoring()">Cancel</button>
+        <button type="submit" class="button success">Save settings</button>
+      </div>
     </div>
   </form>
 </div>

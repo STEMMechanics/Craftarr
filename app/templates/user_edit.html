@@ -1,231 +1,77 @@
 {% extends "base.html" %}
 
-{% block title %}
-{{ edit_user.username }} | STEMCraft Console
-{% endblock %}
+{% block title %}{{ edit_user.username }} | Craftarr{% endblock %}
 
-{% block body %}
-
-<div class="layout">
-
-    <aside class="sidebar">
-
-        <div class="brand">
-            STEMCraft Console
+{% block content %}
+<div class="user-edit-page" data-page-title="Edit user">
+    <section class="page-header">
+        <div>
+            <h1>{{ edit_user.username }}</h1>
+            <p>Change this user's account and server access.</p>
         </div>
+        <a class="button" href="/users"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back to users</a>
+    </section>
 
-        <nav>
-
-            <a href="/dashboard">
-                Dashboard
-            </a>
-
-            <a href="/servers">
-                Servers
-            </a>
-
-            <a
-                href="/users"
-                class="active"
-            >
-                Users
-            </a>
-
-        </nav>
-
-    </aside>
-
-
-    <main>
-
-        <header>
-
-            <a href="/users">
-                ← Users
-            </a>
-
-            <div class="account">
-
-                {{ user.username }}
-
-                <span class="role">
-                    {{ user.role_name }}
-                </span>
-
+    <section class="overview-card settings-section">
+        <div class="card-header"><i class="fa-solid fa-user-gear" aria-hidden="true"></i> Account details</div>
+        <form class="settings-content user-edit-form" method="post" action="/users/{{ edit_user.id }}/save">
+            <label class="property-field">
+                <span>Username</span>
+                <input name="username" value="{{ edit_user.username }}" required>
+            </label>
+            <label class="property-field">
+                <span>New password</span>
+                <input name="password" type="password" placeholder="Leave blank to keep the current password">
+            </label>
+            <label class="property-field">
+                <span>Access level</span>
+                <select name="role_id" required>
+                    {% for role in roles %}
+                    <option value="{{ role.id }}" {% if edit_user.role_id == role.id %}selected{% endif %}>{{ role.name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label class="property-toggle user-enabled-toggle">
+                <div><strong>Allow sign in</strong><small>Turn this off to stop this user from signing in.</small></div>
+                <span class="switch"><input type="checkbox" name="enabled" {% if edit_user.enabled %}checked{% endif %}><span class="switch-slider"></span></span>
+            </label>
+            <div class="settings-save-row">
+                <button class="button success" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i> Save changes</button>
             </div>
+        </form>
+    </section>
 
-        </header>
-
-
-        <section class="content">
-
-            <h1>
-                {{ edit_user.username }}
-            </h1>
-
-
-            <div class="panel">
-
-                <h2>Account</h2>
-
-                <form
-                    method="post"
-                    action="/users/{{ edit_user.id }}/save"
-                >
-
-                    <label>
-                        Username
-                    </label>
-
-                    <input
-                        name="username"
-                        value="{{ edit_user.username }}"
-                        required
-                    >
-
-
-                    <label>
-                        New password
-                    </label>
-
-                    <input
-                        name="password"
-                        type="password"
-                        placeholder="Leave blank to keep current password"
-                    >
-
-
-                    <label>
-                        Role
-                    </label>
-
-                    <select name="role_id">
-                        {% for role in roles %}
-                        <option value="{{ role.id }}" {% if edit_user.role_id == role.id %}selected{% endif %}>{{ role.name }}</option>
-                        {% endfor %}
-                    </select>
-
-
-                    <label class="checkbox">
-
-                        <input
-                            type="checkbox"
-                            name="enabled"
-                            {% if edit_user.enabled %}
-                            checked
-                            {% endif %}
-                        >
-
-                        Account enabled
-
-                    </label>
-
-
-                    <button class="button">
-                        Save Account
-                    </button>
-
-                </form>
-
+    {% if not edit_user.can("servers.view_all") %}
+    <section class="overview-card settings-section">
+        <div class="card-header"><i class="fa-solid fa-cubes" aria-hidden="true"></i> Servers this user can use</div>
+        <form class="settings-content" method="post" action="/users/{{ edit_user.id }}/servers">
+            <div class="server-access-list">
+                {% for server in servers %}
+                <label class="server-access-row">
+                    <input type="checkbox" name="servers" value="{{ server.id }}" {% if server.id in assigned_ids %}checked{% endif %}>
+                    <div><strong>{{ server.name }}</strong><span>{% if server.minecraft_version %}Minecraft {{ server.minecraft_version }}{% else %}Not set up{% endif %}</span></div>
+                </label>
+                {% else %}
+                <p>No servers yet. Make a server first.</p>
+                {% endfor %}
             </div>
-
-
-            {% if not edit_user.can("servers.view_all") %}
-
-            <div class="panel">
-
-                <h2>Server Access</h2>
-
-                <p class="muted">
-                    Select the servers this
-                    user can manage.
-                </p>
-
-                <form
-                    method="post"
-                    action="/users/{{ edit_user.id }}/servers"
-                >
-
-                    <div class="server-access-list">
-
-                        {% for server in servers %}
-
-                        <label class="server-access-row">
-
-                            <input
-                                type="checkbox"
-                                name="servers"
-                                value="{{ server.id }}"
-                                {% if server.id in assigned_ids %}
-                                checked
-                                {% endif %}
-                            >
-
-                            <div>
-
-                                <strong>
-                                    {{ server.name }}
-                                </strong>
-
-                                <span>
-                                    {% if server.minecraft_version %}
-                                    Paper {{ server.minecraft_version }}
-                                    {% else %}
-                                    Not installed
-                                    {% endif %}
-                                </span>
-
-                            </div>
-
-                        </label>
-
-                        {% else %}
-
-                        <p>
-                            No servers have been
-                            created yet.
-                        </p>
-
-                        {% endfor %}
-
-                    </div>
-
-                    <button class="button">
-                        Save Server Access
-                    </button>
-
-                </form>
-
+            <div class="settings-save-row">
+                <button class="button success" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i> Save server access</button>
             </div>
+        </form>
+    </section>
+    {% endif %}
 
-            {% endif %}
-
-
-            {% if edit_user.id != user.id %}
-
-            <div class="panel danger-panel">
-
-                <h2>Delete User</h2>
-
-                <form
-                    method="post"
-                    action="/users/{{ edit_user.id }}/delete"
-                >
-
-                    <button class="button danger">
-                        Delete User
-                    </button>
-
-                </form>
-
-            </div>
-
-            {% endif %}
-
-        </section>
-
-    </main>
-
+    {% if edit_user.id != user.id %}
+    <section class="overview-card settings-section danger-panel">
+        <div class="card-header"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> Remove account</div>
+        <div class="settings-content">
+            <p>This removes the account and stops this user from signing in.</p>
+            <form method="post" action="/users/{{ edit_user.id }}/delete">
+                <button class="button danger" type="submit"><i class="fa-solid fa-trash" aria-hidden="true"></i> Remove user</button>
+            </form>
+        </div>
+    </section>
+    {% endif %}
 </div>
-
 {% endblock %}

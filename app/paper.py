@@ -18,8 +18,8 @@ PAPER_API = (
 
 
 USER_AGENT = (
-    f"STEMCraft-Console/{APP_VERSION} "
-    "(https://github.com/stemmechanics/stemcraft-console)"
+    f"Craftarr-Console/{APP_VERSION} "
+    "(https://github.com/STEMMechanics/Craftarr)"
 )
 
 

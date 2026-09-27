@@ -26,7 +26,7 @@ REAL_GET_JSON = providers.get_json
 
 @pytest.fixture(autouse=True)
 def offline(monkeypatch, tmp_path):
-    monkeypatch.setenv("STEMCRAFT_PLUGIN_MONITORING_DEFAULTS", str(tmp_path / "no-defaults.yml"))
+    monkeypatch.setenv("CRAFTARR_PLUGIN_MONITORING_DEFAULTS", str(tmp_path / "no-defaults.yml"))
     def blocked(*args, **kwargs):
         raise AssertionError('Unexpected network request')
     monkeypatch.setattr(providers, 'get_json', blocked)
@@ -214,7 +214,7 @@ def test_grouped_notifications_deduplicate_and_report_newer(db, tmp_path, monkey
     monkeypatch.setattr(monitor, 'send_email', lambda *args: sent.append(args[1:]))
     monitor.check_updates(db, now=NOW, notify=True)
     assert len(sent) == 1
-    assert sent[0][1] == 'STEMCraft: Plugin updates available'
+    assert sent[0][1] == 'Craftarr: Plugin updates available'
     assert all(text in sent[0][2] for text in ['Survival', 'Creative', 'ViaVersion', 'Paper', '5.6.0', 'build 61', 'https://github.com'])
     assert db.query(UpdateNotification).count() == 4
     monitor.check_updates(db, now=NOW + timedelta(days=1), notify=True)
@@ -462,7 +462,7 @@ def test_migration_upgrades_previous_head_and_preserves_servers(monkeypatch, tmp
     from alembic.config import Config
     from app import migrations
     path = tmp_path / 'migration.db'
-    monkeypatch.setenv('STEMCRAFT_CONSOLE_DATABASE', str(path))
+    monkeypatch.setenv('CRAFTARR_CONSOLE_DATABASE', str(path))
     config = Config(str(migrations.PROJECT_ROOT / 'alembic.ini'))
     config.set_main_option('script_location', str(migrations.PROJECT_ROOT / 'migrations'))
     command.upgrade(config, '5bb3c8a91120')
@@ -653,6 +653,8 @@ def test_jenkins_generic_job_metadata(monkeypatch):
     calls = []
     def fetch(url):
         calls.append(url)
+        if '/api/json?tree=builds' in url:
+            return json.dumps({'builds': []})
         return json.dumps({'number': 41, 'timestamp': 1700000000000,
                            'artifacts': [{'fileName': 'MyPlugin-1.4.0.jar', 'relativePath': 'target/MyPlugin-1.4.0.jar'}]})
     monkeypatch.setattr(configured, 'fetch_document', fetch)
@@ -662,8 +664,33 @@ def test_jenkins_generic_job_metadata(monkeypatch):
     assert release.version == '1.4.0'
     assert release.url == 'https://ci.example.org/job/Folder/job/Plugin/41/'
     assert release.download_url == 'https://ci.example.org/job/Folder/job/Plugin/41/artifact/target/MyPlugin-1.4.0.jar'
-    assert len(calls) == 1
-    assert '/lastSuccessfulBuild/api/json?' in calls[0]
+    assert len(calls) == 2
+    assert '/lastSuccessfulBuild/api/json?' in calls[1]
+
+
+def test_jenkins_selects_paper_artifact_and_maps_snapshot_commit_to_build(monkeypatch):
+    from app.plugin_monitoring import custom_provider
+    from app.update_providers import configured
+
+    def fetch(url):
+        if '/api/json?tree=builds' in url:
+            return json.dumps({'builds': [
+                {'number': 1389, 'result': 'SUCCESS', 'changeSet': {'items': [{'id': '944c416b0a7cc735a08c11201d348ea61b80c368'}]}},
+                {'number': 1387, 'result': 'SUCCESS', 'changeSet': {'items': [{'id': 'cb030faa985ea8add7f254f23ca9634dbfc12a11'}]}},
+            ]})
+        return json.dumps({'number': 1389, 'timestamp': 1700000000000, 'artifacts': [
+            {'fileName': 'FastAsyncWorldEdit-Bukkit-2.15.5-SNAPSHOT.jar', 'relativePath': 'artifacts/FastAsyncWorldEdit-Bukkit-2.15.5-SNAPSHOT.jar'},
+            {'fileName': 'FastAsyncWorldEdit-CLI-2.15.5-SNAPSHOT.jar', 'relativePath': 'artifacts/FastAsyncWorldEdit-CLI-2.15.5-SNAPSHOT.jar'},
+            {'fileName': 'FastAsyncWorldEdit-Paper-2.15.5-SNAPSHOT.jar', 'relativePath': 'artifacts/FastAsyncWorldEdit-Paper-2.15.5-SNAPSHOT.jar'},
+        ]})
+
+    monkeypatch.setattr(configured, 'fetch_document', fetch)
+    source = custom_provider('jenkins', 'https://ci.athion.net/job/FastAsyncWorldEdit/')
+    release = source.fetch()[0]
+    assert release.version == '1389'
+    assert release.download_url.endswith('/artifact/artifacts/FastAsyncWorldEdit-Paper-2.15.5-SNAPSHOT.jar')
+    assert source.compare('2.15.5-SNAPSHOT+cb030faa985ea8add7f254f23ca9634dbfc12a11', release) == 1
+    assert source.compare('2.15.5-SNAPSHOT+944c416b0a7cc735a08c11201d348ea61b80c368', release) == 0
 
 
 @pytest.mark.parametrize('pattern,document,error', [
@@ -793,13 +820,23 @@ def test_rule_changes_invalidate_cache_but_installed_expression_does_not():
     assert first.key == third.key
 
 
+def test_jenkins_filename_build_is_displayed_when_plugin_metadata_has_no_version():
+    from app.plugin_monitoring import custom_provider
+    source = custom_provider('jenkins', 'https://ci.example.org/job/Citizens')
+    release = providers.Release('4255', 'https://ci.example.org/job/Citizens/4255/')
+    filename = 'Citizens-2.0.43-b4241.jar'
+
+    assert source.compare(None, release, filename=filename) == 1
+    assert source.display_installed(None, release, filename=filename) == 'build 4241'
+
+
 def test_explicit_settings_migrate_without_plugin_defaults(monkeypatch, tmp_path):
     import sqlite3
     from alembic import command
     from alembic.config import Config
     from app import migrations
     path = tmp_path / 'source-migration.db'
-    monkeypatch.setenv('STEMCRAFT_CONSOLE_DATABASE', str(path))
+    monkeypatch.setenv('CRAFTARR_CONSOLE_DATABASE', str(path))
     config = Config(str(migrations.PROJECT_ROOT / 'alembic.ini'))
     config.set_main_option('script_location', str(migrations.PROJECT_ROOT / 'migrations'))
     command.upgrade(config, '38c21d9e40b5')
@@ -825,7 +862,7 @@ def write_defaults(path, plugins):
 def test_shipped_default_sources_and_aliases(db, tmp_path, monkeypatch):
     from app.monitoring_defaults import DEFAULTS_PATH, default_for
     from app.plugin_monitoring import monitoring_config
-    monkeypatch.setenv('STEMCRAFT_PLUGIN_MONITORING_DEFAULTS', str(DEFAULTS_PATH))
+    monkeypatch.setenv('CRAFTARR_PLUGIN_MONITORING_DEFAULTS', str(DEFAULTS_PATH))
     row = server(db, tmp_path)
     for name in ['AntiPopup', 'Chunky', 'Citizens', 'FAWE', 'Floodgate', 'Geyser-Spigot',
                  'LuckPerms', 'PlaceholderAPI', 'PlotSquared Premium', 'Vault', 'ViaVersion']:
@@ -843,7 +880,7 @@ def test_shipped_default_sources_and_aliases(db, tmp_path, monkeypatch):
 def test_defaults_prefill_and_saved_fields_survive_file_changes(db, tmp_path, monkeypatch):
     from app.plugin_monitoring import monitoring_config, save_monitoring_config
     path = tmp_path / 'defaults.yml'
-    monkeypatch.setenv('STEMCRAFT_PLUGIN_MONITORING_DEFAULTS', str(path))
+    monkeypatch.setenv('CRAFTARR_PLUGIN_MONITORING_DEFAULTS', str(path))
     first = server(db, tmp_path)
     second = server(db, tmp_path, 'Creative')
     write_defaults(path, {'ViaVersion': {'provider': 'github', 'project': 'Example/First'}})
@@ -871,7 +908,7 @@ def test_defaults_prefill_and_saved_fields_survive_file_changes(db, tmp_path, mo
 def test_bad_default_entry_and_malformed_file_fail_safely(db, tmp_path, monkeypatch):
     from app.monitoring_defaults import default_for
     path = tmp_path / 'defaults.yml'
-    monkeypatch.setenv('STEMCRAFT_PLUGIN_MONITORING_DEFAULTS', str(path))
+    monkeypatch.setenv('CRAFTARR_PLUGIN_MONITORING_DEFAULTS', str(path))
     write_defaults(path, {
         'Good': {'provider': 'github', 'project': 'Example/Good'},
         'Bad': {'provider': 'custom', 'project': 'https://localhost/', 'version_pattern': '(1)'},
@@ -892,7 +929,7 @@ def test_default_rules_parse_expected_release_formats(monkeypatch):
     from app.monitoring_defaults import DEFAULTS_PATH, default_for
     from app.plugin_monitoring import custom_provider
     from app.update_providers import configured
-    monkeypatch.setenv('STEMCRAFT_PLUGIN_MONITORING_DEFAULTS', str(DEFAULTS_PATH))
+    monkeypatch.setenv('CRAFTARR_PLUGIN_MONITORING_DEFAULTS', str(DEFAULTS_PATH))
     for name, document, installed, expected in [
         ('Geyser', '{"version":"2.8.3","build":123}', '2.8.2-SNAPSHOT', '2.8.3'),
         ('Floodgate', '{"version":"2.2.4","build":56}', '2.2.3-SNAPSHOT', '2.2.4'),
@@ -916,7 +953,7 @@ def test_prefilled_preview_checks_edited_fields_without_saving(db, tmp_path, mon
     from app.models import PluginMonitoringSetting
     from app.plugin_monitoring import save_monitoring_config
     path = tmp_path / 'defaults.yml'
-    monkeypatch.setenv('STEMCRAFT_PLUGIN_MONITORING_DEFAULTS', str(path))
+    monkeypatch.setenv('CRAFTARR_PLUGIN_MONITORING_DEFAULTS', str(path))
     write_defaults(path, {'ViaVersion': {'provider': 'github', 'project': 'Example/Original'}})
     row = server(db, tmp_path)
     clear_saved_monitoring(db, row.id)
@@ -939,7 +976,7 @@ def test_prefilled_preview_checks_edited_fields_without_saving(db, tmp_path, mon
 def test_default_sources_share_cache_across_servers(db, tmp_path, monkeypatch):
     from app.plugin_monitoring import save_monitoring_config
     path = tmp_path / 'defaults.yml'
-    monkeypatch.setenv('STEMCRAFT_PLUGIN_MONITORING_DEFAULTS', str(path))
+    monkeypatch.setenv('CRAFTARR_PLUGIN_MONITORING_DEFAULTS', str(path))
     write_defaults(path, {'ViaVersion': {'provider': 'github', 'project': 'ViaVersion/ViaVersion'}})
     first = server(db, tmp_path)
     second = server(db, tmp_path, 'Creative')

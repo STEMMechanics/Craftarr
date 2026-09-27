@@ -1,8 +1,8 @@
-import os
-
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+from app.env import getenv
 
 from logging.config import fileConfig
 
@@ -19,16 +19,16 @@ from app import models
 config = context.config
 
 load_dotenv(
-    os.getenv(
-        "STEMCRAFT_CONSOLE_ENV",
+    getenv(
+        "CRAFTARR_CONSOLE_ENV",
         ".env",
     )
 )
 
 database_path = Path(
-    os.getenv(
-        "STEMCRAFT_CONSOLE_DATABASE",
-        "stemcraft-console.db",
+    getenv(
+        "CRAFTARR_CONSOLE_DATABASE",
+        "craftarr.db",
     )
 ).expanduser()
 

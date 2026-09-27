@@ -1,10 +1,10 @@
 """Durable scheduled tasks and historical server metrics."""
 
-import os
 import threading
 import logging
 from calendar import monthrange
 from datetime import datetime, timedelta, timezone
+from .env import getenv
 
 import psutil
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -25,9 +25,9 @@ _thread: threading.Thread | None = None
 _manual_task_lock = threading.Lock()
 _manual_backup_servers: set[int] = set()
 logger = logging.getLogger(__name__)
-POLL_SECONDS = max(5, int(os.getenv("STEMCRAFT_AUTOMATION_POLL_SECONDS", "30")))
-METRIC_SECONDS = max(15, int(os.getenv("STEMCRAFT_METRIC_INTERVAL_SECONDS", "60")))
-METRIC_RETENTION_DAYS = max(1, int(os.getenv("STEMCRAFT_METRIC_RETENTION_DAYS", "30")))
+POLL_SECONDS = max(5, int(getenv("CRAFTARR_AUTOMATION_POLL_SECONDS", "30")))
+METRIC_SECONDS = max(15, int(getenv("CRAFTARR_METRIC_INTERVAL_SECONDS", "60")))
+METRIC_RETENTION_DAYS = max(1, int(getenv("CRAFTARR_METRIC_RETENTION_DAYS", "30")))
 
 
 def next_task_run(task, now: datetime, schedule_timezone=None) -> datetime:

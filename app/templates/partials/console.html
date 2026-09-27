@@ -2,25 +2,25 @@
 
   <div class="console-toolbar">
 
-    <div class="console-filters">
-      <button class="console-filter active" data-level="ALL">
-        ALL
+    <div class="console-filters" role="group" aria-label="Filter console by log level">
+      <button class="console-filter active" type="button" data-level="ALL" aria-pressed="true">
+        All
       </button>
 
-      <button class="console-filter" data-level="INFO">
-        INFO
+      <button class="console-filter" type="button" data-level="INFO" aria-pressed="false">
+        Info
       </button>
 
-      <button class="console-filter" data-level="WARN">
-        WARN
+      <button class="console-filter" type="button" data-level="WARN" aria-pressed="false">
+        Warnings
       </button>
 
-      <button class="console-filter" data-level="ERROR">
-        ERROR
+      <button class="console-filter" type="button" data-level="ERROR" aria-pressed="false">
+        Errors
       </button>
 
-      <button class="console-filter" data-level="DEBUG">
-        DEBUG
+      <button class="console-filter" type="button" data-level="DEBUG" aria-pressed="false">
+        Debug
       </button>
     </div>
 
@@ -33,7 +33,7 @@
 </button>
 
       <button class="button" onclick="updateConsolePage()">
-        Refresh
+        <i class="fa-solid fa-rotate" aria-hidden="true"></i> Refresh
       </button>
 
     </div>
@@ -52,8 +52,8 @@
 
     <input id="console-input" type="text" placeholder="Type a command and press Enter..." autocomplete="off">
 
-    <button class="button" id="console-send" onclick="sendConsoleCommand()">
-      Send
+    <button class="button success" id="console-send" onclick="sendConsoleCommand()">
+      <i class="fa-solid fa-paper-plane" aria-hidden="true"></i> Send
     </button>
 
   </div>

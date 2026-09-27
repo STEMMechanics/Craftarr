@@ -1,60 +1,68 @@
-# Plugin and Paper update monitoring
+# Craftarr plugin and Paper update monitoring
 
 **Monitoring never installs or downloads plugin/Paper JARs.** It reads release
 metadata and links. Existing administrator-controlled installation features are
 separate.
 
-A plugin's name/version is read from `plugin.yml` or `paper-plugin.yml`. The root
-`plugin-monitoring.yml` supplies starting source settings by normalised metadata
-name or alias. Renaming a JAR does not affect recognition or its settings.
+A plugin's name/version is read from `plugin.yml` or `paper-plugin.yml`. The shared
+`plugin-monitoring.yml` repository maps normalized metadata names and aliases to
+update sources. Renaming a JAR does not affect recognition or its settings.
 Enabled and disabled JARs are included; monitoring can be switched off independently.
 
-The existing Console automation worker checks all managed servers every 24 hours.
+The existing Craftarr automation worker checks all managed servers every 24 hours.
 The last daily run is persisted across restarts. Downtime delays checks until the
-Console runs again. No additional service or cron entry is needed.
+Craftarr runs again. No additional service or cron entry is needed.
 
 ## Configuring a source
 
-On the Plugins page, click **Monitoring** beside a plugin. Choose **Do not monitor**
-or **Monitor a configured source**, then select a provider:
+On the Plugins page, click **Update settings** beside a plugin. Choose not to
+monitor it, use a shared source when one exists, or configure a source for that
+server. Then select a provider:
 
 | Provider | Input | Behaviour |
 | --- | --- | --- |
 | GitHub Releases | `owner/repository` or `https://github.com/owner/repository` | Uses the latest stable GitHub release; ignores drafts/prereleases |
-| Modrinth | Project slug, ID or project URL | Uses stable Bukkit/Paper-compatible artifacts; filters by published Minecraft versions |
+| Modrinth | Project slug, ID or project URL | Prefers stable Bukkit/Paper-compatible artifacts, falls back to beta if no stable artifacts exist, and filters by published Minecraft versions |
 | Jenkins | Public HTTPS job URL, including folder/job path if needed | Reads `/lastSuccessfulBuild/api/json` for number, timestamp and artifact metadata |
 | Custom URL | Public HTTPS metadata URL returning JSON, HTML, XML or text | Extracts the version and optional link from that response |
 
 Use the developer's official source. New plugins and changed project locations
-can be configured entirely through this form, without modifying Console code.
+can be configured entirely through this form, without modifying application code.
 GeyserMC, LuckPerms and other projects do not have special hidden mappings or
 adapters; use whichever of these source types suits their published metadata.
 
-Settings are stored per server and normalised plugin metadata name. They survive
-JAR replacement, filename changes, disable/enable and reinstalling the same plugin
-name. Duplicate JARs with the same metadata name share settings. Another server
-has independent settings. Server deletion removes its preferences.
+Manual and disabled choices are stored per server and normalized plugin metadata
+name. Shared choices refer to the repository and update when it changes. Settings
+survive JAR replacement, filename changes, disable/enable and reinstalling the same
+plugin name. Duplicate JARs with the same metadata name share settings. Server
+deletion removes its per-server preferences.
 
 Changing settings requires existing `plugins.manage` permission and access to the
 server. Viewing results requires `plugins.view`. Settings cannot be saved during
 an active check or preview; retry after it finishes.
 
-## Prefilled settings from plugin-monitoring.yml
+## Shared settings repository
 
-The YAML fills the ordinary editable provider, project/URL and expression fields.
-There is no separate YAML mode. **Preview** checks the values currently in the
-form, including edits. **Save** stores those values for this server; later YAML
-changes do not replace saved settings. **Do not monitor** also persists and takes
-precedence over the file. Before a server saves settings, checks use the current
-YAML values. File edits are picked up on the next read without restarting.
+Administrators with `settings.manage` can edit the YAML, download it for sharing,
+and upload a replacement from **Settings → Shared plugin update settings**. The
+file is validated before it is saved. By default, the editable copy lives beside
+the Craftarr database so it persists across container image updates. The bundled
+`plugin-monitoring.yml` seeds the repository until an editable copy is created.
+`CRAFTARR_PLUGIN_MONITORING_DEFAULTS` can set a different persistent path.
+
+On the Plugins page, **Use shared settings** follows the current repository entry
+for that plugin. **Configure settings for this server** stores an independent source,
+and **Do not check for updates** overrides either source. Administrators can use
+**Make global** to add a verified manual source to the shared repository. Changes to
+the repository are picked up without restarting Craftarr.
 
 The shipped configuration covers:
 
 | Source | Plugins |
 | --- | --- |
-| Modrinth | AntiPopup, Chunky, FastAsyncWorldEdit (FAWE), LuckPerms |
+| Modrinth | AntiPopup, Chunky, LuckPerms, Pl3xMap |
 | GitHub Releases | PlaceholderAPI, PlotSquared Premium (public PlotSquared releases), Vault, ViaVersion |
-| Jenkins | Citizens |
+| Jenkins | Citizens, FastAsyncWorldEdit (FAWE) |
 | Custom URL | Geyser, Floodgate (GeyserMC public download metadata API) |
 
 Citizens compares Jenkins build numbers and needs a build number in its installed
@@ -63,7 +71,7 @@ builds. Their compatibility remains unknown. PlotSquared monitors public release
 metadata without authenticated premium downloads. Use Preview to verify the
 source still matches the upstream format and your installed version.
 
-To supply starting settings for another plugin, add an entry to the root file:
+To share a source with other Craftarr users, add an entry to the repository:
 
 ```yaml
 version: 1
@@ -81,13 +89,13 @@ Supported provider values are `github`, `modrinth`, `jenkins` and `custom`.
 Aliases and plugin names ignore punctuation, spaces and case. Expressions follow
 the same rules as the form. Optional `notes` explain source limitations. Unknown
 plugins have empty fields and remain unsupported/unmonitored until configured.
-A missing file provides no starting settings; invalid entries report check failures
-without stopping other sources. Existing saved settings work independently of the
-file. `STEMCRAFT_PLUGIN_MONITORING_DEFAULTS` can optionally specify another path.
+A missing repository starts from the bundled mappings. Invalid entries report check
+failures without stopping other sources. Existing manual and disabled settings work
+independently of the file.
 
-Install/upgrade scripts preserve an existing root file, including local edits.
-Review upstream changes to the shipped file when upgrading and merge desired
-changes manually. No extra migration is needed for YAML prefilling.
+Install/upgrade scripts preserve the bundled root file. App-managed settings are
+stored separately from the installed code and can be downloaded before sharing or
+backing them up. No database migration is required for the shared mode.
 
 ## Expressions and preview
 
@@ -159,6 +167,8 @@ source and any detected download link. Official/source links open in a new tab.
 
 Modrinth selects the newest eligible release for the installed Minecraft version,
 including an older compatible release when newer releases target other versions.
+It prefers stable versions and falls back to beta only when a project has no
+stable Bukkit/Paper-compatible versions; it ignores alpha versions.
 GitHub prose, Jenkins metadata and Custom URL text are not treated as explicit
 Minecraft compatibility guarantees. They report Unknown. Custom/Jenkins patterns
 may select prereleases or development builds; preview the extracted value before
@@ -190,12 +200,14 @@ and the connection is pinned to a checked address while retaining TLS hostname
 verification. This prevents DNS rebinding between validation and connection.
 Environment proxy settings are not used for these custom requests.
 
-Custom requests never follow redirects: configure the final HTTPS URL shown by
-upstream instead. They have a ten-second socket timeout, an overall read deadline,
-a 1 MiB response limit and text/JSON/XML content checks. Known artifact URL suffixes,
-archive responses and compressed responses are rejected. Download links are
-validated as HTTPS browser links and never requested by the monitor. API bodies,
-regex input text and exception details containing credentials are not logged.
+Custom requests follow at most five HTTPS redirects. Every destination is validated
+again, must resolve only to public IP addresses, and is connected through a pinned
+address with TLS hostname verification. Requests have a ten-second socket timeout,
+an overall read deadline, a 1 MiB response limit and text/JSON/XML content checks.
+Known artifact URL suffixes, archive responses and compressed responses are
+rejected. Download links are validated as HTTPS browser links and never requested by
+the monitor. API bodies, regex input text and exception details containing
+credentials are not logged.
 The structured service clients retain their 15-second timeout and 8 MiB limit.
 
 A database lease serializes scheduled/CLI/web checks, settings writes and previews
@@ -205,7 +217,7 @@ isolated per source, and request/extraction errors appear in the row or preview.
 ## Email and manual checks
 
 Scheduled checks group newly discovered updates across servers into one plain-text
-email per eligible recipient with subject `STEMCraft: Plugin updates available`.
+email per eligible recipient with subject `Craftarr: Plugin updates available`.
 The existing SMTP settings are used; Mailgun works through SMTP. Recipients follow
 the existing system-alert policy: enabled users with an email address and
 `settings.manage`, further limited to servers/content they can view. The system
@@ -239,15 +251,15 @@ checks continue. An invalid server or an active check exits with an error.
 Standard production example:
 
 ```bash
-cd /opt/stemcraft-console
-sudo -u stemcraft env STEMCRAFT_CONSOLE_ENV=/etc/stemcraft-console/console.env \
-  /opt/stemcraft-console/.venv/bin/python -m app.admin_cli check-updates
+cd /opt/craftarr
+sudo -u craftarr env CRAFTARR_CONSOLE_ENV=/etc/craftarr/console.env \
+  /opt/craftarr/.venv/bin/python -m app.admin_cli check-updates
 ```
 
 ## Deployment, migration and extension
 
 Install `requirements.txt` (includes `packaging` and `regex`), run
-`alembic upgrade head`, and restart the existing Console service. Startup also
+`alembic upgrade head`, and restart the existing Craftarr service. Startup also
 applies migrations automatically. No new service, permission or secret is needed.
 
 - `27b10c8d39a4`: upstream cache, server check snapshots, notification history and lease.
@@ -263,7 +275,7 @@ retained. Existing explicit sources that relied on project-specific suffix handl
 must configure a suitable version expression and preview it.
 
 Adding a plugin or changing its release location requires only UI settings, or a
-YAML entry to prefill settings for servers without saved configuration.
+shared YAML entry that all servers can use.
 Adding an entirely new structured service parser still requires a `Provider`
 implementation returning `Release` values and a factory option in
 `app/plugin_monitoring.py`, along with the UI option and mocked tests. The core

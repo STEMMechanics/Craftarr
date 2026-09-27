@@ -5,7 +5,7 @@ usage() {
   cat <<'EOF'
 Usage: sudo ./scripts/install.sh [OPTIONS]
 
-Installs STEMCraft Console on Ubuntu or Oracle Linux. By default the installer
+Installs Craftarr on Ubuntu or Oracle Linux. By default the installer
 uses apt or dnf to install Python 3.10+, polkit and supporting tools. Java is
 installed only when selected interactively or with --java-version.
 
@@ -79,7 +79,7 @@ fi
 # Fetch a temporary copy and hand the original arguments to that copy. When
 # run from a checkout, continue directly with the local source instead.
 if [[ -z "$SOURCE_DIR" || ! -d "$SOURCE_DIR/app" || ! -f "$SOURCE_DIR/requirements.txt" ]]; then
-  REPOSITORY=${STEMCRAFT_CONSOLE_REPOSITORY:-stemmechanics/stemcraft-console}
+  REPOSITORY=${CRAFTARR_CONSOLE_REPOSITORY:-STEMMechanics/Craftarr}
 
   for command in curl tar mktemp find; do
     command -v "$command" >/dev/null 2>&1 || {
@@ -88,15 +88,15 @@ if [[ -z "$SOURCE_DIR" || ! -d "$SOURCE_DIR/app" || ! -f "$SOURCE_DIR/requiremen
     }
   done
 
-  if [[ -n "${STEMCRAFT_CONSOLE_REF:-}" ]]; then
-    REF=$STEMCRAFT_CONSOLE_REF
+  if [[ -n "${CRAFTARR_CONSOLE_REF:-}" ]]; then
+    REF=$CRAFTARR_CONSOLE_REF
     REF_TYPE=heads
     DOWNLOAD_LABEL="development ref"
   else
     if ! LATEST_RELEASE_URL=$(curl --fail --silent --show-error --location \
       --proto '=https' --tlsv1.2 --output /dev/null --write-out '%{url_effective}' \
       "https://github.com/$REPOSITORY/releases/latest"); then
-      echo "Unable to resolve the latest published STEMCraft Console release." >&2
+      echo "Unable to resolve the latest published Craftarr release." >&2
       exit 1
     fi
     REF=${LATEST_RELEASE_URL##*/}
@@ -109,7 +109,7 @@ if [[ -z "$SOURCE_DIR" || ! -d "$SOURCE_DIR/app" || ! -f "$SOURCE_DIR/requiremen
     exit 1
   fi
 
-  TEMP_DIR=$(mktemp -d /tmp/stemcraft-console-install.XXXXXX)
+  TEMP_DIR=$(mktemp -d /tmp/craftarr-console-install.XXXXXX)
   cleanup() {
     rm -rf -- "$TEMP_DIR"
   }
@@ -117,7 +117,7 @@ if [[ -z "$SOURCE_DIR" || ! -d "$SOURCE_DIR/app" || ! -f "$SOURCE_DIR/requiremen
 
   ARCHIVE="$TEMP_DIR/source.tar.gz"
   SOURCE_URL="https://github.com/$REPOSITORY/archive/refs/$REF_TYPE/$REF.tar.gz"
-  echo "Downloading STEMCraft Console $DOWNLOAD_LABEL $REF from $REPOSITORY..."
+  echo "Downloading Craftarr $DOWNLOAD_LABEL $REF from $REPOSITORY..."
   curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
     "$SOURCE_URL" --output "$ARCHIVE"
   tar -xzf "$ARCHIVE" -C "$TEMP_DIR"
@@ -135,7 +135,7 @@ fi
 
 # shellcheck disable=SC1091
 source "$SOURCE_DIR/scripts/common.sh"
-banner "STEMCraft Console Installer"
+banner "Craftarr Installer"
 
 if [[ ! -r /etc/os-release ]]; then
   echo "Unable to identify this Linux distribution." >&2
@@ -257,14 +257,14 @@ PYTHON_VERSION=$(
   exit 1
 }
 
-INSTALL_DIR=/opt/stemcraft-console
-DATA_DIR=/var/lib/stemcraft-console
+INSTALL_DIR=/opt/craftarr
+DATA_DIR=/var/lib/craftarr
 SERVER_DIR=/srv/minecraft
-CONFIG_DIR=/etc/stemcraft-console
-SERVICE_USER=stemcraft
-SERVICE_GROUP=stemcraft
+CONFIG_DIR=/etc/craftarr
+SERVICE_USER=craftarr
+SERVICE_GROUP=craftarr
 
-for required in app migrations alembic.ini requirements.txt plugin-monitoring.yml deploy/stemcraft-console.service deploy/stemcraft-server@.service deploy/50-stemcraft-console.rules deploy/stemcraft-console scripts/common.sh; do
+for required in app migrations alembic.ini requirements.txt plugin-monitoring.yml deploy/craftarr-console.service deploy/craftarr-server@.service deploy/50-craftarr-console.rules deploy/craftarr-console scripts/common.sh; do
   [[ -e "$SOURCE_DIR/$required" ]] || {
     echo "Installation source is incomplete: missing $required" >&2
     exit 1
@@ -281,13 +281,13 @@ REPAIR_INSTALL=false
 if [[ -e "$INSTALL_DIR/app" ]]; then
   REPAIR_INSTALL=true
   section "Existing installation found; repairing application and service files"
-  systemctl stop stemcraft-console.service 2>/dev/null || true
+  systemctl stop craftarr-console.service 2>/dev/null || true
 fi
 
 CONFIG_FILE=$CONFIG_DIR/console.env
 if [[ -f "$CONFIG_FILE" ]]; then
-  CONFIGURED_HOST=$(sed -n 's/^STEMCRAFT_CONSOLE_HOST=//p' "$CONFIG_FILE" | tail -1)
-  CONFIGURED_PORT=$(sed -n 's/^STEMCRAFT_CONSOLE_PORT=//p' "$CONFIG_FILE" | tail -1)
+  CONFIGURED_HOST=$(sed -n 's/^CRAFTARR_CONSOLE_HOST=//p' "$CONFIG_FILE" | tail -1)
+  CONFIGURED_PORT=$(sed -n 's/^CRAFTARR_CONSOLE_PORT=//p' "$CONFIG_FILE" | tail -1)
 else
   CONFIGURED_HOST=
   CONFIGURED_PORT=
@@ -333,7 +333,7 @@ fi
 install -d -m 0755 -o root -g root "$INSTALL_DIR"
 install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$DATA_DIR" "$DATA_DIR/upgrades" "$SERVER_DIR"
 install -d -m 0750 -o root -g "$SERVICE_GROUP" "$CONFIG_DIR"
-section "Installing STEMCraft Console application"
+section "Installing Craftarr application"
 cp -a "$SOURCE_DIR/app" "$SOURCE_DIR/migrations" "$SOURCE_DIR/alembic.ini" "$SOURCE_DIR/requirements.txt" "$INSTALL_DIR/"
 if [[ ! -f "$INSTALL_DIR/plugin-monitoring.yml" ]]; then
   cp -a "$SOURCE_DIR/plugin-monitoring.yml" "$INSTALL_DIR/"
@@ -351,21 +351,21 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
   SECRET=$("$INSTALL_DIR/.venv/bin/python" -c 'import secrets; print(secrets.token_urlsafe(48))')
   install -m 0640 -o root -g "$SERVICE_GROUP" /dev/null "$CONFIG_FILE"
   {
-    echo "STEMCRAFT_CONSOLE_SECRET=$SECRET"
-    echo "STEMCRAFT_CONSOLE_DATABASE=$DATA_DIR/stemcraft-console.db"
-    echo "STEMCRAFT_CONSOLE_SERVER_ROOT=$SERVER_DIR"
-    echo "STEMCRAFT_CONSOLE_HOST=$BIND_HOST"
-    echo "STEMCRAFT_CONSOLE_PORT=$WEB_PORT"
+    echo "CRAFTARR_CONSOLE_SECRET=$SECRET"
+    echo "CRAFTARR_CONSOLE_DATABASE=$DATA_DIR/craftarr.db"
+    echo "CRAFTARR_CONSOLE_SERVER_ROOT=$SERVER_DIR"
+    echo "CRAFTARR_CONSOLE_HOST=$BIND_HOST"
+    echo "CRAFTARR_CONSOLE_PORT=$WEB_PORT"
     # Enable secure cookies after an HTTPS reverse proxy has been configured.
-    echo "STEMCRAFT_CONSOLE_COOKIE_SECURE=false"
+    echo "CRAFTARR_CONSOLE_COOKIE_SECURE=false"
   } > "$CONFIG_FILE"
 else
-  LEGACY_ADMIN_USER=$(sed -n 's/^STEMCRAFT_CONSOLE_ADMIN_USER=//p' "$CONFIG_FILE" | tail -1)
-  LEGACY_ADMIN_PASSWORD=$(sed -n 's/^STEMCRAFT_CONSOLE_ADMIN_PASSWORD=//p' "$CONFIG_FILE" | tail -1)
-  sed -i '/^STEMCRAFT_CONSOLE_HOST=/d;/^STEMCRAFT_CONSOLE_PORT=/d' "$CONFIG_FILE"
+  LEGACY_ADMIN_USER=$(sed -n 's/^CRAFTARR_CONSOLE_ADMIN_USER=//p' "$CONFIG_FILE" | tail -1)
+  LEGACY_ADMIN_PASSWORD=$(sed -n 's/^CRAFTARR_CONSOLE_ADMIN_PASSWORD=//p' "$CONFIG_FILE" | tail -1)
+  sed -i '/^CRAFTARR_CONSOLE_HOST=/d;/^CRAFTARR_CONSOLE_PORT=/d' "$CONFIG_FILE"
   {
-    echo "STEMCRAFT_CONSOLE_HOST=$BIND_HOST"
-    echo "STEMCRAFT_CONSOLE_PORT=$WEB_PORT"
+    echo "CRAFTARR_CONSOLE_HOST=$BIND_HOST"
+    echo "CRAFTARR_CONSOLE_PORT=$WEB_PORT"
   } >> "$CONFIG_FILE"
 fi
 
@@ -373,7 +373,7 @@ section "Preparing database and administrator account"
 (
   cd "$INSTALL_DIR"
   runuser -u "$SERVICE_USER" -- env \
-    STEMCRAFT_CONSOLE_ENV="$CONFIG_FILE" \
+    CRAFTARR_CONSOLE_ENV="$CONFIG_FILE" \
     "$INSTALL_DIR/.venv/bin/python" -c \
     'from app.migrations import upgrade_database; upgrade_database()'
 )
@@ -382,29 +382,25 @@ INITIAL_ADMIN_USER=${LEGACY_ADMIN_USER:-admin}
 INITIAL_ADMIN_PASSWORD=$(
   cd "$INSTALL_DIR"
   runuser -u "$SERVICE_USER" -- env \
-    STEMCRAFT_CONSOLE_ENV="$CONFIG_FILE" \
-    STEMCRAFT_BOOTSTRAP_ADMIN_PASSWORD="$LEGACY_ADMIN_PASSWORD" \
+    CRAFTARR_CONSOLE_ENV="$CONFIG_FILE" \
+    CRAFTARR_BOOTSTRAP_ADMIN_PASSWORD="$LEGACY_ADMIN_PASSWORD" \
     "$INSTALL_DIR/.venv/bin/python" -m app.admin_cli ensure-admin \
     --username "$INITIAL_ADMIN_USER"
 )
-sed -i '/^STEMCRAFT_CONSOLE_ADMIN_USER=/d;/^STEMCRAFT_CONSOLE_ADMIN_PASSWORD=/d' "$CONFIG_FILE"
+sed -i '/^CRAFTARR_CONSOLE_ADMIN_USER=/d;/^CRAFTARR_CONSOLE_ADMIN_PASSWORD=/d' "$CONFIG_FILE"
 
 section "Installing systemd services"
-install -m 0644 "$SOURCE_DIR/deploy/stemcraft-console.service" /etc/systemd/system/stemcraft-console.service
-install -m 0644 "$SOURCE_DIR/deploy/stemcraft-server@.service" /etc/systemd/system/stemcraft-server@.service
+install -m 0644 "$SOURCE_DIR/deploy/craftarr-console.service" /etc/systemd/system/craftarr-console.service
+install -m 0644 "$SOURCE_DIR/deploy/craftarr-server@.service" /etc/systemd/system/craftarr-server@.service
 install -d -m 0755 /etc/polkit-1/rules.d
-install -m 0644 "$SOURCE_DIR/deploy/50-stemcraft-console.rules" /etc/polkit-1/rules.d/50-stemcraft-console.rules
-# Oracle Linux and other RHEL-family systems commonly exclude
-# /usr/local/sbin from sudo's secure_path. Install the command in /usr/bin so
-# `sudo stemcraft-console ...` works consistently, while retaining the legacy
-# location for existing scripts that use its absolute path.
-install -m 0755 "$SOURCE_DIR/deploy/stemcraft-console" /usr/bin/stemcraft-console
-install -m 0755 "$SOURCE_DIR/deploy/stemcraft-console" /usr/local/sbin/stemcraft-console
+install -m 0644 "$SOURCE_DIR/deploy/50-craftarr-console.rules" /etc/polkit-1/rules.d/50-craftarr-console.rules
+install -m 0755 "$SOURCE_DIR/deploy/craftarr-console" /usr/bin/craftarr-console
+install -m 0755 "$SOURCE_DIR/deploy/craftarr-console" /usr/local/sbin/craftarr-console
 
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$INSTALL_DIR"
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$DATA_DIR" "$SERVER_DIR"
 systemctl daemon-reload
-systemctl enable --now stemcraft-console.service
+systemctl enable --now craftarr-console.service
 
 READY=false
 HEALTH_HOST=$BIND_HOST
@@ -420,7 +416,7 @@ for _attempt in {1..30}; do
     READY=true
     break
   fi
-  if ! systemctl is-active --quiet stemcraft-console.service; then
+  if ! systemctl is-active --quiet craftarr-console.service; then
     break
   fi
   sleep 1
@@ -428,37 +424,37 @@ done
 
 if [[ "$READY" != true ]]; then
   echo >&2
-  echo "STEMCraft Console was installed, but its service did not start." >&2
+  echo "Craftarr was installed, but its service did not start." >&2
   echo "No application data or login details have been removed." >&2
   if [[ -n "$INITIAL_ADMIN_PASSWORD" ]]; then
     printf 'Initial administrator: %s\nInitial password: %s\n' "$INITIAL_ADMIN_USER" "$INITIAL_ADMIN_PASSWORD" >&2
   fi
   echo >&2
   echo "Useful recovery commands:" >&2
-  echo "  sudo journalctl -u stemcraft-console.service --no-pager -n 200" >&2
-  echo "  sudo systemctl restart stemcraft-console.service" >&2
-  echo "  curl -fsSL https://dev.stemcraft.com.au/install.sh | sudo bash" >&2
+  echo "  sudo journalctl -u craftarr-console.service --no-pager -n 200" >&2
+  echo "  sudo systemctl restart craftarr-console.service" >&2
+  echo "  curl -fsSL https://raw.githubusercontent.com/STEMMechanics/Craftarr/main/scripts/install.sh | sudo bash" >&2
   echo >&2
   echo "Recent service logs:" >&2
-  journalctl -u stemcraft-console.service --no-pager -n 100 >&2
+  journalctl -u craftarr-console.service --no-pager -n 100 >&2
   exit 1
 fi
 
-banner "STEMCraft Console installation complete"
+banner "Craftarr installation complete"
 cat <<EOF
 The service is bound to $BIND_HOST:$WEB_PORT.
 
 Next steps:
   1. Configure an HTTPS reverse proxy to $BIND_HOST:$WEB_PORT.
   2. Open that HTTPS address and sign in with the details below.
-  3. Set STEMCRAFT_CONSOLE_COOKIE_SECURE=true in
-     /etc/stemcraft-console/console.env and restart the service.
+  3. Set CRAFTARR_CONSOLE_COOKIE_SECURE=true in
+     /etc/craftarr/console.env and restart the service.
 
 Service commands:
-  sudo stemcraft-console status
-  sudo stemcraft-console restart
-  sudo stemcraft-console logs
-  sudo stemcraft-console reset-password [USERNAME]
+  sudo craftarr-console status
+  sudo craftarr-console restart
+  sudo craftarr-console logs
+  sudo craftarr-console reset-password [USERNAME]
 EOF
 
 if [[ -n "$INITIAL_ADMIN_PASSWORD" ]]; then
