@@ -93,9 +93,9 @@ Contributors are authors of merged pull requests, ordered by contribution count 
 
 Financial support helps fund Craftarr development, hosting, testing and continued maintenance.
 
-<p><a href="https://www.stemmechanics.com.au/sponsor?project=craftarr">Support Craftarr through STEMMechanics</a></p>
+<p><a href="https://www.stemmechanics.com.au/sponsor?ref=craftarr">Support Craftarr through STEMMechanics</a></p>
 
-- **Card:** One-time and recurring contributions are available through Square on the [sponsorship page](https://www.stemmechanics.com.au/sponsor?project=craftarr).
+- **Card:** One-time and recurring contributions are available through Square on the [sponsorship page](https://www.stemmechanics.com.au/sponsor?ref=craftarr).
 - **Bitcoin:** Donation address coming soon.
 
 ## Contributing
