@@ -19,7 +19,7 @@
 
 Craftarr is an open-source web management panel for Minecraft server operators. It brings server controls, a live console, player and plugin management, backups, monitoring and automation into one place.
 
-Developed by **STEMMechanics**, Craftarr is an independent, general-purpose project that is also used internally to power STEMCraft.
+Developed by [STEMMechanics](https://www.stemmechanics.com.au/), Craftarr is an independent, general-purpose project that is also used internally to power STEMCraft.
 
 ## Features
 
