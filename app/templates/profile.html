@@ -1,110 +1,31 @@
 {% extends "base.html" %}
 
-{% block title %}
-Profile | STEMCraft Console
-{% endblock %}
+{% block title %}My account | Craftarr{% endblock %}
 
-{% block body %}
-
-<div class="layout">
-
-    <aside class="sidebar">
-
-        <div class="brand">
-            STEMCraft Console
+{% block content %}
+<div class="account-page" data-page-title="My account">
+    <section class="page-header">
+        <div>
+            <h1>My account</h1>
+            <p>Change your name or password.</p>
         </div>
+    </section>
 
-        <nav>
-
-            <a href="/dashboard">
-                Dashboard
-            </a>
-
-            <a href="/servers">
-                Servers
-            </a>
-
-            {% if user.can("users.manage") %}
-
-            <a href="/users">
-                Users
-            </a>
-
-            {% endif %}
-
-        </nav>
-
-    </aside>
-
-
-    <main>
-
-        <header>
-
-            <div></div>
-
-            <div class="account">
-
-                {{ user.username }}
-
-                <span class="role">
-                    {{ user.role_name }}
-                </span>
-
-                <a href="/logout">
-                    Logout
-                </a>
-
+    <section class="overview-card settings-section">
+        <div class="card-header"><i class="fa-solid fa-user" aria-hidden="true"></i> Account details</div>
+        <form class="settings-content account-form" method="post" action="/profile">
+            <label class="property-field">
+                <span>Username</span>
+                <input name="username" value="{{ user.username }}" required>
+            </label>
+            <label class="property-field">
+                <span>New password</span>
+                <input name="password" type="password" minlength="8" placeholder="Leave blank to keep your current password">
+            </label>
+            <div class="settings-save-row">
+                <button class="button success" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i> Save changes</button>
             </div>
-
-        </header>
-
-
-        <section class="content">
-
-            <h1>My Account</h1>
-
-            <div class="panel">
-
-                <form
-                    method="post"
-                    action="/profile"
-                >
-
-                    <label>
-                        Username
-                    </label>
-
-                    <input
-                        name="username"
-                        value="{{ user.username }}"
-                        required
-                    >
-
-
-                    <label>
-                        New password
-                    </label>
-
-                    <input
-                        name="password"
-                        type="password"
-                        minlength="8"
-                        placeholder="Leave blank to keep current password"
-                    >
-
-                    <button class="button">
-                        Save Changes
-                    </button>
-
-                </form>
-
-            </div>
-
-        </section>
-
-    </main>
-
+        </form>
+    </section>
 </div>
-
 {% endblock %}

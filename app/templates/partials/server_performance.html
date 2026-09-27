@@ -1,0 +1,22 @@
+<div class="server-performance-page" data-server-id="{{ server.id }}" data-page-title="Performance">
+  <section class="performance-intro">
+    <div class="performance-icon" aria-hidden="true"><i class="fa-solid fa-chart-line"></i></div>
+    <div><span class="eyebrow">SERVER HEALTH</span><h1>Performance</h1><p>See how your server has been using its resources.</p></div>
+    <label class="metrics-range-label" for="metrics-range"><span>Show</span>
+      <select id="metrics-range" onchange="loadServerMetrics()" aria-label="Choose chart time range">
+        <option value="1">1 hour</option><option value="6">6 hours</option><option value="24" selected>24 hours</option>
+        <option value="168">7 days</option><option value="720">30 days</option>
+      </select>
+    </label>
+  </section>
+
+  <section class="overview-card performance-chart-panel" aria-label="Server performance history">
+    <div class="performance-chart-grid">
+      <article class="performance-chart-card metric-cpu-card"><div class="performance-chart-heading"><span class="metric-icon"><i class="fa-solid fa-microchip" aria-hidden="true"></i></span><div><h2>CPU use</h2><p>Processor used by the server</p></div></div><canvas id="metric-cpu" height="180" role="img" aria-label="CPU use over time"></canvas></article>
+      <article class="performance-chart-card metric-memory-card"><div class="performance-chart-heading"><span class="metric-icon"><i class="fa-solid fa-memory" aria-hidden="true"></i></span><div><h2>Memory</h2><p>Server memory in use</p></div></div><canvas id="metric-memory" height="180" role="img" aria-label="Memory use over time"></canvas></article>
+      <article class="performance-chart-card metric-players-card"><div class="performance-chart-heading"><span class="metric-icon"><i class="fa-solid fa-users" aria-hidden="true"></i></span><div><h2>Players</h2><p>Players online at each check</p></div></div><canvas id="metric-players" height="180" role="img" aria-label="Players online over time"></canvas></article>
+      <article class="performance-chart-card metric-uptime-card"><div class="performance-chart-heading"><span class="metric-icon"><i class="fa-solid fa-clock" aria-hidden="true"></i></span><div><h2>Time online</h2><p>How long each server run lasted</p></div></div><canvas id="metric-uptime" height="180" role="img" aria-label="Server uptime over time"></canvas></article>
+    </div>
+    <div class="performance-chart-note"><i class="fa-solid fa-circle-info" aria-hidden="true"></i><span>Latest and peak values appear below each chart. Point to the line to see when a reading was recorded.</span></div>
+  </section>
+</div>

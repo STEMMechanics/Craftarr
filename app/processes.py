@@ -1,5 +1,4 @@
 import subprocess
-import os
 import shutil
 import socket
 import json
@@ -9,6 +8,7 @@ import sys
 import threading
 import time
 import psutil
+from .env import getenv
 
 from collections import deque
 from pathlib import Path
@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 
 processes: dict[int, subprocess.Popen] = {}
+process_lifecycle_states: dict[int, str] = {}
 
 console_buffers: dict[int, deque] = {}
 
@@ -45,9 +46,10 @@ class ServerProcessConfig:
 
 server_configs: dict[int, ServerProcessConfig] = {}
 SERVICE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}$")
-SYSTEMD_UNIT_PREFIX = os.getenv("STEMCRAFT_SYSTEMD_UNIT_PREFIX", "stemcraft-server@")
-SYSTEMD_SOCKET_DIR = Path(os.getenv("STEMCRAFT_SYSTEMD_SOCKET_DIR", "/run/stemcraft-console"))
-SYSTEMD_PLAYERS_QUERY = b"__stemcraft_online_players__"
+SYSTEMD_UNIT_PREFIX = getenv("CRAFTARR_SYSTEMD_UNIT_PREFIX", "craftarr-server@")
+SYSTEMD_SOCKET_DIR = Path(getenv("CRAFTARR_SYSTEMD_SOCKET_DIR", "/run/craftarr"))
+SYSTEMD_PLAYERS_QUERY = b"__craftarr_online_players__"
+SERVER_READY_PATTERN = re.compile(r"\bDone\s+\(|For help,\s*type", re.IGNORECASE)
 unsupported_player_query_sockets: dict[int, tuple[int, int]] = {}
 player_query_lock = threading.Lock()
 
@@ -79,6 +81,7 @@ def register_server(server) -> None:
 def unregister_server(server_id: int) -> None:
     server_configs.pop(server_id, None)
     processes.pop(server_id, None)
+    process_lifecycle_states.pop(server_id, None)
     console_buffers.pop(server_id, None)
     console_threads.pop(server_id, None)
     stats_processes.pop(server_id, None)
@@ -92,12 +95,16 @@ def _systemd_config(server_id: int) -> ServerProcessConfig | None:
     return config if config and config.backend == "systemd" else None
 
 
+def _systemd_unit_name(config: ServerProcessConfig) -> str:
+    return f"{SYSTEMD_UNIT_PREFIX}{config.service_name}.service"
+
+
 def _systemctl(config: ServerProcessConfig, action: str, check: bool = True):
     if action not in {
         "start", "stop", "restart", "show", "enable", "disable", "is-enabled",
     }:
         raise ValueError("Invalid systemctl action")
-    unit = f"{SYSTEMD_UNIT_PREFIX}{config.service_name}.service"
+    unit = _systemd_unit_name(config)
     command = ["systemctl", action, unit]
     if action == "show":
         command.extend(["--property=ActiveState", "--property=MainPID"])
@@ -115,10 +122,13 @@ def _systemd_status(config: ServerProcessConfig) -> dict:
     if result.returncode != 0:
         return {
             "running": False,
+            "state": "stopped",
+            "console_available": False,
             "pid": None,
             "backend": "systemd",
+            "active_state": "unknown",
             "service_name": config.service_name,
-            "unit_name": f"{SYSTEMD_UNIT_PREFIX}{config.service_name}.service",
+            "unit_name": _systemd_unit_name(config),
             "enabled_at_boot": None,
         }
     properties = {}
@@ -133,16 +143,66 @@ def _systemd_status(config: ServerProcessConfig) -> dict:
         pid = pid_value or None
     except ValueError:
         pid = None
+    active_states = {"active", "activating", "deactivating"}
+    if active == "activating":
+        state = "starting"
+    elif active == "deactivating":
+        state = "stopping"
+    elif active == "active":
+        state = _read_systemd_lifecycle_state(config, pid) or "running"
+    elif active in {"inactive", "failed"}:
+        state = "stopped"
+    else:
+        state = "unknown"
+    running = active in active_states
+    console_available = running and _systemd_console_available(config)
     enabled_result = _systemctl(config, "is-enabled", check=False)
     enabled = enabled_result.returncode == 0
     return {
-        "running": active in {"active", "activating"},
+        "running": running,
+        "state": state,
+        "console_available": console_available,
         "pid": pid,
         "backend": "systemd",
+        "active_state": active,
         "service_name": config.service_name,
-        "unit_name": f"{SYSTEMD_UNIT_PREFIX}{config.service_name}.service",
+        "unit_name": _systemd_unit_name(config),
         "enabled_at_boot": enabled,
     }
+
+
+def _read_systemd_lifecycle_state(
+    config: ServerProcessConfig,
+    main_pid: int | None,
+) -> str | None:
+    status_path = SYSTEMD_SOCKET_DIR / f"{config.service_name}.status"
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(status, dict):
+        return None
+    state = status.get("state")
+    if state not in {"starting", "running", "stopping"}:
+        return None
+    try:
+        status_pid = int(status.get("pid"))
+    except (TypeError, ValueError):
+        return None
+    if main_pid and status_pid != main_pid:
+        return None
+    return state
+
+
+def _systemd_console_available(config: ServerProcessConfig) -> bool:
+    endpoint = SYSTEMD_SOCKET_DIR / f"{config.service_name}.sock"
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(1)
+            client.connect(str(endpoint))
+        return True
+    except OSError:
+        return False
 
 
 def set_systemd_enabled(server_id: int, enabled: bool) -> None:
@@ -268,6 +328,12 @@ def _read_console(
 
             line = line.rstrip()
 
+            if (
+                process_lifecycle_states.get(server_id) == "starting"
+                and SERVER_READY_PATTERN.search(line)
+            ):
+                process_lifecycle_states[server_id] = "running"
+
             console_buffers[
                 server_id
             ].append(line)
@@ -359,6 +425,7 @@ def start_server(
     processes[
         server_id
     ] = process
+    process_lifecycle_states[server_id] = "starting"
 
     thread = threading.Thread(
         target=_read_console,
@@ -433,6 +500,7 @@ def stop_server(
     )
 
     process.stdin.flush()
+    process_lifecycle_states[server_id] = "stopping"
 
 
 def run_pre_stop_commands(server_id: int, commands: str) -> None:
@@ -528,6 +596,7 @@ def kill_server(
         server_id,
         None,
     )
+    process_lifecycle_states.pop(server_id, None)
     stats_processes.pop(server_id, None)
     stats_process_roots.pop(server_id, None)
 
@@ -546,7 +615,10 @@ def server_status(
 
         return {
             "running": False,
+            "state": "stopped",
+            "console_available": False,
             "pid": None,
+            "backend": "subprocess",
         }
 
     return_code = (
@@ -559,19 +631,30 @@ def server_status(
             server_id,
             None,
         )
+        process_lifecycle_states.pop(server_id, None)
         stats_processes.pop(server_id, None)
         stats_process_roots.pop(server_id, None)
 
         return {
             "running": False,
+            "state": "stopped",
+            "console_available": False,
             "pid": None,
+            "backend": "subprocess",
             "exit_code":
                 return_code,
         }
 
+    state = process_lifecycle_states.get(server_id, "running")
+    console_available = bool(
+        process.stdin and not getattr(process.stdin, "closed", False)
+    )
     return {
         "running": True,
+        "state": state,
+        "console_available": console_available,
         "pid": process.pid,
+        "backend": "subprocess",
     }
 
 
@@ -664,7 +747,7 @@ def get_console(
 ):
     config = _systemd_config(server_id)
     if config:
-        unit = f"{SYSTEMD_UNIT_PREFIX}{config.service_name}.service"
+        unit = _systemd_unit_name(config)
         result = subprocess.run(
             ["journalctl", "--unit", unit, "--lines", "500", "--no-pager", "--output", "cat"],
             capture_output=True, text=True, timeout=10, check=False,
@@ -684,7 +767,7 @@ def console_cursor(server_id: int):
     """Capture a backend-specific position before issuing a console command."""
     config = _systemd_config(server_id)
     if config:
-        unit = f"{SYSTEMD_UNIT_PREFIX}{config.service_name}.service"
+        unit = _systemd_unit_name(config)
         result = subprocess.run(
             ["journalctl", "--unit", unit, "--lines=0", "--show-cursor", "--no-pager"],
             capture_output=True, text=True, timeout=10, check=False,
@@ -738,7 +821,7 @@ def wait_for_console_message(
             if not config or not position:
                 lines = []
             else:
-                unit = f"{SYSTEMD_UNIT_PREFIX}{config.service_name}.service"
+                unit = _systemd_unit_name(config)
                 result = subprocess.run(
                     ["journalctl", "--unit", unit, f"--after-cursor={position}", "--no-pager", "--output", "cat"],
                     capture_output=True, text=True, timeout=10, check=False,

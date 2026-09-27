@@ -1,4 +1,11 @@
+import json
 import os
+import re
+import shutil
+import tempfile
+import uuid
+import zipfile
+from .env import getenv
 
 from pathlib import Path
 
@@ -7,13 +14,16 @@ from dotenv import load_dotenv
 from fastapi import (
     APIRouter,
     Depends,
+    File,
     Form,
     HTTPException,
     Request,
+    UploadFile,
 )
 
 from fastapi.responses import (
     HTMLResponse,
+    FileResponse,
     JSONResponse,
     RedirectResponse,
 )
@@ -21,11 +31,13 @@ from fastapi.responses import (
 from fastapi.templating import Jinja2Templates
 
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 
 from .database import get_db
 
 from .models import (
     Server,
+    ServerUpdateCheck,
     User,
 )
 
@@ -49,6 +61,8 @@ from .processes import (
     start_server,
     stop_server,
     register_server,
+    console_cursor,
+    wait_for_console_message,
     MEMORY_PATTERN,
     SERVICE_PATTERN,
     systemd_available,
@@ -76,11 +90,18 @@ from .web_users import (
 from .processes import (
     server_process_stats,
 )
+from .config import MAX_UPLOAD_BYTES
+from .server_archives import (
+    SETTINGS_EXPORT_FILENAME,
+    extract_server_archive,
+    server_settings_document,
+    validate_portable_settings,
+)
 
 
 load_dotenv(
-    os.getenv(
-        "STEMCRAFT_CONSOLE_ENV",
+    getenv(
+        "CRAFTARR_CONSOLE_ENV",
         ".env",
     )
 )
@@ -93,8 +114,8 @@ templates = Jinja2Templates(
 
 
 SERVER_ROOT = Path(
-    os.getenv(
-        "STEMCRAFT_CONSOLE_SERVER_ROOT",
+    getenv(
+        "CRAFTARR_CONSOLE_SERVER_ROOT",
         "minecraft-servers",
     )
 ).expanduser().resolve()
@@ -237,6 +258,7 @@ def server_port_warning(
 def servers_page(
     request: Request,
     db: Session = Depends(get_db),
+    active_server_id: int | None = None,
 ):
     user = current_web_user(
         request,
@@ -260,13 +282,23 @@ def servers_page(
 
         servers = user.servers
 
-    return templates.TemplateResponse(
-        request=request,
-        name="servers.html",
-        context={
-            "user": user,
-            "servers": servers,
-        },
+    context = build_web_context(db, user)
+    active_server = next(
+        (server for server in servers if server.id == active_server_id),
+        context["active_server"],
+    )
+    context.update({
+        "user": user,
+        "servers": servers,
+        "available_servers": servers,
+        "active_server": active_server,
+    })
+
+    return render_page(
+        request,
+        "servers.html",
+        "partials/servers.html",
+        context,
     )
 
 
@@ -846,6 +878,9 @@ def import_servers_page(
         "detected_servers":
             detected,
 
+        "max_upload_bytes":
+            MAX_UPLOAD_BYTES,
+
         "page_title":
             "Import Server",
 
@@ -911,6 +946,144 @@ def server_detail(
         "server_detail.html",
         "partials/server_detail.html",
         context,
+    )
+
+
+@router.get("/servers/{server_id:int}/export")
+def export_server_archive(
+    server_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return RedirectResponse("/login")
+    if not server or not has_permission(user, "files.view"):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    requested_root = Path(server.directory)
+    if requested_root.is_symlink():
+        raise HTTPException(status_code=400, detail="The server directory cannot be a symbolic link")
+    try:
+        server_root = requested_root.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise HTTPException(status_code=404, detail="Server directory not found") from None
+    if not server_root.is_dir():
+        raise HTTPException(status_code=404, detail="Server directory not found")
+
+    archive_root = re.sub(r"[^A-Za-z0-9_. -]+", "-", server_root.name).strip(" .")
+    if not archive_root:
+        archive_root = f"server-{server.id}"
+    running = bool(server_status(server.id).get("running"))
+    temporary = tempfile.NamedTemporaryFile(
+        prefix="craftarr-server-export-",
+        suffix=".zip",
+        delete=False,
+    )
+    archive_path = Path(temporary.name)
+    temporary.close()
+
+    saves_disabled = False
+    try:
+        if running:
+            cursor = console_cursor(server.id)
+            send_command(server.id, "save-all flush")
+            saved = wait_for_console_message(
+                server.id,
+                ["Saved the game", "Saved the world", "Saving complete"],
+                timeout=15,
+                cursor=cursor,
+            )
+            if not saved:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Minecraft did not finish saving. Try exporting again.",
+                )
+            send_command(server.id, "save-off")
+            saves_disabled = True
+
+        with zipfile.ZipFile(
+            archive_path,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=2,
+            ) as archive:
+            def raise_walk_error(error):
+                raise error
+
+            for current, directories, files in os.walk(
+                server_root,
+                followlinks=False,
+                onerror=raise_walk_error,
+            ):
+                current_path = Path(current)
+                if any((current_path / name).is_symlink() for name in directories):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Replace symbolic links in the server folder before exporting it",
+                    )
+                relative_directory = current_path.relative_to(server_root)
+                if any("\\" in part for part in relative_directory.parts):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="A server path contains a character that cannot be safely archived",
+                    )
+                if relative_directory.parts:
+                    archive.writestr(
+                        f"{archive_root}/{relative_directory.as_posix()}/",
+                        b"",
+                    )
+                for filename in files:
+                    path = current_path / filename
+                    if path.is_symlink():
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Replace symbolic links in the server folder before exporting it",
+                        )
+                    if not path.is_file():
+                        raise HTTPException(
+                            status_code=400,
+                            detail="The server folder contains a special file that cannot be exported",
+                        )
+                    relative_file = path.relative_to(server_root)
+                    if any("\\" in part for part in relative_file.parts):
+                        raise HTTPException(
+                            status_code=400,
+                            detail="A server path contains a character that cannot be safely archived",
+                        )
+                    archive.write(
+                        path,
+                        f"{archive_root}/{relative_file.as_posix()}",
+                    )
+
+            settings_data = json.dumps(
+                server_settings_document(server),
+                ensure_ascii=False,
+                indent=2,
+            )
+            archive.writestr(SETTINGS_EXPORT_FILENAME, settings_data)
+    except HTTPException:
+        archive_path.unlink(missing_ok=True)
+        raise
+    except Exception as error:
+        archive_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unable to export server: {error}",
+        ) from error
+    finally:
+        if saves_disabled:
+            try:
+                send_command(server.id, "save-on")
+            except Exception:
+                pass
+
+    return FileResponse(
+        archive_path,
+        media_type="application/zip",
+        filename=f"{archive_root}-server.zip",
+        headers={"Cache-Control": "no-store"},
+        background=BackgroundTask(lambda: archive_path.unlink(missing_ok=True)),
     )
 
 
@@ -1327,6 +1500,8 @@ def web_console_data(
         "running",
         False,
     )
+    state = status.get("state", "running" if running else "stopped")
+    console_available = bool(status.get("console_available"))
 
 
     # While running, use the live console
@@ -1334,7 +1509,9 @@ def web_console_data(
     if running:
 
         return {
-            "running": True,
+            "running": running,
+            "state": state,
+            "console_available": console_available,
             "source": "console",
 
             "lines":
@@ -1356,6 +1533,8 @@ def web_console_data(
 
         return {
             "running": False,
+            "state": state,
+            "console_available": False,
             "source": "none",
             "lines": [],
         }
@@ -1379,6 +1558,8 @@ def web_console_data(
 
     return {
         "running": False,
+        "state": state,
+        "console_available": False,
         "source": "latest.log",
         "lines": lines,
     }
@@ -1436,6 +1617,176 @@ def console_page(
         "partials/console.html",
         context,
     )
+
+
+@router.post("/api/web/servers/import/archive")
+async def import_server_archive(
+    request: Request,
+    archive_file: UploadFile = File(...),
+    name: str = Form(...),
+    process_backend: str = Form(default="systemd"),
+    db: Session = Depends(get_db),
+):
+    user = current_web_user(request, db)
+    if not user:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not has_permission(user, "servers.create"):
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+    if process_backend not in {"subprocess", "systemd"}:
+        return JSONResponse({"error": "Invalid process backend"}, status_code=400)
+    if process_backend == "systemd" and not systemd_available():
+        return JSONResponse(
+            {"error": "Systemd services are only available on Linux hosts running systemd"},
+            status_code=400,
+        )
+
+    name = name.strip()
+    if not name:
+        return JSONResponse({"error": "Server name is required"}, status_code=400)
+    if len(name) > 100:
+        return JSONResponse({"error": "Server name cannot exceed 100 characters"}, status_code=400)
+    name_slug = re.sub(r"[^a-z0-9-]+", "-", name.casefold().replace(" ", "-"))
+    name_slug = re.sub(r"-+", "-", name_slug).strip("-")[:100]
+    if not name_slug:
+        return JSONResponse(
+            {"error": "Server name must contain at least one letter or number"},
+            status_code=400,
+        )
+
+    if db.query(Server).filter(Server.name == name).first():
+        return JSONResponse({"error": "Server name already exists"}, status_code=409)
+
+    directory_path = SERVER_ROOT / name_slug
+    service_name = name_slug
+    if not SERVICE_PATTERN.fullmatch(service_name):
+        return JSONResponse({"error": "Server name cannot be used for a service name"}, status_code=400)
+    if (
+        directory_path.is_symlink()
+        or directory_path.exists()
+        or db.query(Server).filter(Server.directory == str(directory_path)).first()
+    ):
+        return JSONResponse(
+            {"error": f"Server directory already exists: {directory_path}"},
+            status_code=409,
+        )
+    if db.query(Server).filter(Server.service_name == service_name).first():
+        return JSONResponse({"error": "Systemd service name is already in use"}, status_code=409)
+
+    temporary_archive = None
+    staging_root = None
+    installed_directory = False
+    try:
+        temporary = tempfile.NamedTemporaryFile(
+            prefix=".craftarr-upload-",
+            suffix=".zip",
+            dir=SERVER_ROOT,
+            delete=False,
+        )
+        temporary_archive = Path(temporary.name)
+        written = 0
+        with temporary as output:
+            while chunk := await archive_file.read(1024 * 1024):
+                written += len(chunk)
+                if written > MAX_UPLOAD_BYTES:
+                    raise ValueError("The uploaded ZIP is larger than the configured upload limit")
+                output.write(chunk)
+        if written == 0:
+            raise ValueError("Choose a ZIP archive to upload")
+
+        staging_root = SERVER_ROOT / f".craftarr-import-{uuid.uuid4().hex}"
+        staging_root.mkdir(mode=0o700)
+        extracted = extract_server_archive(
+            temporary_archive,
+            staging_root / "server",
+            max_uncompressed_bytes=MAX_UPLOAD_BYTES * 4,
+        )
+        inspection = inspect_server_directory(
+            str(extracted["server_directory"]),
+            process_backend=process_backend,
+            verify_write=True,
+        )
+        downgrade_managed_port_conflict(db, inspection)
+        if not inspection["ready"]:
+            raise ValueError("; ".join(inspection["errors"]))
+
+        defaults = {
+            "minecraft_version": None,
+            "paper_build": None,
+            "memory": "4G",
+            "min_memory": "4G",
+            "jar_name": inspection["jar_name"],
+            "java_args": "",
+            "stop_commands": "",
+        }
+        portable_settings = validate_portable_settings(
+            extracted["settings"] or {},
+            extracted["server_directory"],
+            defaults=defaults,
+        )
+
+        extracted["server_directory"].rename(directory_path)
+        installed_directory = True
+        final_inspection = inspect_server_directory(
+            directory_path,
+            process_backend=process_backend,
+            verify_write=True,
+        )
+        downgrade_managed_port_conflict(db, final_inspection)
+        if not final_inspection["ready"]:
+            raise ValueError("; ".join(final_inspection["errors"]))
+
+        server = Server(
+            name=name,
+            directory=str(directory_path),
+            service_name=service_name,
+            minecraft_version=portable_settings["minecraft_version"],
+            paper_build=portable_settings["paper_build"],
+            port=final_inspection["port"],
+            memory=portable_settings["memory"],
+            min_memory=portable_settings["min_memory"],
+            jar_name=portable_settings["jar_name"],
+            java_args=portable_settings["java_args"],
+            stop_commands=portable_settings["stop_commands"],
+            java_path=select_java_runtime(
+                discover_java_runtimes(),
+                portable_settings["minecraft_version"],
+            ) or "java",
+            process_backend=process_backend,
+            enabled=True,
+        )
+        db.add(server)
+        try:
+            db.commit()
+        except Exception as error:
+            db.rollback()
+            raise ValueError("Server name, directory, or service name is already managed") from error
+        db.refresh(server)
+
+        return JSONResponse({
+            "success": True,
+            "redirect_url": f"/servers/{server.id}",
+            "settings_imported": extracted["settings"] is not None,
+            "warnings": final_inspection.get("warnings", []),
+        })
+    except ValueError as error:
+        if installed_directory:
+            shutil.rmtree(directory_path, ignore_errors=True)
+        return JSONResponse({"error": str(error)}, status_code=400)
+    except (OSError, zipfile.BadZipFile) as error:
+        if installed_directory:
+            shutil.rmtree(directory_path, ignore_errors=True)
+        return JSONResponse({"error": f"Unable to import the server ZIP: {error}"}, status_code=400)
+    except Exception as error:
+        db.rollback()
+        if installed_directory:
+            shutil.rmtree(directory_path, ignore_errors=True)
+        return JSONResponse({"error": f"Unable to import the server ZIP: {error}"}, status_code=500)
+    finally:
+        await archive_file.close()
+        if temporary_archive:
+            temporary_archive.unlink(missing_ok=True)
+        if staging_root:
+            shutil.rmtree(staging_root, ignore_errors=True)
 
 
 @router.post("/api/web/servers/import/inspect")
@@ -1603,7 +1954,11 @@ def web_paper_status(server_id: int, request: Request, version: str | None = Non
         latest_build = builds[0] if builds else None
         latest_build_id = str(latest_build["id"]) if latest_build else None
         try:
-            builds_behind = max(0, int(latest_build_id) - int(server.paper_build or latest_build_id))
+            builds_behind = (
+                max(0, int(latest_build_id) - int(server.paper_build))
+                if latest_build_id and server.paper_build is not None
+                else None
+            )
         except (TypeError, ValueError):
             builds_behind = None
         return {
@@ -1642,6 +1997,18 @@ async def web_install_paper(server_id: int, request: Request, db: Session = Depe
         server.minecraft_version = result["version"]
         server.paper_build = result["build"]
         db.commit()
+        try:
+            from .update_monitor import paper_result
+            status = paper_result(db, server, fetch=True, force=True)
+            row = db.get(ServerUpdateCheck, (server.id, "@paper"))
+            if row is None:
+                row = ServerUpdateCheck(server_id=server.id, component="@paper")
+                db.add(row)
+            row.payload = json.dumps(status)
+            db.commit()
+        except Exception:
+            db.rollback()
+        result["suppress_toast"] = True
         return result
     except (ValueError, OSError) as error:
         return JSONResponse({"error": str(error)}, status_code=400)

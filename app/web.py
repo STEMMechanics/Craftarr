@@ -329,9 +329,13 @@ def web_system_stats(
             register_server(server)
             status = server_status(server.id)
             running = bool(status.get("running"))
-            players = len(get_online_players(server.id)) if running else 0
+            state = status.get("state", "running" if running else "stopped")
+            console_available = bool(status.get("console_available"))
+            players = len(get_online_players(server.id)) if state == "running" else 0
         except Exception:
             running = False
+            state = "unknown"
+            console_available = False
             players = 0
         running_count += int(running)
         total_players += players
@@ -341,7 +345,8 @@ def web_system_stats(
             configured_java = server.java_path
         instances.append({
             "id": server.id, "name": server.name, "version": server.minecraft_version,
-            "running": running, "players": players,
+            "running": running, "state": state,
+            "console_available": console_available, "players": players,
             "java": java_by_path.get(configured_java, {}).get("major"),
         })
 
@@ -391,6 +396,7 @@ def web_system_stats(
 def system_page(
     request: Request,
     db: Session = Depends(get_db),
+    active_server_id: int | None = None,
 ):
     user_id = request.session.get(
         "user_id"
@@ -417,6 +423,13 @@ def system_page(
     context = build_web_context(
         db,
         user,
+    )
+    context["active_server"] = next(
+        (
+            server for server in context["available_servers"]
+            if server.id == active_server_id
+        ),
+        context["active_server"],
     )
 
     return render_page(
@@ -480,10 +493,10 @@ def forgot_password(
             send_email(
                 db,
                 user.email,
-                "Reset your STEMCraft Console password",
+                "Reset your Craftarr password",
                 (
                     "A password reset was requested "
-                    "for your STEMCraft Console account.\n\n"
+                    "for your Craftarr account.\n\n"
                     f"{reset_url}\n\n"
                     "This link expires in 30 minutes."
                 ),

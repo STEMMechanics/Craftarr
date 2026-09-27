@@ -7,26 +7,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
     <title>
-        {% block title %}STEMCraft Console{% endblock %}
+        {% block title %}Craftarr{% endblock %}
     </title>
 
-    <link rel="stylesheet" href="/static/style.css?v=20260918-6">
+    <link rel="stylesheet" href="/static/style.css?v=20260927-6">
 
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+    <link rel="stylesheet" href="/static/server-manager.css?v=20260927-5">
 
-    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js"></script>
 </head>
 
-<body>
+<body class="workspace-body">
 
     <div class="app-shell">
 
-        {% include "partials/sidebar.html" %}
-        <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="Close navigation" onclick="closeMobileSidebar()"></button>
+        {% include "partials/site_header.html" %}
 
         <main class="main-area">
 
-            <div id="topbar">
+            <div class="workspace-topbar" id="topbar">
                 {% include "partials/topbar.html" %}
             </div>
 
@@ -37,6 +37,8 @@
 
             </div>
 
+            <footer class="app-footer"></footer>
+
         </main>
 
     </div>
@@ -45,18 +47,33 @@
         <div class="system-operation-card">
             <div id="system-operation-spinner" class="system-operation-spinner" aria-hidden="true"></div>
             <i id="system-operation-failed-icon" class="fa-solid fa-circle-exclamation system-operation-failed-icon" hidden></i>
-            <h2 id="system-operation-title">System operation in progress</h2>
-            <p id="system-operation-message">Please wait. Do not close this page.</p>
+            <h2 id="system-operation-title">Getting things ready…</h2>
+            <p id="system-operation-message">Please wait a moment.</p>
             <div id="system-operation-progress" class="system-operation-progress"><span></span></div>
-            <p id="system-operation-note" class="system-operation-note">The console is locked until this operation completes or fails.</p>
-            <button id="system-operation-close" class="button" type="button" onclick="closeSystemOperation()" hidden>Return to console</button>
+            <p id="system-operation-note" class="system-operation-note">Keep this page open while it finishes.</p>
+            <button id="system-operation-close" class="button" type="button" onclick="closeSystemOperation()" hidden>Back to console</button>
         </div>
     </div>
 
     <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
 
+    <div id="file-operation-progress" class="modal-backdrop" hidden>
+        <div id="file-operation-progress-dialog" class="modal-card progress-dialog" role="dialog" aria-modal="true" aria-labelledby="file-operation-progress-title" tabindex="-1">
+            <h2 id="file-operation-progress-title">Working…</h2>
+            <p id="file-operation-progress-message">Please wait.</p>
+            <div class="upload-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div id="file-operation-progress-bar" class="upload-progress-bar"></div>
+            </div>
+            <div id="file-operation-progress-percent" class="progress-dialog-percent">0%</div>
+            <p id="file-operation-progress-detail" class="progress-dialog-detail" hidden></p>
+            <div id="file-operation-progress-actions" class="progress-dialog-actions" hidden>
+                <button id="file-operation-progress-close" class="button" type="button" onclick="closeFileOperationProgress()">Close</button>
+            </div>
+        </div>
+    </div>
+
     <script src="/static/editor.js?v=20260831-2"></script>
-    <script src="/static/app.js?v=20260918-6"></script>
+    <script src="/static/app.js?v=20260927-4"></script>
 </body>
 
 </html>

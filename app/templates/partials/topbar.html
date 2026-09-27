@@ -1,49 +1,50 @@
-<div class="topbar" data-server-id="{{ active_server.id if active_server else '' }}">
-
-    <button class="mobile-menu-toggle" type="button" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false" onclick="toggleMobileSidebar()">
-        <i class="fa-solid fa-bars"></i>
-    </button>
-
-    <h1 id="topbar-title">
-        {{ page_title or "Overview" }}
-    </h1>
-
-    {% if active_server %}
-
-    <div class="topbar-actions">
-
-        <div class="topbar-status">
-
-            <span id="topbar-status-dot" class="server-dot"></span>
-
-            <span id="topbar-status-text">
-                Checking...
-            </span>
-
-            <span class="topbar-version">
-                · Paper
-                {{ active_server.minecraft_version or "" }}
-            </span>
-
+{% set topbar_server = active_server if active_server and request.url.path.startswith('/servers/' ~ active_server.id) else none %}
+<div class="topbar" data-server-id="{{ topbar_server.id if topbar_server else '' }}">
+  <div class="topbar-actions">
+    <div class="notification-center" data-user-id="{{ user.id }}">
+      <button id="notifications-toggle" class="icon-button topbar-icon-button" type="button"
+              onclick="toggleNotifications()" aria-label="Notifications" aria-expanded="false"
+              aria-controls="notifications-panel" title="Notifications">
+        <i class="fa-regular fa-bell" aria-hidden="true"></i>
+        <span id="notifications-count" class="notification-count" hidden></span>
+      </button>
+      <div id="notifications-panel" class="notification-popover" role="region" hidden aria-labelledby="notifications-heading">
+        <div class="notification-popover-heading">
+          <strong id="notifications-heading">Notifications</strong>
+          <div class="notification-heading-actions">
+            <button id="notifications-mark-read" class="notification-mark-read" type="button" onclick="markAllNotificationsRead()" hidden>Mark all read</button>
+            <button class="icon-button" type="button" onclick="closeNotifications()" aria-label="Close notifications">
+              <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+            </button>
+          </div>
         </div>
-
-        {% if user.can("servers.control") %}
-        <button id="topbar-start" class="server-control-button start" onclick="serverAction('start')" style="display:none" aria-label="Start server" title="Start server">
-            <i class="fa-solid fa-play" aria-hidden="true"></i>
-        </button>
-
-        <button id="topbar-restart" class="server-control-button restart" onclick="serverAction('restart')" aria-label="Restart server" title="Restart server">
-            <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>
-        </button>
-
-        <button id="topbar-stop" class="server-control-button stop" onclick="serverAction('stop')" aria-label="Stop server" title="Stop server">
-            <i class="fa-solid fa-stop" aria-hidden="true"></i>
-        </button>
-        {% endif %}
-
-
+        <div id="notification-list" class="notification-list" role="list" hidden></div>
+        <div id="notification-empty" class="notification-empty">
+          <span class="notification-empty-icon" aria-hidden="true"><i class="fa-regular fa-bell-slash"></i></span>
+          <strong>All caught up</strong>
+          <p>Update notices will appear here.</p>
+        </div>
+      </div>
     </div>
 
-    {% endif %}
-
+    <div class="account-menu">
+      <button id="account-menu-toggle" class="account-menu-toggle" type="button"
+              onclick="toggleAccountMenu()" aria-label="User menu for {{ user.username }}"
+              aria-expanded="false" aria-controls="account-menu-panel">
+        <span class="account-avatar" aria-hidden="true">{{ (user.username or 'M')[:1]|upper }}</span>
+        <span class="account-menu-username">{{ user.username }}</span>
+        <i class="fa-solid fa-chevron-down account-menu-chevron" aria-hidden="true"></i>
+      </button>
+      <div id="account-menu-panel" class="account-menu-panel" role="group" aria-label="User settings and account actions" hidden>
+        <div class="account-menu-heading">
+          <strong>{{ user.username }}</strong>
+          <small>{{ user.role_name }}</small>
+        </div>
+        <a href="/profile"><i class="fa-solid fa-user-gear" aria-hidden="true"></i><span>Account settings</span></a>
+        <a href="/change-password"><i class="fa-solid fa-key" aria-hidden="true"></i><span>Change password</span></a>
+        <div class="account-menu-divider"></div>
+        <a class="account-menu-signout" href="/logout"><i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i><span>Sign out</span></a>
+      </div>
+    </div>
+  </div>
 </div>

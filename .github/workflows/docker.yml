@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   docker:
-    name: Build STEMCraft Console image
+    name: Build Craftarr image
     runs-on: ubuntu-latest
 
     steps:
@@ -37,7 +37,8 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/stemmechanics/stemcraft-console
+          images: |
+            ghcr.io/stemmechanics/craftarr-console
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch

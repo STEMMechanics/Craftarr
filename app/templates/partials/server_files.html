@@ -17,9 +17,14 @@
 
         {% if user.can("files.manage") %}<div class="files-toolbar-actions">
 
+            <button class="button" type="button" onclick="openCreateFileModal()">
+                <i class="fa-solid fa-file-circle-plus" aria-hidden="true"></i>
+                New file
+            </button>
+
             <button class="button" onclick="openNewFolderModal()">
-                <i class="fa-solid fa-folder-plus"></i>
-                New Folder
+                <i class="fa-solid fa-folder-plus" aria-hidden="true"></i>
+                New folder
             </button>
 
 
@@ -31,8 +36,8 @@
             </label>
 
             <label class="file-upload-button" for="folder-upload">
-                <i class="fa-solid fa-folder-arrow-up"></i>
-                Upload Folder
+                <i class="fa-solid fa-cloud-arrow-up" aria-hidden="true"></i>
+                Upload a folder
 
                 <input id="folder-upload" type="file" webkitdirectory multiple onchange="uploadFiles(this.files, true)">
             </label>
@@ -48,7 +53,7 @@
         <div class="file-browser-header">
 
             <span>Name</span>
-            <span>Modified</span>
+            <span>Changed</span>
             <span>Size</span>
             <span></span>
 
@@ -64,7 +69,7 @@
 
                 <i class="fa-solid fa-arrow-turn-up"></i>
 
-                <span>..</span>
+                <span>Back</span>
 
             </div>
 
@@ -87,8 +92,7 @@
             <div class="file-name">
 
                 {% if entry.is_dir %}
-
-                <i class="fa-solid fa-folder file-folder" data-folder-icon></i>
+                <i class="fa-solid fa-folder file-entry-icon file-folder" aria-hidden="true" data-folder-icon></i>
 
                 <a class="file-folder-target" href="/servers/{{ server.id }}/files?path={{ entry.path }}"
                     hx-get="/servers/{{ server.id }}/files?path={{ entry.path }}" hx-target="#page-content"
@@ -98,10 +102,30 @@
                 </a>
 
                 {% else %}
+                {% set filename_lower = entry.name|lower %}
+                {% if filename_lower.endswith('.jar') %}
+                <i class="fa-solid fa-puzzle-piece file-entry-icon file-icon-plugin" aria-hidden="true"></i>
+                {% elif filename_lower.endswith(('.yml', '.yaml', '.properties', '.toml', '.ini', '.cfg', '.conf')) %}
+                <i class="fa-solid fa-sliders file-entry-icon file-icon-config" aria-hidden="true"></i>
+                {% elif filename_lower.endswith('.json') %}
+                <i class="fa-solid fa-code file-entry-icon file-icon-json" aria-hidden="true"></i>
+                {% elif filename_lower.endswith('.png') %}
+                <i class="fa-regular fa-image file-entry-icon file-icon-image" aria-hidden="true"></i>
+                {% elif filename_lower.endswith(('.log', '.txt')) %}
+                <i class="fa-solid fa-file-lines file-entry-icon file-icon-log" aria-hidden="true"></i>
+                {% elif filename_lower.endswith(('.zip', '.gz', '.tar')) %}
+                <i class="fa-solid fa-file-zipper file-entry-icon file-icon-archive" aria-hidden="true"></i>
+                {% else %}
+                <i class="fa-regular fa-file file-entry-icon file-document" aria-hidden="true"></i>
+                {% endif %}
 
-                <i class="fa-regular fa-file file-document"></i>
+                {% if filename_lower.endswith('.png') %}
 
-                {% if entry.text_candidate and user.can("files.manage") %}
+                <button class="file-preview-link file-image-preview-button" type="button" data-preview-path="{{ entry.path | e }}" data-preview-name="{{ entry.name | e }}">
+                    {{ entry.name }}
+                </button>
+
+                {% elif entry.text_candidate and user.can("files.manage") %}
 
                 <a href="/servers/{{ server.id }}/files/edit?path={{ entry.path }}"
                     {% if entry.editable %}hx-get="/servers/{{ server.id }}/files/edit?path={{ entry.path }}"
@@ -131,7 +155,7 @@
             </div>
 
 
-            <div class="file-size">
+            <div class="file-size" aria-label="File size">
 
                 {{ entry.size_display }}
 
@@ -141,7 +165,8 @@
             <div class="file-actions">
 
                 <a class="file-action-button" href="/servers/{{ server.id }}/files/download?path={{ entry.path }}"
-                    title="Download{{ ' folder as ZIP' if entry.is_dir else '' }}">
+                    title="Download{{ ' folder as ZIP' if entry.is_dir else '' }}"
+                    aria-label="Download {{ entry.name }}{{ ' as a ZIP file' if entry.is_dir else '' }}">
                     <i class="fa-solid fa-download"></i>
                 </a>
 
@@ -149,15 +174,15 @@
                 {% if user.can("files.manage") %}<button class="file-action-button" onclick="openRenameModal(
                         '{{ entry.path | e }}',
                         '{{ entry.name | e }}'
-                    )" title="Rename">
+                    )" title="Rename" aria-label="Rename {{ entry.name }}">
                     <i class="fa-solid fa-pen"></i>
                 </button>
 
-                <button class="file-action-button" data-entry-path="{{ entry.path | e }}" onclick="zipFileEntry(this.dataset.entryPath)" title="Create ZIP">
+                <button class="file-action-button" data-entry-path="{{ entry.path | e }}" onclick="zipFileEntry(this.dataset.entryPath)" title="Create ZIP" aria-label="Create a ZIP file from {{ entry.name }}">
                     <i class="fa-solid fa-file-zipper"></i>
                 </button>
 
-                {% if entry.is_zip %}<button class="file-action-button" data-entry-path="{{ entry.path | e }}" onclick="extractZipEntry(this.dataset.entryPath)" title="Extract ZIP">
+                {% if entry.is_zip %}<button class="file-action-button" data-entry-path="{{ entry.path | e }}" onclick="extractZipEntry(this.dataset.entryPath)" title="Extract ZIP" aria-label="Extract {{ entry.name }}">
                     <i class="fa-solid fa-box-open"></i>
                 </button>{% endif %}
 
@@ -165,7 +190,7 @@
                 <button class="file-action-button danger-icon" onclick="openDeleteFileModal(
                         '{{ entry.path | e }}',
                         '{{ entry.name | e }}'
-                    )" title="Delete">
+                    )" title="Delete" aria-label="Delete {{ entry.name }}">
                     <i class="fa-solid fa-trash"></i>
                 </button>
                 {% endif %}
@@ -187,6 +212,23 @@
     </section>
 
 </div>
+
+
+{% if user.can("files.manage") %}
+<div id="create-file-modal" class="modal-backdrop" hidden onclick="if (event.target === this) closeCreateFileModal()">
+    <form class="modal-card" role="dialog" aria-modal="true" aria-labelledby="create-file-title" onsubmit="createNewFile(event)">
+        <h2 id="create-file-title">Make a new file</h2>
+        <p>Give your blank file a name. You can add its contents after it is made.</p>
+        <label for="create-file-name">File name</label>
+        <input id="create-file-name" name="name" type="text" maxlength="255" placeholder="server-notes.txt" autocomplete="off" required>
+        <p id="create-file-error" class="form-error" role="alert" hidden></p>
+        <div class="modal-actions">
+            <button class="button" type="button" onclick="closeCreateFileModal()">Cancel</button>
+            <button id="create-file-submit" class="button success" type="submit"><i class="fa-solid fa-plus" aria-hidden="true"></i> Create file</button>
+        </div>
+    </form>
+</div>
+{% endif %}
 
 
 <div id="file-conflict-modal" class="modal-backdrop" hidden>
@@ -283,4 +325,17 @@
 
     </div>
 
+</div>
+
+
+<div id="file-image-preview-modal" class="modal-backdrop file-image-preview-modal" hidden onclick="if (event.target === this) closeFileImagePreview()">
+    <section class="modal-card file-image-preview-card" role="dialog" aria-modal="true" aria-labelledby="file-image-preview-title">
+        <header class="file-image-preview-header">
+            <h2 id="file-image-preview-title">Image preview</h2>
+            <button id="file-image-preview-close" class="icon-button" type="button" aria-label="Close image preview" onclick="closeFileImagePreview()"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+        </header>
+        <p id="file-image-preview-status" class="file-image-preview-message" role="status">Loading preview…</p>
+        <p id="file-image-preview-error" class="file-image-preview-message" role="alert" hidden>This PNG could not be displayed.</p>
+        <img id="file-image-preview-image" class="file-image-preview-image" alt="">
+    </section>
 </div>

@@ -84,7 +84,7 @@ def upgrade() -> None:
 
     connection.execute(permissions.insert(), [{"key": key, "label": label} for key, label in PERMISSIONS.items()])
     connection.execute(roles.insert(), [
-        {"name": "Administrator", "description": "Full access to STEMCraft Console", "system": True},
+        {"name": "Administrator", "description": "Full access to Craftarr Console", "system": True},
         {"name": "User", "description": "Migrated pre-0.2.0 user permissions", "system": True},
     ])
     role_rows = {row.name: row.id for row in connection.execute(sa.select(roles.c.id, roles.c.name))}

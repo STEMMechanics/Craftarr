@@ -47,10 +47,10 @@ class ClosedSocket:
         raise AssertionError("accept should not run after the process exits")
 
 
-def test_command_thread_exits_cleanly_after_minecraft_stops():
+def test_command_thread_exits_cleanly_after_minecraft_stops(tmp_path):
     thread = threading.Thread(
         target=_serve_commands,
-        args=(ClosedSocket(), ExitedProcess(), threading.Event()),
+        args=(ClosedSocket(), ExitedProcess(), threading.Event(), tmp_path / "status"),
     )
 
     thread.start()
@@ -75,7 +75,7 @@ class RunningProcess:
         return None
 
 
-def test_command_thread_ignores_socket_close_during_shutdown():
+def test_command_thread_ignores_socket_close_during_shutdown(tmp_path):
     stopping = threading.Event()
 
-    _serve_commands(ClosingSocket(stopping), RunningProcess(), stopping)
+    _serve_commands(ClosingSocket(stopping), RunningProcess(), stopping, tmp_path / "status")

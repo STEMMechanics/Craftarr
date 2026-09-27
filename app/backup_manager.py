@@ -1,8 +1,86 @@
+import math
 import shutil
 import zipfile
 
 from datetime import datetime
 from pathlib import Path
+
+
+BACKUP_SPACE_MIN_BUFFER_BYTES = 256 * 1024 * 1024
+BACKUP_SPACE_BUFFER_RATIO = 0.05
+
+
+class InsufficientBackupSpaceError(RuntimeError):
+    """Raised when there is not enough free disk space for a backup."""
+
+
+def _backup_source_files(root: Path):
+    backups = root / "backups"
+
+    for path in root.rglob("*"):
+        # Never include the backups directory itself, including older archives.
+        if path == backups or backups in path.parents:
+            continue
+
+        if path.is_file():
+            yield path
+
+
+def _backup_source_size(root: Path) -> int:
+    total_bytes = 0
+
+    for path in _backup_source_files(root):
+        try:
+            total_bytes += path.stat().st_size
+        except OSError:
+            continue
+
+    return total_bytes
+
+
+def check_backup_space(
+    server,
+    source_bytes: int | None = None,
+    storage_path: Path | None = None,
+) -> dict:
+    """Check for room to store a conservative, uncompressed-size backup."""
+    root = Path(server.directory).resolve()
+
+    if source_bytes is None:
+        source_bytes = _backup_source_size(root)
+
+    buffer_bytes = max(
+        BACKUP_SPACE_MIN_BUFFER_BYTES,
+        math.ceil(source_bytes * BACKUP_SPACE_BUFFER_RATIO),
+    )
+    required_bytes = source_bytes + buffer_bytes
+
+    if storage_path is None:
+        candidate = root / "backups"
+        storage_path = candidate if candidate.exists() else root
+
+    try:
+        available_bytes = shutil.disk_usage(storage_path).free
+    except OSError as error:
+        raise RuntimeError(
+            f"Could not check free disk space for the backup destination: {error}"
+        ) from error
+
+    if available_bytes < required_bytes:
+        raise InsufficientBackupSpaceError(
+            "Not enough free disk space for this backup. "
+            f"The server files use about {format_size(source_bytes)}; "
+            f"at least {format_size(required_bytes)} is needed, including "
+            f"a {format_size(buffer_bytes)} safety buffer, but only "
+            f"{format_size(available_bytes)} is available."
+        )
+
+    return {
+        "source_bytes": source_bytes,
+        "buffer_bytes": buffer_bytes,
+        "required_bytes": required_bytes,
+        "available_bytes": available_bytes,
+    }
 
 
 def backup_directory(server) -> Path:
@@ -129,9 +207,7 @@ def create_backup(
         server.directory
     ).resolve()
 
-    backups = backup_directory(
-        server
-    ).resolve()
+    backups = backup_directory(server).resolve()
 
     timestamp = datetime.now().strftime(
         "%Y-%m-%d_%H-%M-%S"
@@ -168,24 +244,7 @@ def create_backup(
     temporary = destination.with_suffix(".zip.part")
 
 
-    files = []
-
-    for path in root.rglob("*"):
-
-        if not path.is_file():
-            continue
-
-        # Never back up the backups
-        # directory itself.
-        if (
-            path == backups
-            or backups in path.parents
-        ):
-            continue
-
-        files.append(
-            path
-        )
+    files = list(_backup_source_files(root))
 
 
     total_bytes = 0
@@ -199,6 +258,15 @@ def create_backup(
 
         except OSError:
             pass
+
+    # Check again immediately before opening the archive. The first check in
+    # the backup worker avoids pausing Minecraft when space is already low;
+    # this one accounts for files saved or space consumed since that check.
+    check_backup_space(
+        server,
+        source_bytes=total_bytes,
+        storage_path=backups,
+    )
 
 
     processed_bytes = 0

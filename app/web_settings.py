@@ -1,4 +1,5 @@
-import os
+import json
+from .env import getenv
 
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from fastapi import (
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
+    PlainTextResponse,
     RedirectResponse,
 )
 
@@ -73,6 +75,83 @@ from .offsite_backups import (
 )
 
 router = APIRouter()
+
+
+@router.get('/api/web/settings/plugin-monitoring-repository')
+def get_plugin_monitoring_repository(request: Request, db: Session = Depends(get_db)):
+    admin = current_web_user(request, db)
+    if not admin:
+        return JSONResponse({'error': 'Not authenticated'}, status_code=401)
+    if not has_permission(admin, 'settings.manage'):
+        return JSONResponse({'error': 'Admin required'}, status_code=403)
+    from .monitoring_defaults import read_repository_text, repository_path
+    try:
+        content = read_repository_text()
+    except ValueError as error:
+        return JSONResponse({'error': str(error)}, status_code=400)
+    using_bundled = not repository_path().exists() and not getenv('CRAFTARR_PLUGIN_MONITORING_DEFAULTS', '').strip()
+    return {'content': content, 'using_bundled_defaults': using_bundled}
+
+
+@router.get('/api/web/settings/plugin-monitoring-repository/download')
+def download_plugin_monitoring_repository(request: Request, db: Session = Depends(get_db)):
+    admin = current_web_user(request, db)
+    if not admin:
+        return JSONResponse({'error': 'Not authenticated'}, status_code=401)
+    if not has_permission(admin, 'settings.manage'):
+        return JSONResponse({'error': 'Admin required'}, status_code=403)
+    from .monitoring_defaults import read_repository_text
+    try:
+        content = read_repository_text()
+    except ValueError as error:
+        return JSONResponse({'error': str(error)}, status_code=400)
+    return PlainTextResponse(content, headers={'Content-Disposition': 'attachment; filename="plugin-monitoring.yml"'})
+
+
+async def _save_plugin_monitoring_repository(request: Request, db: Session):
+    admin = current_web_user(request, db)
+    if not admin:
+        return JSONResponse({'error': 'Not authenticated'}, status_code=401)
+    if not has_permission(admin, 'settings.manage'):
+        return JSONResponse({'error': 'Admin required'}, status_code=403)
+    try:
+        from .monitoring_defaults import MAX_REPOSITORY_BYTES, validate_repository_text
+        raw = await request.body()
+        if len(raw) > MAX_REPOSITORY_BYTES * 2 + 1024:
+            return JSONResponse({'error': 'The shared plugin settings file must be 256 KiB or smaller'}, status_code=413)
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError('Invalid plugin settings document')
+        content = data.get('content')
+        validate_repository_text(content)
+    except (ValueError, TypeError) as error:
+        return JSONResponse({'error': str(error)}, status_code=400)
+    from .models import UpdateMonitorLease
+    from .monitoring_defaults import save_repository_text
+    from .update_monitor import acquire_lease, CheckInProgress
+    from datetime import datetime
+    try:
+        acquire_lease(db, datetime.utcnow())
+    except CheckInProgress as error:
+        return JSONResponse({'error': str(error)}, status_code=409)
+    try:
+        return save_repository_text(content)
+    except (ValueError, TypeError) as error:
+        return JSONResponse({'error': str(error)}, status_code=400)
+    finally:
+        db.rollback()
+        db.query(UpdateMonitorLease).filter_by(id=1).update({'expires_at': datetime.min})
+        db.commit()
+
+
+@router.put('/api/web/settings/plugin-monitoring-repository')
+async def save_plugin_monitoring_repository(request: Request, db: Session = Depends(get_db)):
+    return await _save_plugin_monitoring_repository(request, db)
+
+
+@router.post('/api/web/settings/plugin-monitoring-repository/import')
+async def import_plugin_monitoring_repository(request: Request, db: Session = Depends(get_db)):
+    return await _save_plugin_monitoring_repository(request, db)
 
 
 @router.get("/api/web/settings/system-alerts")
@@ -192,29 +271,29 @@ def settings_page(
     )
 
     database_path = Path(
-        os.getenv(
-            "STEMCRAFT_CONSOLE_DATABASE",
-            "stemcraft-console.db",
+        getenv(
+            "CRAFTARR_CONSOLE_DATABASE",
+            "craftarr.db",
         )
     ).expanduser()
 
 
     server_root = Path(
-        os.getenv(
-            "STEMCRAFT_CONSOLE_SERVER_ROOT",
+        getenv(
+            "CRAFTARR_CONSOLE_SERVER_ROOT",
             "minecraft-servers",
         )
     ).expanduser()
 
 
-    console_host = os.getenv(
-        "STEMCRAFT_CONSOLE_HOST",
+    console_host = getenv(
+        "CRAFTARR_CONSOLE_HOST",
         "127.0.0.1",
     )
 
 
-    console_port = os.getenv(
-        "STEMCRAFT_CONSOLE_PORT",
+    console_port = getenv(
+        "CRAFTARR_CONSOLE_PORT",
         "8000",
     )
 
@@ -980,9 +1059,9 @@ async def test_smtp_settings(
         send_email(
             db,
             admin.email,
-            "STEMCraft Console SMTP Test",
+            "Craftarr SMTP Test",
             (
-                "Your STEMCraft Console SMTP settings "
+                "Your Craftarr SMTP settings "
                 "are working correctly."
             ),
         )
@@ -1285,7 +1364,7 @@ async def install_update(request: Request, db: Session = Depends(get_db)):
     rollback = data.get("action") == "rollback"
     operation = begin_operation(
         "rollback" if rollback else "update",
-        "Rolling back STEMCraft Console" if rollback else "Updating STEMCraft Console",
+        "Rolling back Craftarr" if rollback else "Updating Craftarr",
         "Restoring the verified application backup." if rollback else "Downloading and verifying the selected release.",
         "installing",
     )
@@ -1300,7 +1379,7 @@ async def install_update(request: Request, db: Session = Depends(get_db)):
         else:
             result = install_release(str(data.get("tag", "")))
         update_operation(
-            title="Restarting STEMCraft Console",
+            title="Restarting Craftarr",
             message="Waiting for the console service to return.",
             phase="restarting",
         )
@@ -1321,7 +1400,7 @@ def restart_console(request: Request, db: Session = Depends(get_db)):
         return JSONResponse({"error": "Admin required"}, status_code=403)
     operation = begin_operation(
         "restart",
-        "Restarting STEMCraft Console",
+        "Restarting Craftarr",
         "The console service is restarting. Waiting for it to return.",
         "restarting",
     )

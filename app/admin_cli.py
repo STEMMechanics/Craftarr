@@ -1,8 +1,8 @@
 """Local administrator recovery commands for installed consoles."""
 
 import argparse
-import os
 import secrets
+from .env import getenv
 
 from .auth import hash_password
 from .database import SessionLocal
@@ -46,7 +46,7 @@ def reset_password(db, username: str, password: str | None = None):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Manage local STEMCraft Console users")
+    parser = argparse.ArgumentParser(description="Manage local Craftarr users")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     ensure = subparsers.add_parser("ensure-admin", help="Create the first administrator")
@@ -88,7 +88,7 @@ def main() -> int:
             password = ensure_initial_admin(
                 db,
                 args.username,
-                os.getenv("STEMCRAFT_BOOTSTRAP_ADMIN_PASSWORD") or None,
+                getenv("CRAFTARR_BOOTSTRAP_ADMIN_PASSWORD") or None,
             )
             if password:
                 print(password)

@@ -1,15 +1,15 @@
-import os
 from pathlib import Path
+from .env import getenv
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 
-# Load STEMCraft Console configuration.
+# Load Craftarr configuration.
 load_dotenv(
-    os.getenv(
-        "STEMCRAFT_CONSOLE_ENV",
+    getenv(
+        "CRAFTARR_CONSOLE_ENV",
         ".env",
     )
 )
@@ -18,15 +18,15 @@ load_dotenv(
 # Database location can be overridden through .env.
 #
 # Development default:
-#   ./stemcraft-console.db
+#   ./craftarr.db
 #
 # Production:
-#   /var/lib/stemcraft-console/stemcraft-console.db
+#   /var/lib/craftarr/craftarr.db
 
 DATABASE_PATH = Path(
-    os.getenv(
-        "STEMCRAFT_CONSOLE_DATABASE",
-        "stemcraft-console.db",
+    getenv(
+        "CRAFTARR_CONSOLE_DATABASE",
+        "craftarr.db",
     )
 ).expanduser()
 

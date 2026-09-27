@@ -1,5 +1,5 @@
 {
-  "name": "stemcraft-console-assets",
+  "name": "craftarr-console-assets",
   "private": true,
   "scripts": {
     "build:editor": "esbuild app/static/editor-source.js --bundle --minify --format=iife --outfile=app/static/editor.js"

@@ -1,9 +1,9 @@
-// Permit the unprivileged console service to manage only STEMCraft server units.
+// Permit the unprivileged Craftarr service to manage Minecraft server units.
 polkit.addRule(function(action, subject) {
     if (action.id == "org.freedesktop.systemd1.manage-units" &&
-        subject.user == "stemcraft") {
+        subject.user == "craftarr") {
         var unit = action.lookup("unit");
-        if (unit && /^stemcraft-server@[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}\.service$/.test(unit)) {
+        if (unit && /^craftarr-server@[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}\.service$/.test(unit)) {
             return polkit.Result.YES;
         }
     }
@@ -11,9 +11,9 @@ polkit.addRule(function(action, subject) {
     // Enabling and disabling an instance uses systemd's unit-file API. Unlike
     // manage-units, systemd does not expose the affected unit name to polkit
     // for this action, so this permission must be granted at the service-user
-    // boundary. The stemcraft account is a locked, dedicated service account.
+    // boundary. The craftarr account is a locked, dedicated service account.
     if (action.id == "org.freedesktop.systemd1.manage-unit-files" &&
-        subject.user == "stemcraft") {
+        subject.user == "craftarr") {
         return polkit.Result.YES;
     }
 });

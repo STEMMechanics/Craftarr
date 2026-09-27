@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .processes import build_java_command, resolve_server_jar
 from .processes import SYSTEMD_PLAYERS_QUERY
+from .processes import SERVER_READY_PATTERN
 
 
 JOIN_PATTERN = re.compile(r": ([A-Za-z0-9_]{1,16}) joined the game")
@@ -35,7 +36,30 @@ def _update_online_players(line: str, online_players: set[str]) -> None:
         online_players.discard(left.group(1))
 
 
-def _forward_output(process, online_players: set[str], player_lock: threading.Lock) -> None:
+def _write_lifecycle_status(status_path: Path, state: str) -> None:
+    temporary = status_path.with_name(
+        f".{status_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    )
+    try:
+        temporary.write_text(
+            json.dumps({"state": state, "pid": os.getpid()}),
+            encoding="utf-8",
+        )
+        os.replace(temporary, status_path)
+    except OSError:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _forward_output(
+    process,
+    online_players: set[str],
+    player_lock: threading.Lock,
+    stopping: threading.Event,
+    status_path: Path,
+) -> None:
     if not process.stdout:
         return
     for raw_line in iter(process.stdout.readline, b""):
@@ -45,11 +69,20 @@ def _forward_output(process, online_players: set[str], player_lock: threading.Lo
         except OSError:
             pass
         line = raw_line.decode("utf-8", "replace")
+        if SERVER_READY_PATTERN.search(line) and not stopping.is_set():
+            _write_lifecycle_status(status_path, "running")
         with player_lock:
             _update_online_players(line, online_players)
 
 
-def _serve_commands(server, process, stopping: threading.Event, online_players: set[str] | None = None, player_lock=None) -> None:
+def _serve_commands(
+    server,
+    process,
+    stopping: threading.Event,
+    status_path: Path,
+    online_players: set[str] | None = None,
+    player_lock=None,
+) -> None:
     online_players = online_players if online_players is not None else set()
     player_lock = player_lock or threading.Lock()
     while not stopping.is_set() and process.poll() is None:
@@ -69,6 +102,9 @@ def _serve_commands(server, process, stopping: threading.Event, online_players: 
                         connection.sendall(json.dumps(sorted(online_players)).encode("utf-8"))
                     continue
                 if data and "\n" not in data and process.stdin:
+                    if data.casefold() == "stop":
+                        stopping.set()
+                        _write_lifecycle_status(status_path, "stopping")
                     _echo_command(data)
                     process.stdin.write((data + "\n").encode())
                     process.stdin.flush()
@@ -84,6 +120,8 @@ def supervise(directory: str, socket_path: str, memory: str, min_memory: str, ja
     resolve_server_jar(root, jar_name)
     endpoint = Path(socket_path)
     endpoint.parent.mkdir(parents=True, exist_ok=True)
+    status_path = endpoint.with_suffix(".status")
+    _write_lifecycle_status(status_path, "starting")
     endpoint.unlink(missing_ok=True)
     process = subprocess.Popen(
         build_java_command(memory, jar_name, java_args, min_memory, java_path),
@@ -97,7 +135,7 @@ def supervise(directory: str, socket_path: str, memory: str, min_memory: str, ja
     player_lock = threading.Lock()
     output_thread = threading.Thread(
         target=_forward_output,
-        args=(process, online_players, player_lock),
+        args=(process, online_players, player_lock, stopping, status_path),
         name="minecraft-console-output",
         daemon=True,
     )
@@ -107,6 +145,7 @@ def supervise(directory: str, socket_path: str, memory: str, min_memory: str, ja
         if stopping.is_set():
             return
         stopping.set()
+        _write_lifecycle_status(status_path, "stopping")
         if process.poll() is None and process.stdin:
             process.stdin.write(b"stop\n")
             process.stdin.flush()
@@ -122,13 +161,14 @@ def supervise(directory: str, socket_path: str, memory: str, min_memory: str, ja
 
     thread = threading.Thread(
         target=_serve_commands,
-        args=(server, process, stopping, online_players, player_lock),
+        args=(server, process, stopping, status_path, online_players, player_lock),
         name="minecraft-command-socket",
     )
     thread.start()
     try:
         return process.wait()
     finally:
+        _write_lifecycle_status(status_path, "stopped")
         # A clean Minecraft exit can race the socket thread's accept call. Stop
         # and join it before interpreter finalization so it cannot raise while
         # Python is tearing down buffered stderr (which turns a clean systemd

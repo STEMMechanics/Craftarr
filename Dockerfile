@@ -22,7 +22,7 @@ RUN apt-get update && \
         java-25-amazon-corretto-jdk && \
     rm -rf /var/lib/apt/lists/*
 
-WORKDIR /opt/stemcraft-console
+WORKDIR /opt/craftarr
 
 COPY requirements.txt .
 RUN python3 -m venv .venv && \
@@ -34,14 +34,14 @@ COPY migrations ./migrations
 COPY alembic.ini .
 
 RUN mkdir -p \
-    /var/lib/stemcraft-console \
+    /var/lib/craftarr \
     /srv/minecraft \
-    /etc/stemcraft-console
+    /etc/craftarr
 
-ENV STEMCRAFT_CONSOLE_HOST=0.0.0.0
-ENV STEMCRAFT_CONSOLE_PORT=8000
-ENV STEMCRAFT_CONSOLE_DATABASE=/var/lib/stemcraft-console/stemcraft-console.db
-ENV STEMCRAFT_CONSOLE_SERVER_ROOT=/srv/minecraft
+ENV CRAFTARR_CONSOLE_HOST=0.0.0.0
+ENV CRAFTARR_CONSOLE_PORT=8000
+ENV CRAFTARR_CONSOLE_DATABASE=/var/lib/craftarr/craftarr.db
+ENV CRAFTARR_CONSOLE_SERVER_ROOT=/srv/minecraft
 
 EXPOSE 8000
 EXPOSE 25565-25600
@@ -51,7 +51,7 @@ CMD ["/bin/bash", "-c", "\
     PASSWORD=$(.venv/bin/python -m app.admin_cli ensure-admin --username admin) && \
     if [ -n \"$PASSWORD\" ]; then \
       echo '============================================'; \
-      echo 'STEMCraft Console initial administrator'; \
+      echo 'Craftarr initial administrator'; \
       echo 'Username: admin'; \
       echo \"Temporary password: $PASSWORD\"; \
       echo '============================================'; \

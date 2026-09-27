@@ -1,185 +1,60 @@
 {% extends "base.html" %}
 
-{% block title %}
-Users | STEMCraft Console
-{% endblock %}
+{% block title %}Users | Craftarr{% endblock %}
 
-{% block body %}
-
-<div class="layout">
-
-    <aside class="sidebar">
-
-        <div class="brand">
-            STEMCraft Console
+{% block content %}
+<div class="users-page" data-page-title="Users">
+    <section class="page-header">
+        <div>
+            <h1>Users</h1>
+            <p>Add users who can use this console and choose what they can do.</p>
         </div>
+    </section>
 
-        <nav>
-
-            <a href="/dashboard">
-                Dashboard
-            </a>
-
-            <a href="/servers">
-                Servers
-            </a>
-
-            <a
-                href="/users"
-                class="active"
-            >
-                Users
-            </a>
-
-        </nav>
-
-    </aside>
-
-
-    <main>
-
-        <header>
-
-            <div></div>
-
-            <div class="account">
-
-                <a href="/profile">
-                    {{ user.username }}
-                </a>
-
-                <span class="role">
-                    {{ user.role_name }}
-                </span>
-
-                <a href="/logout">
-                    Logout
-                </a>
-
-            </div>
-
-        </header>
-
-
-        <section class="content">
-
-            <div class="page-heading">
-
-                <div>
-
-                    <h1>Users</h1>
-
-                    <p>
-                        Manage users and
-                        server access
-                    </p>
-
-                </div>
-
-            </div>
-
-
-            <div class="panel">
-
-                <h2>Create user</h2>
-
-                <form
-                    method="post"
-                    action="/users/create"
-                    class="user-form"
-                >
-
-                    <input
-                        name="username"
-                        placeholder="Username"
-                        required
-                    >
-
-                    <input
-                        name="password"
-                        type="password"
-                        placeholder="Password"
-                        minlength="8"
-                        required
-                    >
-
-                    <select name="role_id">
-                        {% for role in roles %}
-                        <option value="{{ role.id }}">{{ role.name }}</option>
-                        {% endfor %}
-                    </select>
-
-                    <button class="button">
-                        Create User
-                    </button>
-
-                </form>
-
-            </div>
-
-
-            <div class="panel">
-
-                <h2>Accounts</h2>
-
-                <div class="user-list">
-
-                    {% for account in users %}
-
-                    <a
-                        class="user-row"
-                        href="/users/{{ account.id }}"
-                    >
-
-                        <div>
-
-                            <strong>
-                                {{ account.username }}
-                            </strong>
-
-                            <div class="muted-small">
-
-                                {{ account.servers|length }}
-                                server{% if account.servers|length != 1 %}s{% endif %}
-
-                            </div>
-
-                        </div>
-
-                        <div class="user-row-right">
-
-                            <span class="role">
-                                {{ account.role_name }}
-                            </span>
-
-                            {% if account.enabled %}
-
-                            <span class="enabled">
-                                Enabled
-                            </span>
-
-                            {% else %}
-
-                            <span class="disabled">
-                                Disabled
-                            </span>
-
-                            {% endif %}
-
-                        </div>
-
-                    </a>
-
+    <section class="overview-card settings-section">
+        <div class="card-header"><span><i class="fa-solid fa-user-plus" aria-hidden="true"></i> Add a user</span></div>
+        <form method="post" action="/users/create" class="settings-content user-form">
+            <label class="property-field">
+                <span>Username</span>
+                <input name="username" placeholder="Choose a username" required>
+            </label>
+            <label class="property-field">
+                <span>Password</span>
+                <input name="password" type="password" placeholder="Choose a password" minlength="8" required>
+            </label>
+            <label class="property-field">
+                <span>Access level</span>
+                <select name="role_id" required>
+                    {% for role in roles %}
+                    <option value="{{ role.id }}">{{ role.name }}</option>
                     {% endfor %}
-
-                </div>
-
+                </select>
+            </label>
+            <div class="settings-save-row">
+                <button class="button success" type="submit"><i class="fa-solid fa-plus" aria-hidden="true"></i> Add user</button>
             </div>
+        </form>
+    </section>
 
-        </section>
-
-    </main>
-
+    <section class="overview-card settings-section">
+        <div class="card-header"><span><i class="fa-solid fa-users" aria-hidden="true"></i> Users who can sign in</span></div>
+        <div class="user-list">
+            {% for account in users %}
+            <a class="user-row" href="/users/{{ account.id }}">
+                <div>
+                    <strong>{{ account.username }}</strong>
+                    <div class="muted-small">Can access {{ account.servers|length }} server{% if account.servers|length != 1 %}s{% endif %}</div>
+                </div>
+                <div class="user-row-right">
+                    <span class="role">{{ account.role_name }}</span>
+                    <span class="{{ 'enabled' if account.enabled else 'disabled' }}">{{ 'Can sign in' if account.enabled else 'Cannot sign in' }}</span>
+                </div>
+                <i class="fa-solid fa-chevron-right" aria-hidden="true"></i>
+            </a>
+            {% else %}
+            <div class="empty-message">No other users have accounts yet.</div>
+            {% endfor %}
+        </div>
+    </section>
 </div>
-
 {% endblock %}

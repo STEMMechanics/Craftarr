@@ -1,0 +1,123 @@
+{% set sidebar_servers = available_servers|default(servers|default([])) %}
+{% set selected_server = active_server|default(none) %}
+{% set selected_id = selected_server.id if selected_server else '' %}
+{% set current_path = request.url.path if request is defined else '' %}
+{% set server_root_path = '/servers/' ~ selected_id %}
+{% set sidebar_same_server = selected_id and (current_path == server_root_path or current_path.startswith(server_root_path ~ '/')) %}
+
+<aside class="sidebar" aria-label="Main navigation">
+    <a class="brand-lockup" href="/dashboard" aria-label="Craftarr home">
+        <img src="/static/images/logo.png" alt="Craftarr">
+    </a>
+
+    <section class="sidebar-world" aria-label="Current server">
+        <div class="server-selector">
+            <button id="server-selector-toggle" class="sidebar-server-select" type="button"
+                    onclick="toggleServerMenu()" aria-haspopup="true" aria-expanded="false" aria-controls="server-menu">
+                {% if selected_server %}
+                <span class="sidebar-server-status" aria-hidden="true"><span class="server-status-dot" data-server-id="{{ selected_id }}"></span></span>
+                <span class="visually-hidden server-status-text" data-server-id="{{ selected_id }}">Checking</span>
+                {% else %}
+                <span class="sidebar-server-status" aria-hidden="true"><span class="server-status-dot"></span></span>
+                {% endif %}
+                <span class="sidebar-server-copy">
+                    <strong>{{ selected_server.name if selected_server else 'Choose a server' }}</strong>
+                    <small>
+                        {% if selected_server %}
+                            {{ selected_server.minecraft_version or 'Minecraft server' }}
+                        {% else %}
+                            {{ sidebar_servers|length }} server{% if sidebar_servers|length != 1 %}s{% endif %} ready
+                        {% endif %}
+                    </small>
+                </span>
+                <i class="fa-solid fa-chevron-down selector-chevron" aria-hidden="true"></i>
+            </button>
+            <div id="server-menu" class="server-menu" role="menu" aria-label="Choose a server">
+                {% for item in sidebar_servers %}
+                <a class="server-choice" role="menuitem" href="/servers/{{ item.id }}"
+                   {% if sidebar_same_server and item.id == selected_id %}hx-get="/servers/{{ item.id }}" hx-target="#page-content" hx-push-url="true"{% endif %}>
+                    <span class="server-status-dot" data-server-id="{{ item.id }}" aria-hidden="true"></span>
+                    <span><strong>{{ item.name }}</strong><small>{{ item.minecraft_version or 'Minecraft server' }}</small></span>
+                    <span class="server-status-text" data-server-id="{{ item.id }}">Checking</span>
+                </a>
+                {% else %}
+                <p class="server-menu-empty">No servers yet.</p>
+                {% endfor %}
+                {% if user.can('servers.create') %}
+                <a class="server-menu-create" href="/servers/new">
+                    <i class="fa-solid fa-plus" aria-hidden="true"></i> Make a server
+                </a>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+
+    <nav class="sidebar-navigation" aria-label="Server pages">
+        <a class="nav-link" href="{{ '/servers/' ~ selected_id if selected_id else '/dashboard' }}"
+           {% if sidebar_same_server %}hx-get="/servers/{{ selected_id }}" hx-target="#page-content" hx-push-url="true"{% endif %}>
+            <i class="fa-solid fa-house" aria-hidden="true"></i><span>Home</span>
+        </a>
+
+        {% if selected_server %}
+        <div class="sidebar-section-divider"></div>
+        {% if user.can('console.view') %}<a class="nav-link" href="/servers/{{ selected_id }}/console" {% if sidebar_same_server %}hx-get="/servers/{{ selected_id }}/console" hx-target="#page-content" hx-push-url="true"{% endif %}><i class="fa-solid fa-terminal" aria-hidden="true"></i><span>Console</span></a>{% endif %}
+        {% if user.can('players.view') %}<a class="nav-link" href="/servers/{{ selected_id }}/players" {% if sidebar_same_server %}hx-get="/servers/{{ selected_id }}/players" hx-target="#page-content" hx-push-url="true"{% endif %}><i class="fa-solid fa-users" aria-hidden="true"></i><span>Players</span></a>{% endif %}
+        {% if user.can('files.view') %}<a class="nav-link" href="/servers/{{ selected_id }}/files" {% if sidebar_same_server %}hx-get="/servers/{{ selected_id }}/files" hx-target="#page-content" hx-push-url="true"{% endif %}><i class="fa-solid fa-folder-open" aria-hidden="true"></i><span>Files</span></a>{% endif %}
+        {% if user.can('plugins.view') %}<a class="nav-link" href="/servers/{{ selected_id }}/plugins" {% if sidebar_same_server %}hx-get="/servers/{{ selected_id }}/plugins" hx-target="#page-content" hx-push-url="true"{% endif %}><i class="fa-solid fa-puzzle-piece" aria-hidden="true"></i><span>Plugins</span></a>{% endif %}
+        {% if user.can('servers.view') %}<a class="nav-link" href="/servers/{{ selected_id }}/performance" {% if sidebar_same_server %}hx-get="/servers/{{ selected_id }}/performance" hx-target="#page-content" hx-push-url="true"{% endif %}><i class="fa-solid fa-chart-line" aria-hidden="true"></i><span>Performance</span></a>{% endif %}
+        {% if user.can('backups.view') %}<a class="nav-link" href="/servers/{{ selected_id }}/backups" {% if sidebar_same_server %}hx-get="/servers/{{ selected_id }}/backups" hx-target="#page-content" hx-push-url="true"{% endif %}><i class="fa-solid fa-box-archive" aria-hidden="true"></i><span>Backups</span></a>{% endif %}
+
+        <div class="sidebar-section-divider"></div>
+        {% if user.can('automation.manage') or user.can('backups.view') %}<a class="nav-link" href="/servers/{{ selected_id }}/scheduling" {% if sidebar_same_server %}hx-get="/servers/{{ selected_id }}/scheduling" hx-target="#page-content" hx-push-url="true"{% endif %}><i class="fa-solid fa-calendar-check" aria-hidden="true"></i><span>Tasks</span></a>{% endif %}
+        {% if user.can('console.view') %}<a class="nav-link" href="/servers/{{ selected_id }}/logs" {% if sidebar_same_server %}hx-get="/servers/{{ selected_id }}/logs" hx-target="#page-content" hx-push-url="true"{% endif %}><i class="fa-solid fa-wave-square" aria-hidden="true"></i><span>Activity</span></a>{% endif %}
+        {% if user.can('servers.properties') %}<a class="nav-link" href="/servers/{{ selected_id }}/properties" {% if sidebar_same_server %}hx-get="/servers/{{ selected_id }}/properties" hx-target="#page-content" hx-push-url="true"{% endif %}><i class="fa-solid fa-sliders" aria-hidden="true"></i><span>Server settings</span></a>{% endif %}
+        {% endif %}
+
+        {% if user.can('system.view') or user.can('servers.view') %}
+        <div class="sidebar-section-divider"></div>
+        {% if user.can('system.view') %}<a class="nav-link" href="/system{% if selected_id %}?active_server_id={{ selected_id }}{% endif %}"><i class="fa-solid fa-computer" aria-hidden="true"></i><span>Hardware</span></a>{% endif %}
+        {% if user.can('servers.view') %}<a class="nav-link" href="/servers{% if selected_id %}?active_server_id={{ selected_id }}{% endif %}" hx-get="/servers{% if selected_id %}?active_server_id={{ selected_id }}{% endif %}" hx-target="#page-content" hx-select=".servers-page" hx-push-url="true"><i class="fa-solid fa-cubes-stacked" aria-hidden="true"></i><span>Servers</span></a>{% endif %}
+        {% endif %}
+        {% if user.can('settings.manage') or user.can('users.manage') %}
+        <div class="sidebar-section-divider"></div>
+        {% endif %}
+        {% if user.can('settings.manage') %}<a class="nav-link" href="/settings"><i class="fa-solid fa-gear" aria-hidden="true"></i><span>App settings</span></a>{% endif %}
+        {% if user.can('users.manage') %}<a class="nav-link" href="/users"><i class="fa-solid fa-user-group" aria-hidden="true"></i><span>Users</span></a>{% endif %}
+    </nav>
+</aside>
+
+<nav class="mobile-bottom-nav" aria-label="Quick navigation">
+    <a class="nav-link" href="{{ '/servers/' ~ selected_id if selected_id else '/dashboard' }}" {% if sidebar_same_server %}hx-get="/servers/{{ selected_id }}" hx-target="#page-content" hx-push-url="true"{% endif %}>
+        <i class="fa-solid fa-house" aria-hidden="true"></i><span>Home</span>
+    </a>
+    {% if selected_server and user.can('console.view') %}
+    <a class="nav-link" href="/servers/{{ selected_id }}/console" {% if sidebar_same_server %}hx-get="/servers/{{ selected_id }}/console" hx-target="#page-content" hx-push-url="true"{% endif %}><i class="fa-solid fa-terminal" aria-hidden="true"></i><span>Console</span></a>
+    {% else %}<span class="mobile-nav-disabled" aria-disabled="true"><i class="fa-solid fa-terminal" aria-hidden="true"></i><span>Console</span></span>{% endif %}
+    {% if selected_server and user.can('files.view') %}
+    <a class="nav-link" href="/servers/{{ selected_id }}/files" {% if sidebar_same_server %}hx-get="/servers/{{ selected_id }}/files" hx-target="#page-content" hx-push-url="true"{% endif %}><i class="fa-solid fa-folder-open" aria-hidden="true"></i><span>Files</span></a>
+    {% else %}<span class="mobile-nav-disabled" aria-disabled="true"><i class="fa-solid fa-folder-open" aria-hidden="true"></i><span>Files</span></span>{% endif %}
+    <button class="more-pages-toggle" type="button" onclick="toggleMorePages()" aria-expanded="false" aria-controls="more-pages-menu">
+        <i class="fa-solid fa-ellipsis" aria-hidden="true"></i><span>More</span>
+    </button>
+</nav>
+
+<div id="more-pages-menu" class="mobile-more-menu" hidden>
+    <div class="mobile-more-heading"><strong>More places</strong><button type="button" class="icon-button" onclick="closeMorePages()" aria-label="Close more pages"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
+    {% if selected_server %}
+    {% if user.can('players.view') %}<a class="nav-link" href="/servers/{{ selected_id }}/players" {% if sidebar_same_server %}hx-get="/servers/{{ selected_id }}/players" hx-target="#page-content" hx-push-url="true"{% endif %}><i class="fa-solid fa-users" aria-hidden="true"></i><span>Players</span></a>{% endif %}
+    {% if user.can('plugins.view') %}<a class="nav-link" href="/servers/{{ selected_id }}/plugins" {% if sidebar_same_server %}hx-get="/servers/{{ selected_id }}/plugins" hx-target="#page-content" hx-push-url="true"{% endif %}><i class="fa-solid fa-puzzle-piece" aria-hidden="true"></i><span>Plugins</span></a>{% endif %}
+    {% if user.can('servers.view') %}<a class="nav-link" href="/servers/{{ selected_id }}/performance" {% if sidebar_same_server %}hx-get="/servers/{{ selected_id }}/performance" hx-target="#page-content" hx-push-url="true"{% endif %}><i class="fa-solid fa-chart-line" aria-hidden="true"></i><span>Performance</span></a>{% endif %}
+    {% if user.can('backups.view') %}<a class="nav-link" href="/servers/{{ selected_id }}/backups" {% if sidebar_same_server %}hx-get="/servers/{{ selected_id }}/backups" hx-target="#page-content" hx-push-url="true"{% endif %}><i class="fa-solid fa-box-archive" aria-hidden="true"></i><span>Backups</span></a>{% endif %}
+    {% if user.can('automation.manage') or user.can('backups.view') %}<a class="nav-link" href="/servers/{{ selected_id }}/scheduling" {% if sidebar_same_server %}hx-get="/servers/{{ selected_id }}/scheduling" hx-target="#page-content" hx-push-url="true"{% endif %}><i class="fa-solid fa-calendar-check" aria-hidden="true"></i><span>Tasks</span></a>{% endif %}
+    {% if user.can('console.view') %}<a class="nav-link" href="/servers/{{ selected_id }}/logs" {% if sidebar_same_server %}hx-get="/servers/{{ selected_id }}/logs" hx-target="#page-content" hx-push-url="true"{% endif %}><i class="fa-solid fa-wave-square" aria-hidden="true"></i><span>Activity</span></a>{% endif %}
+    {% if user.can('servers.properties') %}<a class="nav-link" href="/servers/{{ selected_id }}/properties" {% if sidebar_same_server %}hx-get="/servers/{{ selected_id }}/properties" hx-target="#page-content" hx-push-url="true"{% endif %}><i class="fa-solid fa-sliders" aria-hidden="true"></i><span>Server settings</span></a>{% endif %}
+    {% endif %}
+    {% if user.can('system.view') or user.can('servers.view') %}
+    <div class="sidebar-section-label sidebar-section-spaced">HARDWARE</div>
+    {% if user.can('system.view') %}<a class="nav-link" href="/system{% if selected_id %}?active_server_id={{ selected_id }}{% endif %}"><i class="fa-solid fa-computer" aria-hidden="true"></i><span>Hardware</span></a>{% endif %}
+    {% if user.can('servers.view') %}<a class="nav-link" href="/servers{% if selected_id %}?active_server_id={{ selected_id }}{% endif %}" hx-get="/servers{% if selected_id %}?active_server_id={{ selected_id }}{% endif %}" hx-target="#page-content" hx-select=".servers-page" hx-push-url="true"><i class="fa-solid fa-cubes-stacked" aria-hidden="true"></i><span>Servers</span></a>{% endif %}
+    {% endif %}
+    {% if user.can('settings.manage') or user.can('users.manage') %}<div class="sidebar-section-label sidebar-section-spaced">Craftarr</div>{% endif %}
+    {% if user.can('settings.manage') %}<a class="nav-link" href="/settings"><i class="fa-solid fa-gear" aria-hidden="true"></i><span>App settings</span></a>{% endif %}
+    {% if user.can('users.manage') %}<a class="nav-link" href="/users"><i class="fa-solid fa-user-group" aria-hidden="true"></i><span>Users</span></a>{% endif %}
+</div>

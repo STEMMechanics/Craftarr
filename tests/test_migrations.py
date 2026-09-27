@@ -31,7 +31,7 @@ def test_migration_scripts_are_packaged():
 
 def test_clean_database_migrates_to_application_schema(monkeypatch, tmp_path):
     database = tmp_path / "console.db"
-    monkeypatch.setenv("STEMCRAFT_CONSOLE_DATABASE", str(database))
+    monkeypatch.setenv("CRAFTARR_CONSOLE_DATABASE", str(database))
 
     migrations.upgrade_database()
 
@@ -53,7 +53,7 @@ def test_clean_database_migrates_to_application_schema(monkeypatch, tmp_path):
 
 def test_pre_020_users_are_migrated_to_single_built_in_roles(monkeypatch, tmp_path):
     database = tmp_path / "legacy.db"
-    monkeypatch.setenv("STEMCRAFT_CONSOLE_DATABASE", str(database))
+    monkeypatch.setenv("CRAFTARR_CONSOLE_DATABASE", str(database))
     config = Config(str(migrations.PROJECT_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(migrations.PROJECT_ROOT / "migrations"))
     command.upgrade(config, "c41f1e9a7320")

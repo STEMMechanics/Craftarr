@@ -1,0 +1,28 @@
+[Unit]
+Description=Craftarr
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=craftarr
+Group=craftarr
+WorkingDirectory=/opt/craftarr
+EnvironmentFile=-/etc/craftarr/console.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/craftarr/.venv/bin/python -m app.run
+Restart=on-failure
+RestartSec=5
+UMask=0027
+LimitNOFILE=65536
+RuntimeDirectory=craftarr
+RuntimeDirectoryMode=0770
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/craftarr /var/lib/craftarr /srv/minecraft /run/craftarr
+
+[Install]
+WantedBy=multi-user.target

@@ -27,7 +27,7 @@ function languageFor(filename) {
   return {name: "Plain text", extension: []};
 }
 
-const stemcraftTheme = EditorView.theme({
+const craftarrTheme = EditorView.theme({
   "&": {height: "100%", backgroundColor: "#1e1e1e", color: "#d4d4d4"},
   ".cm-content": {caretColor: "#aeafad", fontFamily: '"SFMono-Regular", Consolas, monospace'},
   ".cm-cursor, .cm-dropCursor": {borderLeftColor: "#aeafad"},
@@ -123,7 +123,7 @@ function create(textarea, options = {}) {
         EditorState.tabSize.of(4),
         keymap.of([saveKey, indentWithTab]),
         lintGutter(),
-        stemcraftTheme,
+        craftarrTheme,
         syntaxHighlighting(vscodeDarkHighlight),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) textarea.value = update.state.doc.toString();
@@ -159,5 +159,5 @@ function showWarning(view, warning) {
   }]));
 }
 
-window.STEMCodeEditor = {create, showWarning, languageFor, savePosition};
-window.dispatchEvent(new CustomEvent("stemcraft:editor-ready"));
+window.CraftarrCodeEditor = {create, showWarning, languageFor, savePosition};
+window.dispatchEvent(new CustomEvent("craftarr:editor-ready"));

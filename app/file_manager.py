@@ -442,6 +442,37 @@ def create_folder(
     )
 
 
+def create_file(
+    server,
+    parent: str,
+    name: str,
+) -> str:
+    """Create an empty file under an existing server directory."""
+    directory = safe_path(server, parent)
+    if not directory.is_dir():
+        raise FileNotFoundError("Folder not found")
+
+    safe_name = str(name or "").strip()
+    if (
+        not safe_name
+        or safe_name in {".", ".."}
+        or len(safe_name) > 255
+        or Path(safe_name).name != safe_name
+        or "/" in safe_name
+        or "\\" in safe_name
+        or any(ord(character) < 32 for character in safe_name)
+    ):
+        raise ValueError("Enter a valid file name")
+
+    target = safe_path(server, str(Path(parent) / safe_name))
+    try:
+        with target.open("x", encoding="utf-8"):
+            pass
+    except FileExistsError:
+        raise FileExistsError("A file or folder with that name already exists")
+    return relative_path(server, target)
+
+
 def rename_entry(
     server,
     relative: str,

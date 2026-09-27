@@ -9,7 +9,7 @@ SMTP_DEFAULTS = {
     "smtp_username": "",
     "smtp_password": "",
     "smtp_security": "starttls",
-    "smtp_from_name": "STEMCraft Console",
+    "smtp_from_name": "Craftarr",
     "smtp_from_address": "",
 }
 

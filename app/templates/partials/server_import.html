@@ -1,8 +1,8 @@
-<div class="settings-page server-import-page" data-page-title="Import Server">
+<div class="settings-page server-import-page" data-page-title="Find a server">
   {% if detected_servers %}
   <section class="overview-card settings-section">
     <div class="card-header">
-      <span>Detected Servers</span>
+      <span>Servers found on this computer</span>
     </div>
     <div class="settings-content import-detected-list">
       {% for detected in detected_servers %}
@@ -29,7 +29,7 @@
             <label class="property-field"><span>Server name</span><input name="name" value="{{ detected.name }}" required></label>
             <label class="property-field"><span>Memory</span><select name="memory"><option>2G</option><option selected>4G</option><option>8G</option><option>16G</option></select></label>
             <input type="hidden" name="process_backend" value="{{ 'systemd' if systemd_available else 'subprocess' }}">
-            <button class="button success" type="submit" {% if not detected.ready %}disabled{% endif %}>Import Server</button>
+            <button class="button success" type="submit" {% if not detected.ready %}disabled{% endif %}><i class="fa-solid fa-arrow-right-to-bracket" aria-hidden="true"></i> Add server</button>
           </div>
         </form>
       {% endfor %}
@@ -38,15 +38,29 @@
   {% endif %}
 
   <section class="overview-card settings-section">
-    <div class="card-header"><span>Import by Path</span></div>
+    <div class="card-header"><span>Add a server by folder</span></div>
     <form id="import-server-form" class="settings-content import-server-form" method="post" action="/servers/import">
       <label class="property-field full-width"><span>Server directory</span><input id="import-server-directory" name="directory" placeholder="/opt/minecraft" required></label>
       <label class="property-field"><span>Server name</span><input id="import-server-name" name="name" required></label>
       <label class="property-field"><span>Memory</span><select name="memory"><option>2G</option><option selected>4G</option><option>8G</option><option>16G</option></select></label>
-      <label class="property-field"><span>Process backend</span><select id="import-process-backend" name="process_backend"><option value="systemd" {% if systemd_available %}selected{% else %}disabled{% endif %}>Production (systemd)</option><option value="subprocess" {% if not systemd_available %}selected{% endif %}>Development (panel-owned)</option></select>{% if not systemd_available %}<small>Systemd is unavailable on this host. Use a panel-owned process.</small>{% endif %}</label>
+      <label class="property-field"><span>How should the server run?</span><select id="import-process-backend" name="process_backend"><option value="systemd" {% if systemd_available %}selected{% else %}disabled{% endif %}>Recommended (runs on its own)</option><option value="subprocess" {% if not systemd_available %}selected{% endif %}>Runs with this panel</option></select>{% if not systemd_available %}<small>This computer uses the panel to run Minecraft.</small>{% endif %}</label>
       <div class="import-server-actions">
         <button id="import-server-submit" class="button success" type="button" onclick="reviewServerImport()">Import Server</button>
       </div>
+    </form>
+  </section>
+
+  <section class="overview-card settings-section">
+    <div class="card-header"><span>Upload a server ZIP</span></div>
+    <form id="import-server-zip-form" class="settings-content import-server-form" data-max-upload-bytes="{{ max_upload_bytes }}" enctype="multipart/form-data" onsubmit="importServerZip(event)">
+      <label class="property-field full-width import-server-zip-file-field"><span>Server ZIP archive</span><input id="import-server-archive" name="archive_file" type="file" accept=".zip,application/zip" required onchange="suggestServerZipName(this)"></label>
+      <small class="full-width">The ZIP must contain <code>server.properties</code> and a valid server JAR in the same folder. A Craftarr settings export is optional and will be applied when present. Maximum upload size for this installation is {% if max_upload_bytes >= 1073741824 %}{{ "%.1f"|format(max_upload_bytes / 1073741824) }} GiB{% else %}{{ "%.0f"|format(max_upload_bytes / 1048576) }} MiB{% endif %}.</small>
+      <label class="property-field"><span>Server name</span><input id="import-server-zip-name" name="name" required maxlength="100" placeholder="My Minecraft Server"></label>
+      <label class="property-field"><span>How should the server run?</span><select name="process_backend"><option value="systemd" {% if systemd_available %}selected{% else %}disabled{% endif %}>Recommended (runs on its own)</option><option value="subprocess" {% if not systemd_available %}selected{% endif %}>Runs with this panel</option></select>{% if not systemd_available %}<small>This computer uses the panel to run Minecraft.</small>{% endif %}</label>
+      <div class="import-server-actions">
+        <button id="import-server-zip-submit" class="button success" type="submit"><i class="fa-solid fa-file-zipper" aria-hidden="true"></i> Upload and import ZIP</button>
+      </div>
+      <p id="import-server-zip-status" class="import-zip-status muted-small full-width" role="status" aria-live="polite"></p>
     </form>
   </section>
 

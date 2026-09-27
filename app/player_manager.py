@@ -1,8 +1,14 @@
+import gzip
+import io
+import ipaddress
 import json
 import re
-import ipaddress
-
+import struct
+import zlib
+from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
+from uuid import UUID
 
 from .processes import (
     get_console,
@@ -27,6 +33,8 @@ LEAVE_PATTERN = re.compile(
 DISCONNECT_PATTERN = re.compile(
     r"\]:\s+([A-Za-z0-9_]{1,16})(?:\s+\([^)]*\))? lost connection:"
 )
+
+MAX_PLAYER_NBT_BYTES = 32 * 1024 * 1024
 
 
 def read_json_file(
@@ -88,6 +96,152 @@ def read_properties(
         )
 
     return properties
+
+
+def _read_nbt_last_played(data: bytes) -> int | None:
+    """Read the LastPlayed long from a compressed or raw player NBT file."""
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(data)) as compressed:
+            payload = compressed.read(MAX_PLAYER_NBT_BYTES + 1)
+        if len(payload) > MAX_PLAYER_NBT_BYTES:
+            return None
+    except (OSError, EOFError, zlib.error):
+        try:
+            decompressor = zlib.decompressobj()
+            payload = decompressor.decompress(data, MAX_PLAYER_NBT_BYTES + 1)
+            has_unconsumed_data = bool(decompressor.unconsumed_tail)
+        except zlib.error:
+            payload = data
+            has_unconsumed_data = False
+        if len(payload) > MAX_PLAYER_NBT_BYTES or has_unconsumed_data:
+            return None
+
+    offset = 0
+    last_played = None
+
+    def read(size: int) -> bytes:
+        nonlocal offset
+        if size < 0 or offset + size > len(payload):
+            raise ValueError("Invalid player NBT data")
+        value = payload[offset:offset + size]
+        offset += size
+        return value
+
+    def read_unsigned_byte() -> int:
+        return read(1)[0]
+
+    def read_int() -> int:
+        return struct.unpack(">i", read(4))[0]
+
+    def read_string() -> str:
+        length = struct.unpack(">H", read(2))[0]
+        return read(length).decode("utf-8", errors="replace")
+
+    def read_payload(tag_type: int, name: str | None = None, depth: int = 0):
+        nonlocal last_played
+        if depth > 64:
+            raise ValueError("Player NBT nesting is too deep")
+
+        if tag_type == 1:
+            read(1)
+        elif tag_type == 2:
+            read(2)
+        elif tag_type == 3:
+            read(4)
+        elif tag_type == 4:
+            value = struct.unpack(">q", read(8))[0]
+            if name == "LastPlayed":
+                last_played = value
+        elif tag_type == 5:
+            read(4)
+        elif tag_type == 6:
+            read(8)
+        elif tag_type == 7:
+            length = read_int()
+            read(length)
+        elif tag_type == 8:
+            read_string()
+        elif tag_type == 9:
+            element_type = read_unsigned_byte()
+            length = read_int()
+            if length < 0 or (length and element_type == 0):
+                raise ValueError("Invalid player NBT list")
+            for _ in range(length):
+                read_payload(element_type, depth=depth + 1)
+        elif tag_type == 10:
+            while True:
+                child_type = read_unsigned_byte()
+                if child_type == 0:
+                    break
+                child_name = read_string()
+                read_payload(child_type, child_name, depth + 1)
+        elif tag_type == 11:
+            length = read_int()
+            read(length * 4)
+        elif tag_type == 12:
+            length = read_int()
+            read(length * 8)
+        else:
+            raise ValueError("Unknown player NBT tag")
+
+    try:
+        root_type = read_unsigned_byte()
+        if root_type != 10:
+            return None
+        read_string()  # Root compound name.
+        read_payload(root_type)
+    except (ValueError, IndexError, struct.error):
+        return None
+
+    return last_played
+
+
+@lru_cache(maxsize=8192)
+def _cached_nbt_last_played(path: str, modified_ns: int, size: int) -> int | None:
+    if size > MAX_PLAYER_NBT_BYTES:
+        return None
+    try:
+        return _read_nbt_last_played(Path(path).read_bytes())
+    except OSError:
+        return None
+
+
+def player_data_last_online(player_data_directory: Path | None, player_uuid):
+    if player_data_directory is None or not player_uuid:
+        return None, False
+    try:
+        normalized_uuid = str(UUID(str(player_uuid)))
+    except (TypeError, ValueError, AttributeError):
+        return None, False
+
+    exact_timestamps = []
+    estimated_timestamps = []
+    for suffix in (".dat", ".dat_old"):
+        path = player_data_directory / f"{normalized_uuid}{suffix}"
+        try:
+            resolved = path.resolve()
+            if resolved.is_relative_to(player_data_directory) and resolved.is_file():
+                stat = resolved.stat()
+                last_played = _cached_nbt_last_played(
+                    str(resolved),
+                    stat.st_mtime_ns,
+                    stat.st_size,
+                )
+                if last_played is not None and last_played > 0:
+                    exact_timestamps.append(last_played / 1000)
+                else:
+                    estimated_timestamps.append(stat.st_mtime)
+        except (OSError, RuntimeError):
+            continue
+    if not exact_timestamps and not estimated_timestamps:
+        return None, False
+    estimated = not exact_timestamps
+    timestamp = max(exact_timestamps or estimated_timestamps)
+    try:
+        value = datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace("+00:00", "Z")
+    except (OverflowError, OSError, ValueError):
+        return None, False
+    return value, estimated
 
 
 def set_property(
@@ -203,6 +357,16 @@ def get_player_data(
     properties = read_properties(
         server.directory
     )
+
+    player_data_directory = None
+    try:
+        resolved_root = root.resolve()
+        world_directory = (resolved_root / properties.get("level-name", "world")).resolve()
+        candidate = (world_directory / "playerdata").resolve()
+        if world_directory.is_relative_to(resolved_root) and candidate.is_relative_to(resolved_root):
+            player_data_directory = candidate
+    except (OSError, RuntimeError, ValueError):
+        pass
 
     whitelist_data = read_json_file(
         root / "whitelist.json",
@@ -324,9 +488,16 @@ def get_player_data(
             or banned_entry.get("uuid")
         )
 
+        last_online, last_online_estimated = player_data_last_online(
+            player_data_directory,
+            uuid,
+        )
+
         players.append({
             "name": name,
             "uuid": uuid,
+            "last_online": last_online,
+            "last_online_estimated": last_online_estimated,
 
             "online":
                 key in online,

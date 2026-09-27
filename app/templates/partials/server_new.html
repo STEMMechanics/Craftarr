@@ -1,7 +1,18 @@
 <div
     class="server-create-page"
-    data-page-title="Create Server"
+    data-page-title="Create a server"
 >
+
+    <section class="servers-page-intro">
+        <div>
+            <h1>Make a Minecraft server</h1>
+            <p>Pick a name and game settings. You can change them later.</p>
+        </div>
+        <a href="/servers/import" class="button success"
+           hx-get="/servers/import" hx-target="#page-content" hx-push-url="true">
+            <i class="fa-solid fa-file-import" aria-hidden="true"></i> Import a server
+        </a>
+    </section>
 
     <form
         class="server-create-form"
@@ -10,156 +21,81 @@
     >
 
         <section class="overview-card settings-section">
-
-            <div class="card-header">
-                Basic Settings
-            </div>
-
+            <div class="card-header">Start your server</div>
             <div class="settings-content server-create-grid">
-
                 <label class="property-field full-width">
-
-                    <span>Server Name</span>
-
-                    <input
-                        name="name"
-                        type="text"
-                        placeholder="My Minecraft Server"
-                        required
-                        autofocus
-                    >
-
+                    <span>Server name</span>
+                    <input name="name" type="text" placeholder="My Minecraft Server" required autofocus>
                 </label>
-
-
                 <label class="property-field">
-
-                    <span>Minecraft Version</span>
-
-                    <select
-                        id="create-minecraft-version"
-                        name="minecraft_version"
-                        required
-                        onchange="selectRecommendedJava()"
-                    >
-
+                    <span>Minecraft version</span>
+                    <select id="create-minecraft-version" name="minecraft_version" required onchange="selectRecommendedJava()">
                         {% for version in versions %}
-
-                        <option value="{{ version }}">
-                            {{ version }}
-                        </option>
-
+                        <option value="{{ version }}">{{ version }}</option>
                         {% else %}
-
-                        <option value="" disabled>
-                            No versions available
-                        </option>
-
-                        {% endfor %}
-
-                    </select>
-
-                    <small>
-                        Latest Paper build will be installed automatically.
-                    </small>
-
-                </label>
-
-
-                <label class="property-field">
-
-                    <span>Server Port</span>
-
-                    <input
-                        id="create-server-port"
-                        name="port"
-                        type="number"
-                        value="25565"
-                        min="1"
-                        max="65535"
-                        required
-                        oninput="checkServerPortWarning(this.value)"
-                    >
-
-                    <small id="server-port-warning" class="port-conflict-warning" hidden></small>
-
-                    <small>
-                        Default: 25565
-                    </small>
-
-                </label>
-
-
-                <label class="property-field">
-
-                    <span>Memory Allocation</span>
-
-                    <select name="memory">
-
-                        <option value="1G">
-                            1 GB
-                        </option>
-
-                        <option value="2G">
-                            2 GB
-                        </option>
-
-                        <option
-                            value="4G"
-                            selected
-                        >
-                            4 GB
-                        </option>
-
-                        <option value="6G">
-                            6 GB
-                        </option>
-
-                        <option value="8G">
-                            8 GB
-                        </option>
-
-                        <option value="12G">
-                            12 GB
-                        </option>
-
-                        <option value="16G">
-                            16 GB
-                        </option>
-
-                    </select>
-
-                </label>
-
-                <label class="property-field">
-                    <span>Process Backend</span>
-                    <select name="process_backend">
-                        <option value="systemd" {% if systemd_available %}selected{% else %}disabled{% endif %}>Production (independent systemd service)</option>
-                        <option value="subprocess" {% if not systemd_available %}selected{% endif %}>Development (panel-owned)</option>
-                    </select>
-                    {% if systemd_available %}
-                    <small>Use systemd on production Linux so Minecraft survives panel restarts.</small>
-                    {% else %}
-                    <small>Systemd is unavailable on this host. Use a panel-owned process.</small>
-                    {% endif %}
-                </label>
-
-                <label class="property-field">
-                    <span>Java Runtime</span>
-                    <select id="create-java-path" name="java_major" required>
-                        {% for runtime in java_runtimes %}
-                        <option value="{{ runtime.major }}" data-java-major="{{ runtime.major }}">{{ runtime.label }}</option>
-                        {% else %}
-                        <option value="" disabled>No Java runtimes detected</option>
+                        <option value="" disabled>No versions available</option>
                         {% endfor %}
                     </select>
-                    <small>Select an installed runtime. Paper 26.1+ requires Java 25.</small>
+                    <small>We install the server software for this game version.</small>
                 </label>
-
             </div>
 
+            <details class="server-create-extra-options">
+                <summary>
+                    <span class="server-create-summary-copy">
+                        Other server settings <span class="server-create-summary-note">(you can skip these)</span>
+                    </span>
+                </summary>
+                <div class="settings-content server-create-grid">
+                    <label class="property-field">
+                        <span>Connection port</span>
+                        <input id="create-server-port" name="port" type="number" value="25565" min="1" max="65535" required oninput="checkServerPortWarning(this.value)">
+                        <small id="server-port-warning" class="port-conflict-warning" hidden></small>
+                        <small>Players use this number to join. Leave 25565 as it is.</small>
+                    </label>
+                    <label class="property-field">
+                        <span>Memory</span>
+                        <select name="memory">
+                            <option value="1G">1 GB</option><option value="2G">2 GB</option>
+                            <option value="4G" selected>4 GB</option><option value="6G">6 GB</option>
+                            <option value="8G">8 GB</option><option value="12G">12 GB</option>
+                            <option value="16G">16 GB</option>
+                        </select>
+                        <small>More players and plugins may need more memory.</small>
+                    </label>
+                    <label class="property-field">
+                        <span>How should we run it?</span>
+                        <select name="process_backend">
+                            <option value="systemd" {% if systemd_available %}selected{% else %}disabled{% endif %}>Recommended (keeps running)</option>
+                            <option value="subprocess" {% if not systemd_available %}selected{% endif %}>Run inside this app</option>
+                        </select>
+                        {% if systemd_available %}
+                        <small>Minecraft can keep running if this app restarts.</small>
+                        {% else %}
+                        <small>This computer uses the app to run Minecraft.</small>
+                        {% endif %}
+                    </label>
+                    <label class="property-field">
+                        <span>Java for Minecraft</span>
+                        <select id="create-java-path" name="java_major" required>
+                            {% for runtime in java_runtimes %}
+                            <option value="{{ runtime.major }}" data-java-major="{{ runtime.major }}">{{ runtime.label }}</option>
+                            {% else %}
+                            <option value="" disabled>No Java versions found</option>
+                            {% endfor %}
+                        </select>
+                        <small>Minecraft needs Java. We choose a version for you.</small>
+                    </label>
+                </div>
+            </details>
         </section>
 
+        <details class="server-create-advanced">
+            <summary>
+                <span class="server-create-summary-copy">
+                    Change game and world settings <span class="server-create-summary-note">(optional)</span>
+                </span>
+            </summary>
 
         <section class="overview-card settings-section">
 
@@ -171,7 +107,7 @@
 
                 <label class="property-field">
 
-                    <span>Max Players</span>
+                    <span>Player limit</span>
 
                     <input
                         name="max_players"
@@ -216,7 +152,7 @@
 
                 <label class="property-field">
 
-                    <span>Default Gamemode</span>
+                    <span>Game mode</span>
 
                     <select name="gamemode">
 
@@ -246,7 +182,7 @@
 
                 <label class="property-field">
 
-                    <span>View Distance</span>
+                    <span>View distance</span>
 
                     <input
                         name="view_distance"
@@ -257,7 +193,7 @@
                     >
 
                     <small>
-                        2–32 chunks
+                        How far away players can see (2–32 chunks).
                     </small>
 
                 </label>
@@ -265,7 +201,7 @@
 
                 <label class="property-field">
 
-                    <span>Simulation Distance</span>
+                    <span>Game update distance</span>
 
                     <input
                         name="simulation_distance"
@@ -276,7 +212,7 @@
                     >
 
                     <small>
-                        2–32 chunks
+                        How far away the game updates blocks and mobs (2–32 chunks).
                     </small>
 
                 </label>
@@ -296,7 +232,7 @@
 
                 <label class="property-field full-width">
 
-                    <span>World Name</span>
+                    <span>World name</span>
 
                     <input
                         name="world_name"
@@ -306,7 +242,7 @@
                     >
 
                     <small>
-                        Folder name used for the main world.
+                        This is the name of the main world folder.
                     </small>
 
                 </label>
@@ -314,7 +250,7 @@
 
                 <label class="property-field">
 
-                    <span>World Type</span>
+                    <span>World type</span>
 
                     <select name="world_type">
 
@@ -344,7 +280,7 @@
 
                 <label class="property-field">
 
-                    <span>Seed</span>
+                    <span>World seed</span>
 
                     <input
                         name="seed"
@@ -493,7 +429,7 @@
                     <div>
 
                         <strong>
-                            Enable Whitelist
+                            Only allow listed players to join
                         </strong>
 
                     </div>
@@ -556,7 +492,7 @@
                 <label class="property-field full-width">
 
                     <span>
-                        MOTD
+                        Server list message
                     </span>
 
                     <input
@@ -577,10 +513,12 @@
         </section>
 
 
+        </details>
+
         <section class="overview-card settings-section">
 
             <div class="card-header">
-                Minecraft EULA
+                Minecraft server rules
             </div>
 
             <div class="settings-content">
@@ -590,12 +528,11 @@
                     <div>
 
                         <strong>
-                            I agree to the Minecraft EULA
+                            I agree to Minecraft's rules (EULA)
                         </strong>
 
                         <small>
-                            Creating a Minecraft server requires acceptance
-                            of Mojang's End User Licence Agreement.
+                            Minecraft needs this agreement before it can make your server.
                         </small>
 
                     </div>
@@ -636,7 +573,7 @@
                 type="submit"
                 disabled
             >
-                Create Server
+                <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Make server
             </button>
 
         </div>
@@ -685,6 +622,17 @@ function selectRecommendedJava() {
 
 updateCreateServerButton();
 selectRecommendedJava();
-checkServerPortWarning(document.getElementById("create-server-port")?.value);
+(function initializeCreateServerPortWarning() {
+    const run = () => {
+        if (typeof window.checkServerPortWarning === "function") {
+            window.checkServerPortWarning(document.getElementById("create-server-port")?.value);
+        }
+    };
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", run, { once: true });
+    } else {
+        run();
+    }
+})();
 
 </script>

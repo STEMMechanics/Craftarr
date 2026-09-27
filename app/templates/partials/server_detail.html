@@ -1,63 +1,88 @@
-<div class="server-overview" data-server-id="{{ server.id }}" data-page-title="Overview">
-  <div class="server-summary-grid">
-    <div class="overview-card summary-card">
-      <span class="card-label">Players</span>
-      <div class="summary-value"><span id="overview-players">0</span><small> / <span id="overview-max-players">0</span></small></div>
-    </div>
-    <div class="overview-card summary-card">
-      <span class="card-label">Uptime</span>
-      <div id="overview-uptime" class="summary-value">-</div>
-    </div>
-    <div class="overview-card summary-card">
-      <span class="card-label">Plugins</span>
-      <div class="summary-value accent"><span id="overview-plugin-active">-</span><small> / <span id="overview-plugin-total">-</span></small></div>
-    </div>
-    <div class="overview-card summary-card">
-      <span class="card-label"><i class="fa-solid fa-network-wired"></i> Java Port</span>
-      <div class="summary-value">{{ server.port }}</div>
-    </div>
-    <div class="overview-card summary-card">
-      <span class="card-label"><i class="fa-solid fa-gamepad"></i> Bedrock Port</span>
-      <div>
-        <div id="overview-bedrock-port" class="summary-value">-</div>
-        <small id="overview-bedrock-status" class="summary-footnote">Checking Geyser...</small>
+<div class="server-overview" data-server-id="{{ server.id }}" data-page-title="Home">
+  <section class="server-welcome">
+    <img class="server-welcome-art" src="/static/images/server-manager/world-running-banner.webp" alt="" aria-hidden="true" width="2172" height="724">
+    <div class="server-world-copy">
+      <h1>{{ server.name }}</h1>
+      <p>Build, explore and keep your world running.</p>
+      <div class="server-world-meta">
+        <span class="server-live-pill" id="overview-server-state" role="status" aria-live="polite"><span class="server-live-dot" aria-hidden="true"></span><span id="overview-server-state-text">Checking…</span></span>
+        <span class="server-version-pill" title="Minecraft server version"><i class="fa-solid fa-cube" aria-hidden="true"></i><span class="visually-hidden">Server version: </span><span id="paper-installed-version">{{ server.minecraft_version or "Not detected" }}{% if server.paper_build %} <small>(build {{ server.paper_build }})</small>{% endif %}</span></span>
+        <span id="paper-version-detail" class="server-inline-update-status" role="status" aria-live="polite"></span>
+      </div>
+      <div class="server-control-row">
+        {% if user.can("servers.control") %}
+        <div class="server-actions" role="group" aria-label="Server controls">
+          <button id="dashboard-start" class="server-control-label start" type="button" onclick="serverAction('start')" aria-label="Start server" disabled>
+            <i class="fa-solid fa-play" aria-hidden="true"></i><span>Start</span>
+          </button>
+          <button id="dashboard-stop" class="server-control-label stop" type="button" onclick="serverAction('stop')" aria-label="Stop server" disabled>
+            <i class="fa-solid fa-stop" aria-hidden="true"></i><span>Stop</span>
+          </button>
+          <button id="dashboard-restart" class="server-control-label restart" type="button" onclick="serverAction('restart')" aria-label="Restart server" disabled>
+            <i class="fa-solid fa-rotate-right" aria-hidden="true"></i><span>Restart</span>
+          </button>
+        </div>
+        {% endif %}
+        <div class="server-update-tools">
+          {% if user.can("servers.properties") %}
+          <button class="button server-update-check-button" type="button" onclick="checkMonitoredUpdates(this, 'paper')"><i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i><span>Check updates</span></button>
+          {% endif %}
+        </div>
       </div>
     </div>
-    <div class="overview-card summary-card version-summary-card">
-      <span class="card-label">Server Version</span>
-      <div class="summary-value">
-        <span id="paper-installed-version">{{ server.minecraft_version or "Unknown" }}{% if server.paper_build %} <small>(build {{ server.paper_build }})</small>{% endif %}</span>
-      </div>
-      <div id="paper-version-detail" class="summary-footnote">Loading Paper update status...</div>
-      {% if user.can("servers.properties") %}
-      <button class="button" type="button" onclick="checkMonitoredUpdates(this, 'paper')">Check for updates</button>
-      <span class="muted-small" id="update-check-feedback" role="status"></span>
-      {% endif %}
-    </div>
-  </div>
+  </section>
 
-  <div class="overview-stack">
-    <section class="overview-card automation-card">
-      <div class="card-header">
-        <span>History &amp; Performance</span>
-        <select id="metrics-range" onchange="loadServerMetrics()" aria-label="Metrics time range">
-          <option value="6">Last 6 hours</option><option value="24" selected>Last 24 hours</option>
-          <option value="168">Last 7 days</option><option value="720">Last 30 days</option>
-        </select>
-      </div>
-      <div class="metrics-grid">
-        <div><strong>CPU</strong><small id="overview-cpu-value" class="metric-current-value">-</small><canvas id="metric-cpu" height="120"></canvas></div>
-        <div><strong>Memory</strong><small id="overview-memory-value" class="metric-current-value" data-memory="{{ server.memory }}">0 MB</small><canvas id="metric-memory" height="120"></canvas></div>
-        <div><strong>Players</strong><canvas id="metric-players" height="120"></canvas></div>
-        <div><strong>Uptime</strong><canvas id="metric-uptime" height="120"></canvas></div>
-      </div>
-    </section>
+  <section class="dashboard-section" aria-labelledby="server-at-a-glance-title">
+    <div class="section-heading-row">
+      <div><h2 id="server-at-a-glance-title">At a glance</h2><p>How your server is doing right now.</p></div>
+      <a class="quiet-link" href="/servers/{{ server.id }}/performance" hx-get="/servers/{{ server.id }}/performance" hx-target="#page-content" hx-push-url="true">See performance <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></a>
+    </div>
+    <div class="metrics-grid dashboard-metrics-grid">
+      <article class="metric-card metric-players-card">
+        <div class="metric-card-heading"><span class="metric-icon"><i class="fa-solid fa-users" aria-hidden="true"></i></span><span>Players</span></div>
+        <div class="metric-value"><strong id="overview-players">0</strong><span>of <span id="overview-max-players">0</span> spots</span></div>
+        <canvas id="metric-players" height="78" role="img" aria-label="Player count history"></canvas>
+      </article>
+      <article class="metric-card metric-cpu-card">
+        <div class="metric-card-heading"><span class="metric-icon"><i class="fa-solid fa-microchip" aria-hidden="true"></i></span><span>CPU use</span></div>
+        <div class="metric-value"><strong id="overview-cpu-value">—</strong><span>now</span></div>
+        <canvas id="metric-cpu" height="78" role="img" aria-label="CPU usage history"></canvas>
+      </article>
+      <article class="metric-card metric-memory-card">
+        <div class="metric-card-heading"><span class="metric-icon"><i class="fa-solid fa-memory" aria-hidden="true"></i></span><span>Memory</span></div>
+        <div class="metric-value"><strong id="overview-memory-value" data-memory="{{ server.memory }}">—</strong><span>in use</span></div>
+        <canvas id="metric-memory" height="78" role="img" aria-label="Memory use history"></canvas>
+      </article>
+      <article class="metric-card metric-uptime-card">
+        <div class="metric-card-heading"><span class="metric-icon"><i class="fa-solid fa-clock" aria-hidden="true"></i></span><span>Time online</span></div>
+        <div class="metric-value"><strong id="overview-uptime">—</strong><span>this run</span></div>
+        <canvas id="metric-uptime" height="78" role="img" aria-label="Server uptime history"></canvas>
+      </article>
+    </div>
+  </section>
 
-    <section class="overview-card recent-logs overview-console-card">
-      <div class="card-header"><span>Recent Logs</span>
-        <a class="panel-header-button" href="/servers/{{ server.id }}/console" hx-get="/servers/{{ server.id }}/console" hx-target="#page-content" hx-push-url="true"><i class="fa-solid fa-terminal"></i> Console</a>
-      </div>
-      <pre id="overview-logs">Loading logs...</pre>
-    </section>
-  </div>
+  <section class="dashboard-section" aria-labelledby="server-shortcuts-title">
+    <div class="section-heading-row"><div><h2 id="server-shortcuts-title">What would you like to do?</h2><p>Jump straight to a server tool.</p></div></div>
+    <div class="server-shortcuts">
+      {% if user.can("files.view") %}<a class="shortcut-tile shortcut-blue" href="/servers/{{ server.id }}/files" hx-get="/servers/{{ server.id }}/files" hx-target="#page-content" hx-push-url="true"><span><i class="fa-solid fa-folder-open" aria-hidden="true"></i></span><strong>Open files</strong><small>Worlds, settings and more</small></a>{% endif %}
+      {% if user.can("plugins.view") %}<a class="shortcut-tile shortcut-purple" href="/servers/{{ server.id }}/plugins" hx-get="/servers/{{ server.id }}/plugins" hx-target="#page-content" hx-push-url="true"><span><i class="fa-solid fa-puzzle-piece" aria-hidden="true"></i></span><strong>Plugins</strong><small><span id="overview-plugin-active">—</span> enabled · <span id="overview-plugin-total">—</span> total</small></a>{% endif %}
+      {% if user.can("backups.view") %}<a class="shortcut-tile shortcut-green" href="/servers/{{ server.id }}/backups" hx-get="/servers/{{ server.id }}/backups" hx-target="#page-content" hx-push-url="true"><span><i class="fa-solid fa-box-archive" aria-hidden="true"></i></span><strong>Backups</strong><small>Keep a safe copy</small></a>{% endif %}
+      {% if user.can("servers.properties") %}<a class="shortcut-tile shortcut-orange" href="/servers/{{ server.id }}/properties" hx-get="/servers/{{ server.id }}/properties" hx-target="#page-content" hx-push-url="true"><span><i class="fa-solid fa-sliders" aria-hidden="true"></i></span><strong>Server settings</strong><small>Change how it works</small></a>{% endif %}
+    </div>
+  </section>
+
+  {% if user.can("console.view") %}
+  <section class="overview-card dashboard-activity-card">
+    <div class="card-header"><div><h2>Recent activity</h2><p>What your server has been doing.</p></div><a class="quiet-link" href="/servers/{{ server.id }}/logs" hx-get="/servers/{{ server.id }}/logs" hx-target="#page-content" hx-push-url="true">See all <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></a></div>
+    <pre id="overview-logs" aria-live="polite">Loading recent activity…</pre>
+  </section>
+  {% endif %}
+
+  <details class="server-extra-info">
+    <summary><i class="fa-solid fa-circle-info" aria-hidden="true"></i> Connection details</summary>
+    <div class="connection-detail-grid">
+      <div><span>Java port</span><strong>{{ server.port }}</strong></div>
+      <div><span>Bedrock port</span><strong id="overview-bedrock-port">Checking…</strong><small id="overview-bedrock-status">Checking Geyser…</small></div>
+    </div>
+  </details>
 </div>

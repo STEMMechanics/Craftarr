@@ -7,12 +7,14 @@ import urllib.parse
 import urllib.request
 import shutil
 import tempfile
+import uuid
 import yaml
+from .env import getenv
 
 from pathlib import Path
 
 
-MAX_PLUGIN_BYTES = int(os.getenv("STEMCRAFT_MAX_PLUGIN_BYTES", str(128 * 1024 * 1024)))
+MAX_PLUGIN_BYTES = int(getenv("CRAFTARR_MAX_PLUGIN_BYTES", str(128 * 1024 * 1024)))
 
 
 class PluginFileExistsError(FileExistsError):
@@ -88,6 +90,27 @@ def plugin_config_directory(
     )
 
 
+def _filename_plugin_version(
+    filename: str,
+    plugin_name: str | None,
+) -> str | None:
+    """Read a version suffix only when the JAR name matches the plugin name."""
+    if not plugin_name:
+        return None
+
+    stem = Path(filename).stem
+    if not stem.casefold().startswith(plugin_name.casefold()):
+        return None
+
+    suffix = stem[len(plugin_name):]
+    match = re.fullmatch(
+        r"[-_ ]+(v?\d[A-Za-z0-9.+_-]*)",
+        suffix,
+        re.IGNORECASE,
+    )
+    return match.group(1) if match else None
+
+
 def plugin_info(
     path: Path,
 ) -> dict:
@@ -123,6 +146,19 @@ def plugin_info(
             display_filename[:-4],
         )
 
+    metadata_version = metadata.get("version")
+    filename_version = _filename_plugin_version(
+        display_filename,
+        name,
+    )
+    version = metadata_version or filename_version
+    if metadata_version:
+        version_source = "metadata"
+    elif filename_version:
+        version_source = "filename"
+    else:
+        version_source = None
+
 
     config_dir = (
         plugin_config_directory(
@@ -131,6 +167,7 @@ def plugin_info(
     )
 
     config_files = []
+    config_file_modified_ns = {}
     if config_dir and config_dir.is_dir():
         plugin_root = path.parent.resolve()
         for config_file in config_dir.rglob("*"):
@@ -140,7 +177,8 @@ def plugin_info(
                 resolved = config_file.resolve()
                 resolved.relative_to(config_dir.resolve())
                 relative = resolved.relative_to(plugin_root.parent)
-            except ValueError:
+                config_file_modified_ns[relative.as_posix()] = str(resolved.stat().st_mtime_ns)
+            except (OSError, ValueError):
                 continue
             config_files.append(relative.as_posix())
 
@@ -148,14 +186,17 @@ def plugin_info(
     return {
         "filename": filename,
 
+        "rollback_copy": bool(re.search(r"\.rollback-[0-9a-f]{12}\.jar\.disabled$", filename, re.IGNORECASE)),
+
         "name":
             name
             or display_filename,
 
         "version":
-            metadata.get(
-                "version"
-            ),
+            version,
+
+        "version_source":
+            version_source,
 
         "enabled":
             not disabled,
@@ -184,6 +225,8 @@ def plugin_info(
                 config_path.lower(),
             ),
         ),
+
+        "config_file_modified_ns": config_file_modified_ns,
     }
 
 
@@ -348,8 +391,8 @@ def install_plugin_url(server, url: str, replace: bool = False) -> dict:
     if not filename.lower().endswith(".jar"):
         raise ValueError("Plugin URL path must end in .jar")
     opener = urllib.request.build_opener(_SafeRedirectHandler())
-    request = urllib.request.Request(url, headers={"User-Agent": "STEMCraft-Console"})
-    with tempfile.NamedTemporaryFile(prefix="stemcraft-plugin-", suffix=".jar") as temporary:
+    request = urllib.request.Request(url, headers={"User-Agent": "Craftarr-Console"})
+    with tempfile.NamedTemporaryFile(prefix="craftarr-plugin-", suffix=".jar") as temporary:
         with opener.open(request, timeout=120) as response:
             final = _validate_public_https_url(response.geturl())
             content_length = response.headers.get("Content-Length")
@@ -399,6 +442,129 @@ def safe_plugin_path(
         )
 
     return path
+
+
+def install_plugin_update(server, filename: str, url: str, *, keep_previous: bool = True, expected_name: str | None = None, expected_version: str | None = None, provider_name: str | None = None) -> dict:
+    """Install a monitored release on the server, optionally retaining the old JAR disabled."""
+    if Path(filename).name != filename or not filename.lower().endswith((".jar", ".jar.disabled")):
+        raise ValueError("Select a valid installed plugin file")
+
+    current_path = safe_plugin_path(server, filename)
+    if current_path.name != filename or not current_path.is_file():
+        raise FileNotFoundError("Plugin file changed or no longer exists")
+
+    current = plugin_info(current_path)
+    expected_name = expected_name or current["name"]
+    if current["name"].casefold() != expected_name.casefold():
+        raise ValueError("Plugin identity changed; reload the plugin list and try again")
+
+    _validate_public_https_url(url)
+    directory = plugins_directory(server).resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    opener = urllib.request.build_opener(_SafeRedirectHandler())
+    request = urllib.request.Request(url, headers={"User-Agent": "Craftarr-Console"})
+    temporary_path = None
+    rollback_path = None
+    replaced_path = None
+    moved_current = False
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix=".craftarr-update-", suffix=".jar", dir=directory, delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            with opener.open(request, timeout=120) as response:
+                _validate_public_https_url(response.geturl())
+                content_length = response.headers.get("Content-Length")
+                if content_length and int(content_length) > MAX_PLUGIN_BYTES:
+                    raise ValueError("Plugin exceeds the configured size limit")
+                total = 0
+                while chunk := response.read(1024 * 1024):
+                    total += len(chunk)
+                    if total > MAX_PLUGIN_BYTES:
+                        raise ValueError("Plugin exceeds the configured size limit")
+                    temporary.write(chunk)
+
+        validate_plugin_archive(temporary_path)
+        updated_metadata = read_plugin_yml(temporary_path)
+        updated_name = updated_metadata.get("name")
+        if not updated_name or updated_name.casefold() != expected_name.casefold():
+            raise ValueError("Downloaded JAR does not match the installed plugin")
+
+        target_filename = filename
+        if expected_version:
+            version_token = re.sub(r"[^A-Za-z0-9.+_-]", "", expected_version).strip(".-_")
+            current_version = _filename_plugin_version(filename.removesuffix(".disabled"), expected_name)
+            if provider_name and provider_name.casefold() == "jenkins" and re.fullmatch(r"\d+", version_token):
+                display_filename = filename.removesuffix(".disabled")
+                build_match = re.search(
+                    r"(?i)(?:\(build\s+|[- ]build[ .-]*|-b|-SNAPSHOT-)(?P<build>\d+)(?:\)?(?:\+[a-z0-9]+)?)(?=\.jar$)",
+                    display_filename,
+                )
+                if build_match:
+                    target_filename = (
+                        display_filename[:build_match.start("build")]
+                        + version_token
+                        + display_filename[build_match.end("build"):]
+                    )
+                    if not current["enabled"]:
+                        target_filename += ".disabled"
+            elif (
+                not updated_metadata.get("version")
+                and re.fullmatch(r"v?\d[A-Za-z0-9.+_-]*", version_token, re.IGNORECASE)
+                and current_version != version_token
+            ):
+                plugin_stem = re.sub(r"[^A-Za-z0-9._ -]", "", expected_name).strip(" .")
+                if plugin_stem:
+                    target_filename = f"{plugin_stem}-{version_token}.jar"
+                    if not current["enabled"]:
+                        target_filename += ".disabled"
+        target_path = safe_plugin_path(server, target_filename)
+        if target_path != current_path and target_path.exists():
+            raise ValueError("A JAR for this plugin version already exists; resolve the duplicate before updating")
+
+        updated_plugin = plugin_info(temporary_path)
+        updated_plugin["filename"] = target_filename
+        updated_plugin["enabled"] = current["enabled"]
+        updated_plugin["rollback_copy"] = False
+        if not updated_metadata.get("version"):
+            filename_version = _filename_plugin_version(target_filename.removesuffix(".disabled"), expected_name)
+            updated_plugin["version"] = filename_version
+            updated_plugin["version_source"] = "filename" if filename_version else None
+
+        if keep_previous:
+            base_name = filename[:-9] if filename.endswith(".jar.disabled") else filename
+            stem = base_name[:-4]
+            while rollback_path is None or rollback_path.exists():
+                rollback_name = f"{stem}.rollback-{uuid.uuid4().hex[:12]}.jar.disabled"
+                rollback_path = safe_plugin_path(server, rollback_name)
+            os.replace(current_path, rollback_path)
+            moved_current = True
+        elif target_path != current_path:
+            while replaced_path is None or replaced_path.exists():
+                replaced_path = safe_plugin_path(server, f".craftarr-replaced-{uuid.uuid4().hex}.jar")
+            os.replace(current_path, replaced_path)
+            moved_current = True
+
+        os.replace(temporary_path, target_path)
+        temporary_path = None
+        if replaced_path:
+            replaced_path.unlink(missing_ok=True)
+            moved_current = False
+        return {
+            "plugin": updated_plugin,
+            "rollback_filename": rollback_path.name if keep_previous else None,
+        }
+    except Exception:
+        if moved_current:
+            if target_path.exists():
+                target_path.unlink(missing_ok=True)
+            previous_path = rollback_path if keep_previous else replaced_path
+            if previous_path and previous_path.exists() and not current_path.exists():
+                os.replace(previous_path, current_path)
+        raise
+    finally:
+        if temporary_path:
+            temporary_path.unlink(missing_ok=True)
 
 
 def disable_plugin(

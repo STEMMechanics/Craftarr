@@ -31,7 +31,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: STEMCraft Console version
+      label: Craftarr version
       description: Shown in System Settings or returned by `/api/version`.
       placeholder: 0.1.2
     validations:
@@ -82,8 +82,8 @@ body:
       label: Logs
       description: |
         Relevant panel output and the Minecraft server log if applicable.
-        Panel logs: `sudo stemcraft-console logs`. Minecraft service logs:
-        `sudo stemcraft-console server NAME logs`. Remove secrets and player IPs.
+        Panel logs: `sudo craftarr-console logs`. Minecraft service logs:
+        `sudo craftarr-console server NAME logs`. Remove secrets and player IPs.
       render: shell
 
   - type: textarea

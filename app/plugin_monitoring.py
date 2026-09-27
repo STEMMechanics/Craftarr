@@ -46,25 +46,52 @@ def monitoring_config(db, server_id, name):
     from .monitoring_defaults import default_for, FIELDS
     setting = db.get(PluginMonitoringSetting, (server_id, providers.normalize_name(name)))
     defaults, file_error = default_for(name)
-    mode = setting.mode if setting else 'custom' if defaults else 'disabled'
-    config = {field: getattr(setting, field) if setting else (defaults or {}).get(field, '') for field in FIELDS}
-    config.update(mode=mode, source=None, configured=bool(setting or defaults),
-                  notes=(defaults or {}).get('notes', '') if not setting else '')
+    global_entry = defaults if defaults and not defaults.get('error') else None
+    global_settings = {field: global_entry.get(field, '') for field in FIELDS} if global_entry else {}
+    if global_entry:
+        global_settings['notes'] = global_entry.get('notes', '')
+    global_error = (defaults or {}).get('error') or file_error
+    has_global_source = bool(global_entry or global_error)
+    # `mode` remains the provider/legacy field; `selection` is the UI scope.
+    mode = setting.mode if setting else 'custom' if has_global_source else 'disabled'
+    selection = setting.mode if setting else 'global' if has_global_source else 'disabled'
+    if setting and mode == 'custom':
+        fields = {field: getattr(setting, field) for field in FIELDS}
+    elif selection == 'global':
+        fields = dict(global_settings)
+    else:
+        fields = {field: '' for field in FIELDS}
+    config = dict(fields)
+    config.update(mode=mode, source=None, configured=bool(setting or defaults or file_error),
+                  selection=selection,
+                  notes=(global_entry or {}).get('notes', '') if selection == 'global' else '',
+                  global_available=bool(global_entry), global_settings=global_settings,
+                  global_notes=(global_entry or {}).get('notes', ''), error=None)
     provider = None
-    if not setting and ((defaults or {}).get('error') or file_error):
-        config['error'] = (defaults or {}).get('error') or file_error
-    elif mode == 'custom':
-        provider = custom_provider(config['provider'], config['project'], config['version_pattern'], config['link_pattern'], config['installed_pattern'])
+    if selection == 'custom':
+        provider = custom_provider(*(config[field] for field in FIELDS))
+    elif selection == 'global':
+        if global_entry:
+            provider = custom_provider(*(global_settings[field] for field in FIELDS))
+        else:
+            config['error'] = global_error or 'No shared update settings are available for this plugin.'
+    if provider:
         config['source'] = f'{provider.name}: {provider.project}'
     return provider, config
 
 
 def save_monitoring_config(db, server_id, name, mode, kind='', project='', version_pattern='', link_pattern='', installed_pattern=''):
-    if mode not in ('disabled', 'custom'):
-        raise ValueError('Select disabled or configured monitoring')
+    if mode not in ('disabled', 'global', 'custom'):
+        raise ValueError('Select disabled, shared or manual monitoring')
     if mode == 'custom':
         provider = custom_provider(kind, project, version_pattern, link_pattern, installed_pattern)
         project = provider.project
+    elif mode == 'global':
+        from .monitoring_defaults import default_for
+        defaults, error = default_for(name)
+        if not defaults or defaults.get('error') or error:
+            raise ValueError('No valid shared update settings are available for this plugin')
+        kind = project = version_pattern = link_pattern = installed_pattern = ''
     else:
         kind, project, version_pattern, link_pattern, installed_pattern = '', '', '', '', ''
     key = providers.normalize_name(name)

@@ -1,4 +1,4 @@
-import os
+from .env import getenv
 
 import uvicorn
 
@@ -6,8 +6,8 @@ from dotenv import load_dotenv
 
 
 load_dotenv(
-    os.getenv(
-        "STEMCRAFT_CONSOLE_ENV",
+    getenv(
+        "CRAFTARR_CONSOLE_ENV",
         ".env",
     )
 )
@@ -15,14 +15,14 @@ load_dotenv(
 
 def main():
 
-    host = os.getenv(
-        "STEMCRAFT_CONSOLE_HOST",
+    host = getenv(
+        "CRAFTARR_CONSOLE_HOST",
         "127.0.0.1",
     )
 
     port = int(
-        os.getenv(
-            "STEMCRAFT_CONSOLE_PORT",
+        getenv(
+            "CRAFTARR_CONSOLE_PORT",
             "8000",
         )
     )

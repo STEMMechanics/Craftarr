@@ -1,11 +1,11 @@
 blank_issues_enabled: true
 contact_links:
   - name: Documentation
-    url: https://github.com/STEMMechanics/stemcraft-console#readme
+    url: https://github.com/STEMMechanics/Craftarr#readme
     about: Installation, configuration, service, and troubleshooting guidance.
   - name: Question or setup help
-    url: https://github.com/STEMMechanics/stemcraft-console/discussions
+    url: https://github.com/STEMMechanics/Craftarr/discussions
     about: Ask here if something isn't working but you're not sure it's a bug.
   - name: Report a security vulnerability
-    url: https://github.com/STEMMechanics/stemcraft-console/security/advisories/new
+    url: https://github.com/STEMMechanics/Craftarr/security/advisories/new
     about: Please report vulnerabilities privately, not as a public issue.

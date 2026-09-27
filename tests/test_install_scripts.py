@@ -7,16 +7,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_install_and_upgrade_put_helper_on_sudo_safe_path():
-    expected = 'install -m 0755 "$SOURCE_DIR/deploy/stemcraft-console" /usr/bin/stemcraft-console'
+    expected = 'install -m 0755 "$SOURCE_DIR/deploy/craftarr-console" /usr/bin/craftarr-console'
 
     assert expected in (ROOT / "scripts/install.sh").read_text()
     assert expected in (ROOT / "scripts/upgrade.sh").read_text()
 
 
-def test_uninstall_removes_current_and_legacy_helper_paths():
+def test_uninstall_removes_craftarr_helper_paths():
     script = (ROOT / "scripts/uninstall.sh").read_text()
 
-    assert "rm -f /usr/bin/stemcraft-console /usr/local/sbin/stemcraft-console" in script
+    assert "rm -f /usr/bin/craftarr-console /usr/local/sbin/craftarr-console" in script
 
 
 def test_fresh_install_bind_prompt_and_fallback_share_all_interfaces_default():
@@ -41,7 +41,7 @@ def test_installer_preserves_existing_java_and_installs_only_selected_versions()
 
 
 def test_minecraft_service_allows_supervisor_to_stop_java_gracefully():
-    unit = (ROOT / "deploy/stemcraft-server@.service").read_text()
+    unit = (ROOT / "deploy/craftarr-server@.service").read_text()
 
     assert "KillSignal=SIGTERM" in unit
     assert "KillMode=mixed" in unit
@@ -59,7 +59,7 @@ def test_helper_self_elevates_with_resolved_absolute_path(tmp_path):
     sudo = tmp_path / "sudo"
     sudo.write_text("#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\n")
     sudo.chmod(0o755)
-    helper = ROOT / "deploy/stemcraft-console"
+    helper = ROOT / "deploy/craftarr-console"
     environment = os.environ | {"PATH": f"{tmp_path}:{os.environ['PATH']}"}
 
     result = subprocess.run(

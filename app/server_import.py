@@ -15,7 +15,7 @@ IGNORED_SCAN_DIRECTORIES = {
 PROTECTED_IMPORT_PATHS = {
     Path("/"), Path("/bin"), Path("/boot"), Path("/dev"), Path("/etc"),
     Path("/proc"), Path("/run"), Path("/sbin"), Path("/sys"), Path("/usr"),
-    Path("/opt/stemcraft-console"), Path("/var/lib/stemcraft-console"),
+    Path("/opt/craftarr"), Path("/var/lib/craftarr"),
 }
 
 
@@ -182,7 +182,7 @@ def inspect_server_directory(
 
     if verify_write and not errors:
         try:
-            with tempfile.NamedTemporaryFile(prefix=".stemcraft-import-", dir=directory, delete=True):
+            with tempfile.NamedTemporaryFile(prefix=".craftarr-import-", dir=directory, delete=True):
                 pass
         except OSError as error:
             errors.append(f"A write test in the server directory failed: {error}")
@@ -199,11 +199,11 @@ def inspect_server_directory(
     if service and (service["active"] or service["enabled"]):
         state = "active" if service["active"] else "enabled"
         errors.append(
-            f"Existing service {service['unit']} is {state}; stop and disable it before STEMCraft takes ownership"
+            f"Existing service {service['unit']} is {state}; stop and disable it before Craftarr takes ownership"
         )
     elif service:
         warnings.append(
-            f"Disabled external service {service['unit']} was detected; STEMCraft will use its own service"
+            f"Disabled external service {service['unit']} was detected; Craftarr will use its own service"
         )
 
     if port is not None and not _port_available(port) and not (service and service["active"]):

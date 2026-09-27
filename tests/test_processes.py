@@ -123,7 +123,7 @@ def test_systemctl_uses_argument_list_without_shell(monkeypatch):
     config = processes.ServerProcessConfig("systemd", "survival", "/srv/server", "2G", "paper.jar", "")
     processes._systemctl(config, "start")
     assert captured["command"] == [
-        "systemctl", "start", "stemcraft-server@survival.service",
+        "systemctl", "start", "craftarr-server@survival.service",
     ]
     assert "shell" not in captured["kwargs"]
 
@@ -172,7 +172,7 @@ def test_systemctl_stop_does_not_disable_instance(monkeypatch):
     processes._systemctl(config, "stop")
 
     assert captured["command"] == [
-        "systemctl", "stop", "stemcraft-server@survival.service",
+        "systemctl", "stop", "craftarr-server@survival.service",
     ]
 
 
@@ -242,9 +242,10 @@ def test_systemd_status_parses_properties_by_name(monkeypatch):
     status = processes._systemd_status(config)
 
     assert status == {
-        "running": True, "pid": 4321, "backend": "systemd",
+        "running": True, "state": "running", "console_available": False,
+        "pid": 4321, "backend": "systemd", "active_state": "active",
         "service_name": "survival",
-        "unit_name": "stemcraft-server@survival.service",
+        "unit_name": "craftarr-server@survival.service",
         "enabled_at_boot": True,
     }
 
@@ -260,9 +261,10 @@ def test_systemd_status_treats_zero_pid_as_missing(monkeypatch):
     status = processes._systemd_status(config)
 
     assert status == {
-        "running": False, "pid": None, "backend": "systemd",
+        "running": False, "state": "stopped", "console_available": False,
+        "pid": None, "backend": "systemd", "active_state": "inactive",
         "service_name": "survival",
-        "unit_name": "stemcraft-server@survival.service",
+        "unit_name": "craftarr-server@survival.service",
         "enabled_at_boot": False,
     }
 
@@ -296,7 +298,7 @@ def test_systemd_console_wait_reads_messages_after_journal_cursor(monkeypatch):
     cursor = processes.console_cursor(7)
     assert processes.wait_for_console_message(7, "Saved the game", timeout=0.1, cursor=cursor)
     assert calls[1] == [
-        "journalctl", "--unit", "stemcraft-server@survival.service",
+        "journalctl", "--unit", "craftarr-server@survival.service",
         "--after-cursor=s=before-save", "--no-pager", "--output", "cat",
     ]
 

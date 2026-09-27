@@ -6,15 +6,13 @@
 >
 
     <div class="backups-toolbar">
-
         <div>
-            <h2>
-                Server Backups
-            </h2>
+            <h1 class="page-heading">
+                Server backups
+            </h1>
 
             <p>
-                Create, download and restore
-                snapshots of this server.
+                Save a copy of your server. Restore it if something goes wrong.
             </p>
         </div>
 
@@ -23,7 +21,7 @@
             onclick="openCreateBackupModal()"
         >
             <i class="fa-solid fa-plus"></i>
-            Create Backup
+            Make a backup
         </button>
         {% endif %}
 
@@ -39,10 +37,8 @@
             <i class="fa-solid fa-circle-info"></i>
 
             <span>
-                The server is running.
-                Backups can still be created,
-                but restoring requires the
-                server to be stopped.
+                You can make a backup while the server is online.
+                Stop the server before you restore a backup.
             </span>
         </div>
     </div>
@@ -87,7 +83,7 @@
         <div id="backup-create-form">
 
             <h2>
-                Create backup
+                Make a backup
             </h2>
 
             <p>
@@ -104,7 +100,7 @@
                 </button>
 
                 <button class="button" id="create-backup-button" onclick="createBackup()">
-                    Create Backup
+                    Make backup
                 </button>
 
             </div>

@@ -1,10 +1,10 @@
-import os
+from .env import getenv
 
 from dotenv import load_dotenv
 
 load_dotenv(
-    os.getenv(
-        "STEMCRAFT_CONSOLE_ENV",
+    getenv(
+        "CRAFTARR_CONSOLE_ENV",
         ".env",
     )
 )
@@ -74,6 +74,7 @@ from .web_settings import (
 )
 from .web_roles import router as web_roles_router
 from .web_automation import router as web_automation_router
+from .web_notifications import router as web_notifications_router
 from .automation import start_automation, stop_automation
 from .backup_jobs import fail_abandoned_backup_jobs
 
@@ -85,7 +86,7 @@ from .system_operation import current_operation
 from .web import router as web_router
 
 app = FastAPI(
-    title="STEMCraft Server Console",
+    title="Craftarr Server Console",
     version=APP_VERSION,
 )
 
@@ -212,6 +213,8 @@ app.include_router(
 app.include_router(web_roles_router)
 
 app.include_router(web_automation_router)
+
+app.include_router(web_notifications_router)
 
 @app.on_event("startup")
 def startup():

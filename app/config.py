@@ -1,24 +1,24 @@
-import os
 import secrets
 import warnings
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from .env import getenv
 
 
 def _session_secret() -> str:
-    configured = os.getenv("STEMCRAFT_CONSOLE_SECRET")
+    configured = getenv("CRAFTARR_CONSOLE_SECRET")
     if configured:
         if len(configured) < 32:
             warnings.warn(
-                "STEMCRAFT_CONSOLE_SECRET should contain at least 32 characters",
+                "CRAFTARR_CONSOLE_SECRET should contain at least 32 characters",
                 RuntimeWarning,
                 stacklevel=2,
             )
         return configured
 
     warnings.warn(
-        "STEMCRAFT_CONSOLE_SECRET is not set; using a temporary secret. "
+        "CRAFTARR_CONSOLE_SECRET is not set; using a temporary secret. "
         "Sessions and API tokens will be invalidated when the app restarts.",
         RuntimeWarning,
         stacklevel=2,
@@ -27,11 +27,11 @@ def _session_secret() -> str:
 
 
 SECRET_KEY = _session_secret()
-COOKIE_SECURE = os.getenv(
-    "STEMCRAFT_CONSOLE_COOKIE_SECURE", "false"
+COOKIE_SECURE = getenv(
+    "CRAFTARR_CONSOLE_COOKIE_SECURE", "false"
 ).lower() in {"1", "true", "yes", "on"}
 MAX_UPLOAD_BYTES = int(
-    os.getenv("STEMCRAFT_CONSOLE_MAX_UPLOAD_BYTES", str(512 * 1024 * 1024))
+    getenv("CRAFTARR_CONSOLE_MAX_UPLOAD_BYTES", str(512 * 1024 * 1024))
 )
 
 
@@ -54,7 +54,7 @@ def _system_timezone_name() -> str | None:
 
 
 def _schedule_timezone():
-    configured = os.getenv("STEMCRAFT_TIMEZONE", "").strip()
+    configured = getenv("CRAFTARR_TIMEZONE", "").strip()
     system_name = _system_timezone_name()
     for name in filter(None, (configured, system_name)):
         try:
@@ -62,7 +62,7 @@ def _schedule_timezone():
         except ZoneInfoNotFoundError:
             if name == configured:
                 warnings.warn(
-                    f"Unknown STEMCRAFT_TIMEZONE {name!r}; using the system timezone",
+                    f"Unknown CRAFTARR_TIMEZONE {name!r}; using the system timezone",
                     RuntimeWarning,
                     stacklevel=2,
                 )

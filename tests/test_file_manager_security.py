@@ -5,6 +5,7 @@ import pytest
 import zipfile
 
 from app.file_manager import (
+    create_file,
     create_zip,
     delete_entry,
     extract_zip,
@@ -41,6 +42,34 @@ def test_delete_entry_refuses_server_root(tmp_path):
 
     with pytest.raises(ValueError, match="Cannot delete server root"):
         delete_entry(server, "")
+
+
+def test_create_file_is_empty_and_does_not_replace_existing_files(tmp_path):
+    root = tmp_path / "server"
+    root.mkdir()
+    (root / "plugins").mkdir()
+    server = SimpleNamespace(directory=str(root))
+
+    assert create_file(server, "plugins", "notes.yml") == "plugins/notes.yml"
+    assert (root / "plugins/notes.yml").read_text(encoding="utf-8") == ""
+    (root / "plugins/existing.yml").write_text("keep", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="already exists"):
+        create_file(server, "plugins", "existing.yml")
+    assert (root / "plugins/existing.yml").read_text(encoding="utf-8") == "keep"
+
+
+def test_create_file_rejects_paths_and_parent_traversal(tmp_path):
+    root = tmp_path / "server"
+    root.mkdir()
+    (tmp_path / "outside").mkdir()
+    (root / "escape").symlink_to(tmp_path / "outside", target_is_directory=True)
+    server = SimpleNamespace(directory=str(root))
+
+    with pytest.raises(ValueError, match="valid file name"):
+        create_file(server, "", "../outside.txt")
+    with pytest.raises(ValueError, match="Invalid path"):
+        create_file(server, "escape", "secret.txt")
 
 
 def test_format_size_spells_out_bytes():
