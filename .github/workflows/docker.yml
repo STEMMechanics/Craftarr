@@ -9,6 +9,11 @@ on:
       - "v[0-9]*.[0-9]*.[0-9]*"
 
   workflow_dispatch:
+    inputs:
+      version:
+        description: Optional release version to publish (for example 0.4.0)
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -33,17 +38,34 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Prepare optional release version
+        id: manual_version
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version != '' }}
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version must have three numeric parts, for example 0.4.0." >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "major_minor=${VERSION%.*}" >> "$GITHUB_OUTPUT"
+
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: |
-            ghcr.io/stemmechanics/craftarr-console
+            ghcr.io/stemmechanics/craftarr
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ steps.manual_version.outputs.version }},enable=${{ steps.manual_version.outputs.version != '' }}
+            type=raw,value=${{ steps.manual_version.outputs.major_minor }},enable=${{ steps.manual_version.outputs.major_minor != '' }}
 
       - name: Build and publish
         uses: docker/build-push-action@v6
