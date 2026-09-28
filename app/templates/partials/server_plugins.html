@@ -243,8 +243,9 @@
         <div class="plugin-monitoring-advanced-content">
           <p class="modal-note">Most plugins do not need these settings. Leave them alone unless the plugin page uses an unusual format.</p>
           <label for="plugin-monitoring-version-pattern">How to find the newest version</label>
-          <input id="plugin-monitoring-version-pattern" type="text" maxlength="1024" autocomplete="off" spellcheck="false" oninput="clearMonitoringPreview()">
+          <input id="plugin-monitoring-version-pattern" type="text" maxlength="1024" autocomplete="off" spellcheck="false" oninput="previewPluginMonitoringExpressionChanged()">
           <p id="plugin-monitoring-version-hint" class="modal-note"></p>
+          <div id="plugin-monitoring-expression-preview" hidden aria-live="polite"></div>
           <div id="plugin-monitoring-link-fields">
             <label for="plugin-monitoring-link-pattern">How to find the download link (optional)</label>
             <input id="plugin-monitoring-link-pattern" type="text" maxlength="1024" autocomplete="off" spellcheck="false" oninput="clearMonitoringPreview()">
@@ -255,8 +256,8 @@
           <p class="modal-note">Extract the comparable part of the JAR’s version, for example ^([0-9.]+). Expressions use the first capture group or a named “version” group.</p>
         </div>
       </details>
-      <div id="plugin-monitoring-preview" role="status" hidden></div>
     </div>
+    <div id="plugin-monitoring-preview" role="status" hidden></div>
     <div class="modal-actions plugin-monitoring-actions">
       <div class="plugin-monitoring-actions-left">
         <button id="plugin-monitoring-preview-button" class="button" type="button" onclick="previewPluginMonitoring()" hidden><i class="fa-solid fa-flask" aria-hidden="true"></i> Test these settings</button>

@@ -8400,6 +8400,28 @@ document.addEventListener("visibilitychange", () => {
 });
 
 
+function renderPluginMonitoringVersionPreview(detection) {
+  if (!detection) return "";
+  const sourceValue = detection.source_value || (detection.source_label === "Source metadata"
+    ? "Expression searched the source response"
+    : "Not found");
+  const captureStatus = detection.pattern_status === "matched" ? "Expression matched"
+    : detection.pattern_status === "not_set" ? "No expression applied"
+    : detection.pattern_status === "no_match" ? "No match found"
+    : detection.pattern_status === "invalid" ? "Expression is invalid"
+    : detection.pattern_status === "uncomparable" ? "Captured value is not comparable"
+    : "Expression did not produce a usable value";
+  return `<div class="monitoring-preview-version">
+    <strong>Version detection</strong>
+    <dl>
+      <div><dt>${escapeHtml(detection.source_label || "Source value")}</dt><dd><code>${escapeHtml(sourceValue)}</code></dd></div>
+      <div><dt>Captured version</dt><dd><code>${escapeHtml(detection.captured_value || "No value captured")}</code></dd><small>${captureStatus}</small></div>
+      <div><dt>Comparable version</dt><dd>${detection.comparable ? "Yes" : "No"}</dd></div>
+    </dl>
+    ${detection.error ? `<span class="monitoring-preview-error">${escapeHtml(detection.error)}</span>` : ""}
+  </div>`;
+}
+
 function renderPluginMonitoringPreview(data) {
   const isUpdate = data.update_available === true;
   const isCurrent = data.status === "Current";
@@ -8420,6 +8442,7 @@ function renderPluginMonitoringPreview(data) {
   const download = data.download_url?.startsWith("https://")
     ? `<a class="monitoring-preview-action" href="${escapeHtml(data.download_url)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i> Open download</a>`
     : `<span class="monitoring-preview-no-link">No direct download link found</span>`;
+  const versionDetection = renderPluginMonitoringVersionPreview(data.version_preview);
 
   return `<div class="monitoring-preview-card ${statusClass}">
     <div class="monitoring-preview-heading">
@@ -8432,6 +8455,7 @@ function renderPluginMonitoringPreview(data) {
       <div><dt>Compatibility</dt><dd>${escapeHtml(data.compatibility || "Unknown")}</dd></div>
       <div><dt>Source</dt><dd>${source}</dd></div>
     </dl>
+    ${versionDetection}
     <div class="monitoring-preview-footer">${download}${data.error ? `<span class="monitoring-preview-error">${escapeHtml(data.error)}</span>` : ""}${renderPluginComparisonDetails(data.comparison_details)}</div>
   </div>`;
 }
@@ -8632,10 +8656,20 @@ function closePluginMonitoring() {
 }
 
 function clearMonitoringPreview() {
+  window.clearTimeout(pluginMonitoringExpressionTimer);
+  const modal = document.getElementById("plugin-monitoring-modal");
+  if (modal) {
+    modal._monitoringPreviewData = null;
+    modal._previewEvaluationSequence = (modal._previewEvaluationSequence || 0) + 1;
+  }
   const output = document.getElementById("plugin-monitoring-preview");
   if (output) { output.hidden = true; output.innerHTML = ""; }
+  const expressionPreview = document.getElementById("plugin-monitoring-expression-preview");
+  if (expressionPreview) { expressionPreview.hidden = true; expressionPreview.innerHTML = ""; }
   setPluginMonitoringFeedback("");
 }
+
+let pluginMonitoringExpressionTimer = null;
 
 function setPluginMonitoringFeedback(message, state = "error") {
   const feedback = document.getElementById("plugin-monitoring-error");
@@ -8721,8 +8755,8 @@ function updatePluginMonitoringFields(providerChanged = false) {
   document.getElementById("plugin-monitoring-version-hint").textContent = provider === "jenkins"
     ? "Usually leave this blank. Build pages are compared automatically."
     : documentSource
-    ? 'Required. Match the metadata response and capture the version, for example "version"\\s*:\\s*"([^"]+)". Preview checks the first match.'
-    : "Optional. Extract a comparable version from the release tag/version number, for example ^v?([0-9.]+).";
+    ? 'Required. Match the metadata response and capture the version, for example "version"\\s*:\\s*"([^"]+)". Test shows the captured value.'
+    : "Optional. Extract a comparable version from the release tag/version number, for example ^v?([0-9.]+). Test shows the tag and captured value; edits preview against the same fetched release.";
   document.getElementById("plugin-monitoring-link-fields").hidden = !documentSource;
   for (const field of ["version", "link", "installed"]) {
     document.getElementById(`plugin-monitoring-${field}-pattern`).disabled = !editable || (field === "link" && !documentSource);
@@ -8732,16 +8766,71 @@ function updatePluginMonitoringFields(providerChanged = false) {
 
 function pluginMonitoringPayload() {
   const modal = document.getElementById("plugin-monitoring-modal");
-  const provider = document.getElementById("plugin-monitoring-provider").value;
+  const mode = document.getElementById("plugin-monitoring-mode").value;
+  let fields = {};
+  if (mode === "global") {
+    try { fields = JSON.parse(modal.dataset.globalSettings || "{}"); } catch { fields = {}; }
+  }
+  const fieldValue = (name, inputId) => Object.hasOwn(fields, name)
+    ? fields[name]
+    : document.getElementById(inputId).value;
+  const provider = fields.provider || document.getElementById("plugin-monitoring-provider").value;
   return {
     filename: modal.dataset.filename,
-    mode: document.getElementById("plugin-monitoring-mode").value,
+    mode,
     provider,
-    project: document.getElementById("plugin-monitoring-project").value.trim(),
-    version_pattern: document.getElementById("plugin-monitoring-version-pattern").value,
-    link_pattern: ["jenkins", "custom"].includes(provider) ? document.getElementById("plugin-monitoring-link-pattern").value : "",
-    installed_pattern: document.getElementById("plugin-monitoring-installed-pattern").value,
+    project: String(fieldValue("project", "plugin-monitoring-project")).trim(),
+    version_pattern: fieldValue("version_pattern", "plugin-monitoring-version-pattern"),
+    link_pattern: ["jenkins", "custom"].includes(provider) ? fieldValue("link_pattern", "plugin-monitoring-link-pattern") : "",
+    installed_pattern: fieldValue("installed_pattern", "plugin-monitoring-installed-pattern"),
   };
+}
+
+function previewPluginMonitoringExpressionChanged() {
+  const modal = document.getElementById("plugin-monitoring-modal");
+  const cached = modal?._monitoringPreviewData;
+  if (!cached || typeof cached.preview_input !== "string") {
+    clearMonitoringPreview();
+    return;
+  }
+  window.clearTimeout(pluginMonitoringExpressionTimer);
+  const sequence = modal._previewEvaluationSequence = (modal._previewEvaluationSequence || 0) + 1;
+  pluginMonitoringExpressionTimer = window.setTimeout(async () => {
+    const settings = pluginMonitoringPayload();
+    const fingerprint = JSON.stringify(settings);
+    const request = {
+      ...settings,
+      evaluate_only: true,
+      preview_input: cached.preview_input,
+      default_version: cached.default_version,
+      release_url: cached.release_url,
+    };
+    setPluginMonitoringFeedback("Updating the version match against the tested source…", "pending");
+    try {
+      const response = await nativeFetch(`/api/web/servers/${modal.dataset.serverId}/plugins/monitoring/preview`, {
+        method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(request),
+      });
+      connectionFailureLatched = false;
+      if (handleAuthenticationResponse(response)) return;
+      const data = await response.json();
+      if (!modal.isConnected || modal.hidden || modal._previewEvaluationSequence !== sequence
+          || JSON.stringify(pluginMonitoringPayload()) !== fingerprint) return;
+      if (!response.ok) throw new Error(data.error || "Unable to preview this expression.");
+      modal._monitoringPreviewData = {...cached, ...data};
+      const output = document.getElementById("plugin-monitoring-preview");
+      output.innerHTML = renderPluginMonitoringPreview(modal._monitoringPreviewData);
+      output.hidden = false;
+      const expressionPreview = document.getElementById("plugin-monitoring-expression-preview");
+      expressionPreview.innerHTML = renderPluginMonitoringVersionPreview(data.version_preview);
+      expressionPreview.hidden = !data.version_preview;
+      setPluginMonitoringFeedback(data.status === "Check failed" ? data.error || "The version expression needs attention." : "Expression preview updated.", data.status === "Check failed" ? "error" : "success");
+    } catch (failure) {
+      if (modal.isConnected && modal._previewEvaluationSequence === sequence
+          && JSON.stringify(pluginMonitoringPayload()) === fingerprint) {
+        setPluginMonitoringFeedback(failure.message || "Unable to preview this expression.", "error");
+      }
+    }
+  }, 180);
 }
 
 async function previewPluginMonitoring() {
@@ -8750,6 +8839,7 @@ async function previewPluginMonitoring() {
   const button = document.getElementById("plugin-monitoring-preview-button");
   const settings = pluginMonitoringPayload();
   const fingerprint = JSON.stringify(settings);
+  modal._previewEvaluationSequence = (modal._previewEvaluationSequence || 0) + 1;
   button.disabled = true;
   output.hidden = true;
   output.innerHTML = "";
@@ -8763,16 +8853,24 @@ async function previewPluginMonitoring() {
     let data = {};
     try { data = await response.json(); } catch { /* Use the HTTP status below. */ }
     if (!modal.isConnected || modal.hidden || JSON.stringify(pluginMonitoringPayload()) !== fingerprint) return;
-    if (!response.ok) throw new Error(data.error || "Preview failed");
+    if (!response.ok && !data.version_preview) throw new Error(data.error || "Preview failed");
+    modal._monitoringPreviewData = data;
     if (data.status === "Check failed") {
       const message = data.error || "The release was found, but its version could not be compared.";
       setPluginMonitoringFeedback(message, "error");
       showToast(message, "error");
     } else {
-      setPluginMonitoringFeedback("");
+      const message = data.update_available
+        ? `Settings test found a newer version: ${data.latest_version || "available"}.`
+        : `Settings test complete: ${data.status || "source checked"}.`;
+      setPluginMonitoringFeedback(message, "success");
+      showToast(message, "success");
     }
     output.innerHTML = renderPluginMonitoringPreview(data);
     output.hidden = false;
+    const expressionPreview = document.getElementById("plugin-monitoring-expression-preview");
+    expressionPreview.innerHTML = renderPluginMonitoringVersionPreview(data.version_preview);
+    expressionPreview.hidden = !data.version_preview;
   } catch (failure) {
     if (modal.isConnected && JSON.stringify(pluginMonitoringPayload()) === fingerprint) {
       const message = failure instanceof TypeError

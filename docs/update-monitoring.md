@@ -8,6 +8,8 @@ A plugin's name/version is read from `plugin.yml` or `paper-plugin.yml`. The sha
 `plugin-monitoring.yml` repository maps normalized metadata names and aliases to
 update sources. Renaming a JAR does not affect recognition or its settings.
 Enabled and disabled JARs are included; monitoring can be switched off independently.
+Plugin descriptors are limited to 256 KiB; this accommodates large permission lists
+such as Citizens while keeping metadata parsing bounded.
 
 The existing Craftarr automation worker checks all managed servers every 24 hours.
 The last daily run is persisted across restarts. Downtime delays checks until the
@@ -132,17 +134,24 @@ Without this expression, Jenkins constructs an artifact link only if the respons
 identifies exactly one JAR; otherwise it links to the build page. GitHub similarly
 shows a download link for a single JAR asset; Modrinth uses a primary JAR when present.
 
-Click **Preview** to fetch metadata and see:
+Click **Test these settings** to fetch metadata and see:
 
 - the actual installed version and value used for comparison;
+- the source version or tag, the value captured by the expression, and whether that value can be compared;
 - the detected latest version, release/source page and download link;
 - update status, compatibility and any extraction/request error.
 
-Preview does not save settings, cache release results, send email, or alter check
-history/notification state. Editing a field clears the old preview, and responses
-from an earlier configuration are discarded. Save when the results are correct.
-Saving does not fetch the source; use **Check for updates** to populate normal
-results or wait for the daily run. Matching cached results may appear immediately.
+Changing the version expression after a test re-runs the match against the same
+fetched source data; it does not request the source again. Shared settings can
+also be tested, and their result is shown in the modal.
+Changing the provider, project, download-link expression or installed-version
+expression clears the preview, so test again after those changes.
+
+Testing does not save settings, cache release results, send email, or alter
+check history/notification state. Responses from an earlier configuration are
+discarded. Save when the results are correct. Saving does not fetch the source;
+use **Check for updates** to populate normal results or wait for the daily run.
+Matching cached results may appear immediately.
 
 Expressions use the `regex` package, with a 1024-character expression limit and a
 100 ms execution timeout. Matching uses the first match, not necessarily the

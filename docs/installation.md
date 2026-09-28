@@ -138,7 +138,78 @@ Importing a path outside `/srv/minecraft` requires rerunning the installer from
 the release that added external-path imports. This refreshes the systemd sandbox
 policy; normal Unix ownership and permissions still apply.
 
+## Upgrade a v0.3.3 StemCraft installation to v0.4.0
+
+Version 0.4.0 uses `CRAFTARR_*` configuration names. An in-panel update replaces
+application files, but keeps the existing systemd console service and its
+`EnvironmentFile`. Before updating, find the environment file loaded by the
+currently installed service:
+
+```bash
+sudo systemctl cat stemcraft-console.service
+```
+
+Back up the `EnvironmentFile` shown in that output, then edit it. For the
+standard StemCraft path:
+
+```bash
+sudo cp -a /etc/stemcraft-console/console.env /etc/stemcraft-console/console.env.pre-0.4.0
+sudoedit /etc/stemcraft-console/console.env
+```
+
+Substitute the path from `systemctl cat` if it differs. Add or update one
+`CRAFTARR_` entry for each existing `STEMCRAFT_` setting by replacing only the
+prefix and keeping the current value. Keep the old entries until the update
+succeeds. These are the core settings that must keep their old values:
+
+| v0.3.3 setting | v0.4.0 setting |
+| --- | --- |
+| `STEMCRAFT_CONSOLE_SECRET` | `CRAFTARR_CONSOLE_SECRET` |
+| `STEMCRAFT_CONSOLE_DATABASE` | `CRAFTARR_CONSOLE_DATABASE` |
+| `STEMCRAFT_CONSOLE_SERVER_ROOT` | `CRAFTARR_CONSOLE_SERVER_ROOT` |
+| `STEMCRAFT_CONSOLE_HOST` | `CRAFTARR_CONSOLE_HOST` |
+| `STEMCRAFT_CONSOLE_PORT` | `CRAFTARR_CONSOLE_PORT` |
+| `STEMCRAFT_CONSOLE_COOKIE_SECURE` | `CRAFTARR_CONSOLE_COOKIE_SECURE` |
+
+Also carry over any optional settings such as timezone, rclone, upload limits,
+or automation intervals by applying the same prefix change. Changing the
+database path makes Craftarr open a different database, which can look like an
+empty installation.
+
+The old StemCraft installation also uses different defaults for managed
+Minecraft systemd units and their control sockets. Add these entries when the
+existing server units are named `stemcraft-server@NAME.service` and use
+`/run/stemcraft-console`:
+
+```text
+CRAFTARR_SYSTEMD_UNIT_PREFIX=stemcraft-server@
+CRAFTARR_SYSTEMD_SOCKET_DIR=/run/stemcraft-console
+```
+
+Use the values from the existing configuration; do not copy `.env.example`
+placeholder values over production settings. Then run the update from System
+Settings. The existing `stemcraft-console.service` continues to launch the
+updated app; its unit name does not need to change for an in-panel update.
+
+If the panel is already unavailable after an update, add the `CRAFTARR_*`
+entries to the same environment file and restart the existing service. Substitute
+the unit name and environment-file path reported by `systemctl cat` if they
+differ from these examples:
+
+```bash
+sudo systemctl restart stemcraft-console.service
+sudo journalctl -u stemcraft-console.service --no-pager -n 100
+```
+
+Confirm the logs show a successful startup and that the panel opens at its usual
+address. Keep the backup until login and managed server controls are confirmed.
+
 ## Upgrade and rollback
+
+The command-line upgrade script below targets Craftarr installations rooted at
+`/opt/craftarr`. For a v0.3.3 StemCraft installation with a legacy path such as
+`/opt/stemcraft-console`, use the in-panel updater after completing the migration
+steps above; the script does not migrate the old system service or paths.
 
 From a trusted release checkout, upgrade with:
 

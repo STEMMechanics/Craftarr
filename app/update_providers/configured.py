@@ -58,6 +58,8 @@ class DocumentSource(Provider):
 
     def fetch(self):
         document = fetch_document(self.project)
+        self.preview_input = document
+        self.preview_default_version = None
         version = extract(self.version_pattern, document)
         link = validate_url(urljoin(self.project, extract(self.link_pattern, document, 'url'))) if self.link_pattern else None
         return [Release(version, self.project, download_url=link)]
@@ -101,6 +103,7 @@ class Jenkins(DocumentSource):
                 raise
             # Fixed page on the configured job, never a URL read from upstream.
             document = self.page_metadata(fetch_document(self.project + '/lastSuccessfulBuild/'))
+        self.preview_input = document
         try:
             data = json.loads(document)
             number = int(data['number'])
@@ -109,6 +112,7 @@ class Jenkins(DocumentSource):
             date = datetime.fromtimestamp(data['timestamp'] / 1000, timezone.utc).isoformat() if data.get('timestamp') is not None else None
         except (ValueError, TypeError, KeyError, OverflowError, OSError):
             raise SourceError('Jenkins did not return valid successful-build metadata') from None
+        self.preview_default_version = str(number)
         version = extract(self.version_pattern, document) if self.version_pattern else str(number)
         release_url = f'{self.project}/{number}/'
         link = None
@@ -165,6 +169,9 @@ class ConfiguredProvider(Provider):
         self.source, self.name, self.project = source, source.name, source.project
         self.version_pattern, self.link_pattern = version_pattern, link_pattern
         self.installed_pattern = installed_pattern
+        self.preview_input = None
+        self.preview_default_version = None
+        self.preview_diagnostics = None
         compile_pattern(version_pattern)
         compile_pattern(link_pattern)
         compile_pattern(installed_pattern)
@@ -177,12 +184,60 @@ class ConfiguredProvider(Provider):
         return f'configured:{hashlib.sha256(json.dumps(identity).encode()).hexdigest()}'
 
     def fetch(self):
-        releases = self.source.fetch()
+        self.preview_input = None
+        self.preview_default_version = None
+        self.preview_diagnostics = None
+        try:
+            releases = self.source.fetch()
+        except SourceError as error:
+            self.preview_input = getattr(self.source, 'preview_input', None)
+            self.preview_default_version = getattr(self.source, 'preview_default_version', None)
+            if self.preview_input is not None:
+                message = str(error)
+                state = 'no_match' if 'did not match' in message else 'invalid' if 'Invalid extraction expression' in message else 'error'
+                self.preview_diagnostics = {
+                    'source_label': 'Source metadata',
+                    'source_value': None,
+                    'captured_value': None,
+                    'pattern_status': state,
+                    'comparable': False,
+                    'error': message,
+                }
+            raise
+        self.preview_input = getattr(self.source, 'preview_input', None)
+        self.preview_default_version = getattr(self.source, 'preview_default_version', None)
         for release in releases:
-            if self.version_pattern and not isinstance(self.source, DocumentSource):
-                release.version = extract(self.version_pattern, release.version)
+            source_value = release.version
+            if self.preview_input is None:
+                self.preview_input = source_value
+            if self.preview_default_version is None and not isinstance(self.source, DocumentSource):
+                self.preview_default_version = source_value
+            document_source = isinstance(self.source, DocumentSource)
+            diagnostic = {
+                'source_label': 'Source metadata' if document_source else 'Release tag/version',
+                'source_value': None if document_source else source_value,
+                'captured_value': None if self.version_pattern else source_value,
+                'pattern_status': 'matched' if self.version_pattern else 'not_set',
+                'comparable': parse_version(source_value) is not None,
+                'error': None,
+            }
+            if self.version_pattern and not document_source:
+                try:
+                    release.version = extract(self.version_pattern, source_value)
+                    diagnostic['captured_value'] = release.version
+                    diagnostic['pattern_status'] = 'matched'
+                    diagnostic['comparable'] = parse_version(release.version) is not None
+                except SourceError as error:
+                    state = 'no_match' if 'did not match' in str(error) else 'invalid' if 'Invalid extraction expression' in str(error) else 'error'
+                    diagnostic.update(pattern_status=state, captured_value=None, comparable=False, error=str(error))
+                    self.preview_diagnostics = diagnostic
+                    raise
             if parse_version(release.version) is None:
-                raise SourceError('Detected version cannot be compared; adjust the version expression')
+                message = f'Detected version "{release.version}" cannot be compared; adjust the version expression'
+                diagnostic.update(pattern_status='uncomparable', comparable=False, error=message)
+                self.preview_diagnostics = diagnostic
+                raise SourceError(message)
+            self.preview_diagnostics = diagnostic
         return releases
 
     def installed_details(self, installed, filename=None):
