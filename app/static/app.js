@@ -2370,7 +2370,22 @@ function showPluginDuplicatesModal() {
     groupsToShow.map((group) => pluginDuplicateGroupSignature(group)),
   );
   container.replaceChildren();
-  for (const group of groupsToShow) {
+  const hasJustAddedPlugin = Boolean(
+    latestInstalledPluginFilename
+    && groupsToShow.some((group) => group.plugins.some(
+      (plugin) => plugin.filename === latestInstalledPluginFilename,
+    )),
+  );
+  const orderedGroups = [...groupsToShow].sort((left, right) => {
+    const leftHasJustAdded = left.plugins.some(
+      (plugin) => plugin.filename === latestInstalledPluginFilename,
+    );
+    const rightHasJustAdded = right.plugins.some(
+      (plugin) => plugin.filename === latestInstalledPluginFilename,
+    );
+    return Number(rightHasJustAdded) - Number(leftHasJustAdded);
+  });
+  for (const group of orderedGroups) {
     const section = document.createElement("div");
     section.className = "plugin-duplicate-group";
     const header = document.createElement("div");
@@ -2381,31 +2396,41 @@ function showPluginDuplicatesModal() {
     count.textContent = `${group.plugins.length} enabled`;
     header.append(title, count);
     section.appendChild(header);
-    for (const plugin of group.plugins) {
-      const label = document.createElement("label");
-      label.className = "plugin-duplicate-option";
+    const orderedPlugins = [...group.plugins].sort((left, right) => (
+      Number(right.filename === latestInstalledPluginFilename)
+      - Number(left.filename === latestInstalledPluginFilename)
+    ));
+    for (const plugin of orderedPlugins) {
+      const isJustAdded = plugin.filename === latestInstalledPluginFilename;
+      const row = document.createElement("div");
+      row.className = "plugin-duplicate-option";
+      if (isJustAdded) row.classList.add("just-added");
+      const selection = document.createElement("label");
+      selection.className = "plugin-duplicate-selection";
       const checkbox = document.createElement("input");
       checkbox.type = "checkbox";
       checkbox.value = plugin.filename;
-      checkbox.checked = true;
-      checkbox.setAttribute("aria-label", `Enable ${plugin.filename}`);
+      checkbox.checked = hasJustAddedPlugin ? isJustAdded : true;
+      checkbox.setAttribute("aria-label", `Keep ${plugin.filename} enabled`);
       checkbox.addEventListener("change", () => {
-        label.classList.toggle("will-disable", !checkbox.checked);
+        row.classList.toggle("will-disable", !checkbox.checked);
         state.textContent = checkbox.checked ? "Enabled" : "Will be disabled";
         updateDuplicatePluginButton();
       });
       const description = document.createElement("span");
       description.className = "plugin-duplicate-description";
+      const descriptionHeader = document.createElement("span");
+      descriptionHeader.className = "plugin-duplicate-description-header";
       const filename = document.createElement("strong");
       filename.textContent = plugin.filename;
-      description.appendChild(filename);
-      if (plugin.filename === latestInstalledPluginFilename) {
+      descriptionHeader.appendChild(filename);
+      if (isJustAdded) {
         const recent = document.createElement("span");
         recent.className = "plugin-just-added-label";
         recent.textContent = "Just added";
-        filename.append(" ", recent);
-        label.classList.add("just-added");
+        descriptionHeader.appendChild(recent);
       }
+      description.appendChild(descriptionHeader);
       if (plugin.version) {
         const version = document.createElement("small");
         version.textContent = `Version ${plugin.version}`;
@@ -2418,12 +2443,18 @@ function showPluginDuplicatesModal() {
       }
       const state = document.createElement("small");
       state.className = "plugin-duplicate-state";
-      state.textContent = "Enabled";
+      state.textContent = checkbox.checked ? "Enabled" : "Will be disabled";
       description.appendChild(state);
+      if (!checkbox.checked) row.classList.add("will-disable");
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "plugin-duplicate-delete";
-      remove.textContent = "Delete file";
+      remove.setAttribute("aria-label", `Delete ${plugin.filename}`);
+      remove.title = `Delete ${plugin.filename}`;
+      const trashIcon = document.createElement("i");
+      trashIcon.className = "fa-solid fa-trash";
+      trashIcon.setAttribute("aria-hidden", "true");
+      remove.appendChild(trashIcon);
       remove.addEventListener("click", async (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -2438,8 +2469,9 @@ function showPluginDuplicatesModal() {
         latestInstalledPluginFilename = null;
         await updatePluginsPage(true);
       });
-      label.append(checkbox, description, remove);
-      section.appendChild(label);
+      selection.append(checkbox, description);
+      row.append(selection, remove);
+      section.appendChild(row);
     }
     container.appendChild(section);
   }
