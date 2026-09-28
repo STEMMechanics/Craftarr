@@ -246,6 +246,11 @@
           <input id="plugin-monitoring-version-pattern" type="text" maxlength="1024" autocomplete="off" spellcheck="false" oninput="previewPluginMonitoringExpressionChanged()">
           <p id="plugin-monitoring-version-hint" class="modal-note"></p>
           <div id="plugin-monitoring-expression-preview" hidden aria-live="polite"></div>
+          <div id="plugin-monitoring-asset-fields" hidden>
+            <label for="plugin-monitoring-asset-pattern">Which GitHub JAR should we use? (optional)</label>
+            <input id="plugin-monitoring-asset-pattern" type="text" maxlength="1024" autocomplete="off" spellcheck="false" oninput="previewPluginMonitoringExpressionChanged()">
+            <p class="modal-note">Match the asset filename. A download link is available only when exactly one JAR matches. For STEMCraft, <code>^STEMCraft-(?!API-).*\.jar$</code> selects the plugin and skips the API JAR.</p>
+          </div>
           <div id="plugin-monitoring-link-fields">
             <label for="plugin-monitoring-link-pattern">How to find the download link (optional)</label>
             <input id="plugin-monitoring-link-pattern" type="text" maxlength="1024" autocomplete="off" spellcheck="false" oninput="clearMonitoringPreview()">

@@ -85,6 +85,7 @@ plugins:
     version_pattern: ''
     link_pattern: ''
     installed_pattern: ''
+    asset_pattern: ''
 ```
 
 Supported provider values are `github`, `modrinth`, `jenkins` and `custom`.
@@ -132,19 +133,25 @@ configured source URL (Jenkins uses its successful build page). HTML entities an
 JSON-escaped slashes are decoded. The detected link is displayed but never fetched.
 Without this expression, Jenkins constructs an artifact link only if the response
 identifies exactly one JAR; otherwise it links to the build page. GitHub similarly
-shows a download link for a single JAR asset; Modrinth uses a primary JAR when present.
+shows a download link for a single JAR asset unless a filename expression selects one.
+For releases with separate plugin and API JARs, **GitHub JAR filename expression**
+can select the plugin artifact. It searches JAR filenames and only enables a direct
+download when exactly one asset matches. For example,
+`^STEMCraft-(?!API-).*\.jar$` selects the STEMCraft plugin JAR and excludes the API JAR.
+Modrinth uses a primary JAR when present.
 
 Click **Test these settings** to fetch metadata and see:
 
 - the actual installed version and value used for comparison;
 - the source version or tag, the value captured by the expression, and whether that value can be compared;
 - the detected latest version, release/source page and download link;
+- the GitHub JAR asset selected by its filename expression, plus the release's JAR names;
 - update status, compatibility and any extraction/request error.
 
-Changing the version expression after a test re-runs the match against the same
-fetched source data; it does not request the source again. Shared settings can
-also be tested, and their result is shown in the modal.
-Changing the provider, project, download-link expression or installed-version
+Changing the version expression or GitHub JAR filename expression after a test
+re-runs the match against the same fetched source data; it does not request the
+source again. Shared settings can also be tested, and their result is shown in the
+modal. Changing the provider, project, download-link expression or installed-version
 expression clears the preview, so test again after those changes.
 
 Testing does not save settings, cache release results, send email, or alter

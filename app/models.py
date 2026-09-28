@@ -462,3 +462,4 @@ class PluginMonitoringSetting(Base):
     version_pattern = Column(Text, nullable=False, default='')
     link_pattern = Column(Text, nullable=False, default='')
     installed_pattern = Column(Text, nullable=False, default='')
+    asset_pattern = Column(Text, nullable=False, default='')
