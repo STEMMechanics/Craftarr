@@ -1545,14 +1545,13 @@ button.restart:hover {
 
 .plugin-duplicate-option {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
-  gap: 11px;
+  gap: 8px;
   padding: 11px 12px;
   border: 1px solid var(--border);
   border-radius: 7px;
   background: white;
-  cursor: pointer;
   transition: border-color .15s ease, background .15s ease;
 }
 
@@ -1573,7 +1572,7 @@ button.restart:hover {
 
 .plugin-just-added-label {
   display: inline-block;
-  margin-left: 5px;
+  margin-left: auto;
   padding: 2px 6px;
   border-radius: 10px;
   background: #fff0da;
@@ -1582,10 +1581,19 @@ button.restart:hover {
   font-weight: 700;
   line-height: 1.4;
   text-transform: uppercase;
-  vertical-align: 1px;
+  white-space: nowrap;
 }
 
-.plugin-duplicate-option > input {
+.plugin-duplicate-selection {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 11px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.plugin-duplicate-selection > input {
   margin-top: 2px;
   accent-color: var(--danger);
 }
@@ -1594,13 +1602,22 @@ button.restart:hover {
   min-width: 0;
 }
 
-.plugin-duplicate-description > strong,
+.plugin-duplicate-description-header {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.plugin-duplicate-description-header > strong,
 .plugin-duplicate-description > small {
   display: block;
   overflow-wrap: anywhere;
 }
 
-.plugin-duplicate-description > strong {
+.plugin-duplicate-description-header > strong {
+  flex: 1 1 auto;
+  min-width: 0;
   color: var(--text);
   font-size: 12px;
   line-height: 1.4;
@@ -3147,13 +3164,27 @@ input[type="checkbox"] {
 }
 
 .plugin-duplicate-delete {
-    margin-left: auto;
+    display: grid;
+    place-items: center;
+    align-self: start;
+    width: 34px;
+    height: 34px;
+    padding: 0;
     border: 0;
+    border-radius: 6px;
     background: transparent;
     color: #ef4444;
     cursor: pointer;
-    font-size: 0.8rem;
-    text-decoration: underline;
+    font-size: 0.9rem;
+}
+
+.plugin-duplicate-delete:hover {
+    background: #fff0f0;
+}
+
+.plugin-duplicate-delete:focus-visible {
+    outline: 2px solid #ef4444;
+    outline-offset: 2px;
 }
 
 .backup-job-actions {
