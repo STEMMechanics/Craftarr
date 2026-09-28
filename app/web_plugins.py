@@ -855,7 +855,7 @@ async def preview_plugin_monitoring(server_id: int, request: Request, db: Sessio
         return result
     except SourceError as error:
         if getattr(provider, 'preview_diagnostics', None):
-            return {
+            return JSONResponse({
                 'status': 'Check failed',
                 'update_available': False,
                 'installed_version': plugin.get('version'),
@@ -864,7 +864,7 @@ async def preview_plugin_monitoring(server_id: int, request: Request, db: Sessio
                 'version_preview': provider.preview_diagnostics,
                 'preview_input': provider.preview_input if isinstance(provider.preview_input, str) and len(provider.preview_input) <= 1024 * 1024 else None,
                 'default_version': provider.preview_default_version,
-            }
+            }, status_code=400)
         return JSONResponse({'error': str(error)}, status_code=400)
     except Exception:
         return JSONResponse({'error': 'Preview failed: the source was unavailable or returned invalid metadata'}, status_code=400)

@@ -8853,7 +8853,7 @@ async function previewPluginMonitoring() {
     let data = {};
     try { data = await response.json(); } catch { /* Use the HTTP status below. */ }
     if (!modal.isConnected || modal.hidden || JSON.stringify(pluginMonitoringPayload()) !== fingerprint) return;
-    if (!response.ok) throw new Error(data.error || "Preview failed");
+    if (!response.ok && !data.version_preview) throw new Error(data.error || "Preview failed");
     modal._monitoringPreviewData = data;
     if (data.status === "Check failed") {
       const message = data.error || "The release was found, but its version could not be compared.";
