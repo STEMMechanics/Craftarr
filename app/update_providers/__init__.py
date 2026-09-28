@@ -3,9 +3,10 @@ from dataclasses import asdict, dataclass
 import json
 import re
 from html import unescape
-from urllib.parse import quote, urljoin, urlsplit
+from urllib.parse import quote, unquote, urljoin, urlsplit
 
 import httpx
+import regex
 
 from ..paper import PAPER_API, USER_AGENT
 from .http_source import SourceError
@@ -67,10 +68,93 @@ class Provider:
 class GitHub(Provider):
     name = 'GitHub Releases'
 
+    def __init__(self, project, asset_pattern=''):
+        super().__init__(project)
+        if not isinstance(asset_pattern, str) or len(asset_pattern) > 1024:
+            raise ValueError('The GitHub JAR filename expression must be text of at most 1024 characters')
+        try:
+            self.asset_expression = regex.compile(asset_pattern) if asset_pattern else None
+        except (regex.error, RecursionError):
+            raise ValueError('Invalid GitHub JAR filename expression') from None
+        self.asset_pattern = asset_pattern
+        self.asset_preview = None
+
     @property
     def key(self):
         # GitHub repository names are case-insensitive; share caches between configurations.
         return f'{self.name}:release-page-fallback-v3:{self.project.lower()}'
+
+    def preview_assets(self, tag, names):
+        """Resolve one release JAR from cached GitHub asset names."""
+        tag = text(tag)
+        assets = []
+        for name in names[:100] if isinstance(names, list) else []:
+            if (not isinstance(name, str) or not name or len(name) > 200
+                    or any(ord(character) < 32 for character in name)
+                    or '/' in name or '\\' in name or not name.lower().endswith('.jar')):
+                continue
+            assets.append({
+                'name': name,
+                'download_url': f'https://github.com/{self.project}/releases/download/{quote(tag, safe="")}/{quote(name, safe="")}',
+            })
+        return self._select_asset(tag, assets)
+
+    def _select_asset(self, tag, assets):
+        tag = text(tag)
+        jars = []
+        seen = set()
+        for asset in assets:
+            name = asset.get('name')
+            if (not isinstance(name, str) or not name or len(name) > 200
+                    or any(ord(character) < 32 for character in name)
+                    or '/' in name or '\\' in name or not name.lower().endswith('.jar')
+                    or name in seen):
+                continue
+            seen.add(name)
+            jars.append({
+                'name': name,
+                'download_url': f'https://github.com/{self.project}/releases/download/{quote(tag, safe="")}/{quote(name, safe="")}',
+            })
+
+        matches = []
+        match_error = None
+        if self.asset_expression:
+            for asset in jars:
+                try:
+                    if self.asset_expression.search(asset['name'], timeout=0.1):
+                        matches.append(asset)
+                except TimeoutError:
+                    match_error = 'The JAR filename expression exceeded the time limit; simplify it.'
+                    matches = []
+                    break
+        else:
+            matches = jars
+
+        selected = matches[0] if len(matches) == 1 and not match_error else None
+        if match_error:
+            status, message = 'invalid', match_error
+        elif not jars:
+            status, message = 'no_assets', 'The release has no JAR assets.'
+        elif len(matches) == 1:
+            status = 'matched' if self.asset_expression else 'automatic'
+            message = 'One JAR filename matched.' if self.asset_expression else 'The release has one JAR asset.'
+        elif not matches:
+            status, message = 'no_match', 'No JAR asset matched the filename expression.'
+        elif not self.asset_expression:
+            status, message = 'ambiguous', 'The release has several JAR assets; add a filename expression to choose one.'
+        else:
+            status, message = 'ambiguous', f'{len(matches)} JAR assets matched; the expression must select exactly one.'
+
+        self.asset_preview = {
+            'pattern': self.asset_pattern,
+            'pattern_status': status,
+            'message': message,
+            'available_assets': [asset['name'] for asset in jars[:100]],
+            'matched_assets': [asset['name'] for asset in matches[:100]],
+            'selected_asset': selected['name'] if selected else None,
+            'release_tag': tag,
+        }
+        return selected
 
     def fetch_from_release_page(self):
         page_url = f'https://github.com/{self.project}/releases/latest'
@@ -96,7 +180,7 @@ class GitHub(Provider):
                         expected_path = f'/{self.project}/releases/tag/'.casefold()
                         if parts.hostname != 'github.com' or not parts.path.casefold().startswith(expected_path):
                             raise SourceError('GitHub did not return a latest release page')
-                        tag = parts.path.rsplit('/', 1)[-1]
+                        tag = unquote(parts.path.rsplit('/', 1)[-1])
                         if not response.headers.get('content-type', '').lower().startswith('text/html'):
                             raise SourceError('GitHub release page did not return HTML metadata')
                         page = bytearray()
@@ -144,11 +228,14 @@ class GitHub(Provider):
             if (candidate_parts.scheme == 'https' and candidate_parts.hostname == 'github.com'
                     and candidate_parts.path.casefold().startswith(download_prefix)
                     and candidate_parts.path.lower().endswith('.jar')):
-                downloads.append(candidate)
+                name = unquote(candidate_parts.path.rsplit('/', 1)[-1])
+                if name not in {asset['name'] for asset in downloads}:
+                    downloads.append({'name': name, 'download_url': candidate})
         if not version or not tag:
             raise SourceError('GitHub release page did not include a version and tag')
-        download_url = downloads[0] if len(downloads) == 1 else None
-        return [Release(text(version), final_url, download_url=download_url)]
+        selected = self._select_asset(tag, downloads)
+        return [Release(text(version), final_url,
+                        download_url=selected['download_url'] if selected else None)]
 
     def fetch(self):
         try:
@@ -162,11 +249,18 @@ class GitHub(Provider):
         release_name = data.get('name')
         if parse_version(tag) is None and isinstance(release_name, str) and parse_version(release_name) is not None:
             version = text(release_name)
-        assets = [a for a in data.get('assets', []) if str(a.get('name', '')).endswith('.jar')]
-        download = (f'https://github.com/{self.project}/releases/download/{quote(tag, safe="")}/{quote(text(assets[0]["name"]), safe="")}'
-                    if len(assets) == 1 else None)
+        assets = []
+        for asset in data.get('assets', []):
+            name = asset.get('name') if isinstance(asset, dict) else None
+            if isinstance(name, str) and name.lower().endswith('.jar'):
+                name = text(name)
+                assets.append({
+                    'name': name,
+                    'download_url': f'https://github.com/{self.project}/releases/download/{quote(tag, safe="")}/{quote(name, safe="")}',
+                })
+        selected = self._select_asset(tag, assets)
         return [Release(version, f'https://github.com/{self.project}/releases/tag/{quote(tag, safe="")}',
-                        data.get('published_at'), download_url=download)]
+                        data.get('published_at'), download_url=selected['download_url'] if selected else None)]
 
 
 class Modrinth(Provider):

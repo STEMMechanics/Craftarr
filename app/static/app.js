@@ -8442,6 +8442,14 @@ function renderPluginMonitoringPreview(data) {
   const download = data.download_url?.startsWith("https://")
     ? `<a class="monitoring-preview-action" href="${escapeHtml(data.download_url)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i> Open download</a>`
     : `<span class="monitoring-preview-no-link">No direct download link found</span>`;
+  const assetPreview = data.asset_preview;
+  const assetList = Array.isArray(assetPreview?.available_assets) ? assetPreview.available_assets : [];
+  const assetNames = assetList.length
+    ? `${assetList.slice(0, 6).map((name) => escapeHtml(name)).join(", ")}${assetList.length > 6 ? `, and ${assetList.length - 6} more` : ""}`
+    : "";
+  const assetDetail = assetPreview
+    ? `<div><dt>GitHub JAR selection</dt><dd>${escapeHtml(assetPreview.selected_asset || assetPreview.message || "No single JAR selected")}</dd>${assetNames ? `<small>Release JARs: ${assetNames}</small>` : ""}</div>`
+    : "";
   const versionDetection = renderPluginMonitoringVersionPreview(data.version_preview);
 
   return `<div class="monitoring-preview-card ${statusClass}">
@@ -8454,6 +8462,7 @@ function renderPluginMonitoringPreview(data) {
       <div><dt>Latest</dt><dd>${release}</dd></div>
       <div><dt>Compatibility</dt><dd>${escapeHtml(data.compatibility || "Unknown")}</dd></div>
       <div><dt>Source</dt><dd>${source}</dd></div>
+      ${assetDetail}
     </dl>
     ${versionDetection}
     <div class="monitoring-preview-footer">${download}${data.error ? `<span class="monitoring-preview-error">${escapeHtml(data.error)}</span>` : ""}${renderPluginComparisonDetails(data.comparison_details)}</div>
@@ -8637,7 +8646,7 @@ function openPluginMonitoring(index) {
   document.getElementById("plugin-monitoring-mode").value = selectedMode;
   document.getElementById("plugin-monitoring-provider").value = config.provider || "github";
   document.getElementById("plugin-monitoring-project").value = config.project || "";
-  for (const field of ["version", "link", "installed"]) {
+  for (const field of ["version", "link", "installed", "asset"]) {
     document.getElementById(`plugin-monitoring-${field}-pattern`).value = config[`${field}_pattern`] || "";
   }
   document.getElementById("plugin-monitoring-expressions").open = false;
@@ -8695,8 +8704,8 @@ function updatePluginMonitoringFields(providerChanged = false) {
   globalOption.disabled = !globalAvailable;
   globalOption.textContent = globalAvailable ? "Use shared settings" : "Shared settings unavailable";
 
-  const fieldNames = ["provider", "project", "version_pattern", "link_pattern", "installed_pattern"];
-  const fieldIds = ["provider", "project", "version-pattern", "link-pattern", "installed-pattern"];
+  const fieldNames = ["provider", "project", "version_pattern", "link_pattern", "installed_pattern", "asset_pattern"];
+  const fieldIds = ["provider", "project", "version-pattern", "link-pattern", "installed-pattern", "asset-pattern"];
   const readFields = () => Object.fromEntries(fieldNames.map((name, index) => [name, document.getElementById(`plugin-monitoring-${fieldIds[index]}`).value]));
   const fillFields = (fields) => fieldIds.forEach((field, index) => {
     document.getElementById(`plugin-monitoring-${field}`).value = fields[fieldNames[index]] || "";
@@ -8736,7 +8745,7 @@ function updatePluginMonitoringFields(providerChanged = false) {
   const previewButton = document.getElementById("plugin-monitoring-preview-button");
   if (providerChanged) {
     project.value = "";
-    for (const field of ["version", "link", "installed"]) document.getElementById(`plugin-monitoring-${field}-pattern`).value = "";
+    for (const field of ["version", "link", "installed", "asset"]) document.getElementById(`plugin-monitoring-${field}-pattern`).value = "";
   }
   project.required = editable;
   project.disabled = !editable;
@@ -8758,9 +8767,11 @@ function updatePluginMonitoringFields(providerChanged = false) {
     ? 'Required. Match the metadata response and capture the version, for example "version"\\s*:\\s*"([^"]+)". Test shows the captured value.'
     : "Optional. Extract a comparable version from the release tag/version number, for example ^v?([0-9.]+). Test shows the tag and captured value; edits preview against the same fetched release.";
   document.getElementById("plugin-monitoring-link-fields").hidden = !documentSource;
-  for (const field of ["version", "link", "installed"]) {
+  document.getElementById("plugin-monitoring-asset-fields").hidden = provider !== "github";
+  for (const field of ["version", "link", "installed", "asset"]) {
     document.getElementById(`plugin-monitoring-${field}-pattern`).disabled = !editable || (field === "link" && !documentSource);
   }
+  document.getElementById("plugin-monitoring-asset-pattern").disabled = !editable || provider !== "github";
   clearMonitoringPreview();
 }
 
@@ -8783,6 +8794,7 @@ function pluginMonitoringPayload() {
     version_pattern: fieldValue("version_pattern", "plugin-monitoring-version-pattern"),
     link_pattern: ["jenkins", "custom"].includes(provider) ? fieldValue("link_pattern", "plugin-monitoring-link-pattern") : "",
     installed_pattern: fieldValue("installed_pattern", "plugin-monitoring-installed-pattern"),
+    asset_pattern: provider === "github" ? fieldValue("asset_pattern", "plugin-monitoring-asset-pattern") : "",
   };
 }
 
@@ -8804,8 +8816,9 @@ function previewPluginMonitoringExpressionChanged() {
       preview_input: cached.preview_input,
       default_version: cached.default_version,
       release_url: cached.release_url,
+      asset_data: cached.asset_preview,
     };
-    setPluginMonitoringFeedback("Updating the version match against the tested source…", "pending");
+    setPluginMonitoringFeedback("Updating the preview against the tested source…", "pending");
     try {
       const response = await nativeFetch(`/api/web/servers/${modal.dataset.serverId}/plugins/monitoring/preview`, {
         method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(request),
@@ -8823,7 +8836,7 @@ function previewPluginMonitoringExpressionChanged() {
       const expressionPreview = document.getElementById("plugin-monitoring-expression-preview");
       expressionPreview.innerHTML = renderPluginMonitoringVersionPreview(data.version_preview);
       expressionPreview.hidden = !data.version_preview;
-      setPluginMonitoringFeedback(data.status === "Check failed" ? data.error || "The version expression needs attention." : "Expression preview updated.", data.status === "Check failed" ? "error" : "success");
+      setPluginMonitoringFeedback(data.status === "Check failed" ? data.error || "The settings need attention." : "Preview updated.", data.status === "Check failed" ? "error" : "success");
     } catch (failure) {
       if (modal.isConnected && modal._previewEvaluationSequence === sequence
           && JSON.stringify(pluginMonitoringPayload()) === fingerprint) {

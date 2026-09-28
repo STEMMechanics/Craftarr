@@ -165,10 +165,11 @@ class Jenkins(DocumentSource):
 
 class ConfiguredProvider(Provider):
     """Include upstream extraction rules in cache identity, not installed-version rules."""
-    def __init__(self, source, version_pattern='', link_pattern='', installed_pattern=''):
+    def __init__(self, source, version_pattern='', link_pattern='', installed_pattern='', asset_pattern=''):
         self.source, self.name, self.project = source, source.name, source.project
         self.version_pattern, self.link_pattern = version_pattern, link_pattern
         self.installed_pattern = installed_pattern
+        self.asset_pattern = asset_pattern
         self.preview_input = None
         self.preview_default_version = None
         self.preview_diagnostics = None
@@ -178,9 +179,11 @@ class ConfiguredProvider(Provider):
 
     @property
     def key(self):
-        if not self.version_pattern and not self.link_pattern:
+        if not self.version_pattern and not self.link_pattern and not self.asset_pattern:
             return self.source.key
         identity = [self.source.key, self.version_pattern, self.link_pattern]
+        if self.asset_pattern:
+            identity.append(self.asset_pattern)
         return f'configured:{hashlib.sha256(json.dumps(identity).encode()).hexdigest()}'
 
     def fetch(self):

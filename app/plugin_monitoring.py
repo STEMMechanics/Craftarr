@@ -8,9 +8,11 @@ from .update_providers.configured import ConfiguredProvider, DocumentSource, Jen
 from .update_providers.http_source import validate_url
 
 
-def custom_provider(kind, project, version_pattern='', link_pattern='', installed_pattern=''):
+def custom_provider(kind, project, version_pattern='', link_pattern='', installed_pattern='', asset_pattern=''):
     if not isinstance(kind, str) or not isinstance(project, str):
         raise ValueError('Select a provider and enter its project or URL')
+    if not isinstance(asset_pattern, str):
+        raise ValueError('The GitHub JAR filename expression must be text')
     project = project.strip()
     if kind == 'github':
         if project.startswith('https://'):
@@ -20,8 +22,10 @@ def custom_provider(kind, project, version_pattern='', link_pattern='', installe
             project = parts.path.strip('/')
         if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}', project):
             raise ValueError('Enter owner/repository or a GitHub repository URL')
-        source = providers.GitHub(project.lower())
+        source = providers.GitHub(project.lower(), asset_pattern)
     elif kind == 'modrinth':
+        if asset_pattern:
+            raise ValueError('JAR filename expressions apply only to GitHub Releases')
         if project.startswith('https://'):
             parts = urlsplit(validate_url(project))
             segments = parts.path.strip('/').split('/')
@@ -32,14 +36,18 @@ def custom_provider(kind, project, version_pattern='', link_pattern='', installe
             raise ValueError('Enter a Modrinth project slug, ID or project URL')
         source = providers.Modrinth(project)
     elif kind == 'jenkins':
+        if asset_pattern:
+            raise ValueError('JAR filename expressions apply only to GitHub Releases')
         source = Jenkins(project, version_pattern, link_pattern)
     elif kind == 'custom':
+        if asset_pattern:
+            raise ValueError('JAR filename expressions apply only to GitHub Releases')
         source = DocumentSource(project, version_pattern, link_pattern)
     else:
         raise ValueError('Select GitHub, Modrinth, Jenkins or Custom URL')
     if link_pattern and kind in {'github', 'modrinth'}:
         raise ValueError('Link expressions apply to Jenkins and Custom URL sources')
-    return ConfiguredProvider(source, version_pattern, link_pattern, installed_pattern)
+    return ConfiguredProvider(source, version_pattern, link_pattern, installed_pattern, asset_pattern)
 
 
 def monitoring_config(db, server_id, name):
@@ -80,20 +88,20 @@ def monitoring_config(db, server_id, name):
     return provider, config
 
 
-def save_monitoring_config(db, server_id, name, mode, kind='', project='', version_pattern='', link_pattern='', installed_pattern=''):
+def save_monitoring_config(db, server_id, name, mode, kind='', project='', version_pattern='', link_pattern='', installed_pattern='', asset_pattern=''):
     if mode not in ('disabled', 'global', 'custom'):
         raise ValueError('Select disabled, shared or manual monitoring')
     if mode == 'custom':
-        provider = custom_provider(kind, project, version_pattern, link_pattern, installed_pattern)
+        provider = custom_provider(kind, project, version_pattern, link_pattern, installed_pattern, asset_pattern)
         project = provider.project
     elif mode == 'global':
         from .monitoring_defaults import default_for
         defaults, error = default_for(name)
         if not defaults or defaults.get('error') or error:
             raise ValueError('No valid shared update settings are available for this plugin')
-        kind = project = version_pattern = link_pattern = installed_pattern = ''
+        kind = project = version_pattern = link_pattern = installed_pattern = asset_pattern = ''
     else:
-        kind, project, version_pattern, link_pattern, installed_pattern = '', '', '', '', ''
+        kind, project, version_pattern, link_pattern, installed_pattern, asset_pattern = '', '', '', '', '', ''
     key = providers.normalize_name(name)
     if not key:
         raise ValueError('Plugin has no usable name')
@@ -103,4 +111,5 @@ def save_monitoring_config(db, server_id, name, mode, kind='', project='', versi
         db.add(setting)
     setting.mode, setting.provider, setting.project = mode, kind, project
     setting.version_pattern, setting.link_pattern, setting.installed_pattern = version_pattern, link_pattern, installed_pattern
+    setting.asset_pattern = asset_pattern
     db.commit()

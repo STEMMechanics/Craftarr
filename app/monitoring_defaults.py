@@ -14,7 +14,7 @@ from .update_providers import normalize_name
 
 logger = logging.getLogger(__name__)
 DEFAULTS_PATH = Path(__file__).resolve().parent.parent / 'plugin-monitoring.yml'
-FIELDS = ('provider', 'project', 'version_pattern', 'link_pattern', 'installed_pattern')
+FIELDS = ('provider', 'project', 'version_pattern', 'link_pattern', 'installed_pattern', 'asset_pattern')
 MAX_REPOSITORY_BYTES = 262144
 _repository_lock = threading.RLock()
 
@@ -109,7 +109,7 @@ def validate_repository_text(content):
             raise ValueError(f'{name}: notes must be text of at most 1000 characters')
         try:
             custom_provider(fields['provider'], fields['project'], fields['version_pattern'],
-                            fields['link_pattern'], fields['installed_pattern'])
+                            fields['link_pattern'], fields['installed_pattern'], fields['asset_pattern'])
         except (ValueError, TypeError) as error:
             raise ValueError(f'{name}: {error}') from None
     return data
@@ -232,7 +232,7 @@ def _load(path, mtime, size, inode):
                 raise ValueError()
             names += aliases
             entry = {field: definition.get(field, '') for field in FIELDS}
-            provider = custom_provider(entry['provider'], entry['project'], entry['version_pattern'], entry['link_pattern'], entry['installed_pattern'])
+            provider = custom_provider(entry['provider'], entry['project'], entry['version_pattern'], entry['link_pattern'], entry['installed_pattern'], entry['asset_pattern'])
             entry['project'] = provider.project
             notes = definition.get('notes', '')
             if not isinstance(notes, str) or len(notes) > 1000:
