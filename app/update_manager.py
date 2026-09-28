@@ -17,10 +17,7 @@ from pathlib import Path
 from .version import APP_VERSION
 
 
-GITHUB_REPO = (
-    "stemmechanics/"
-    "craftarr-console"
-)
+GITHUB_REPO = "STEMMechanics/Craftarr"
 
 GITHUB_API = (
     "https://api.github.com/repos/"
