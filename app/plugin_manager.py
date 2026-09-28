@@ -15,6 +15,7 @@ from pathlib import Path
 
 
 MAX_PLUGIN_BYTES = int(getenv("CRAFTARR_MAX_PLUGIN_BYTES", str(128 * 1024 * 1024)))
+MAX_PLUGIN_METADATA_BYTES = 256 * 1024
 
 
 class PluginFileExistsError(FileExistsError):
@@ -39,10 +40,12 @@ def read_plugin_yml(jar_path: Path) -> dict:
         with zipfile.ZipFile(jar_path) as jar:
 
             metadata_name = "plugin.yml" if "plugin.yml" in jar.namelist() else "paper-plugin.yml"
-            if jar.getinfo(metadata_name).file_size > 65536:
+            if jar.getinfo(metadata_name).file_size > MAX_PLUGIN_METADATA_BYTES:
                 return {}
             with jar.open(metadata_name) as file:
-                text = file.read(65537).decode("utf-8", errors="ignore")
+                text = file.read(
+                    MAX_PLUGIN_METADATA_BYTES + 1
+                ).decode("utf-8", errors="ignore")
 
     except (
         OSError,
@@ -487,8 +490,12 @@ def install_plugin_update(server, filename: str, url: str, *, keep_previous: boo
         validate_plugin_archive(temporary_path)
         updated_metadata = read_plugin_yml(temporary_path)
         updated_name = updated_metadata.get("name")
-        if not updated_name or updated_name.casefold() != expected_name.casefold():
-            raise ValueError("Downloaded JAR does not match the installed plugin")
+        if not updated_name:
+            raise ValueError("Downloaded JAR does not contain a readable plugin name")
+        if updated_name.casefold() != expected_name.casefold():
+            raise ValueError(
+                f"Downloaded JAR is for {updated_name}, not {expected_name}"
+            )
 
         target_filename = filename
         if expected_version:

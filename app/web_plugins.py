@@ -720,6 +720,9 @@ async def preview_plugin_monitoring(server_id: int, request: Request, db: Sessio
     from .plugin_monitoring import custom_provider
     from .update_monitor import acquire_lease, CheckInProgress, compare_release
     from .update_providers.http_source import SourceError
+    from .update_providers.configured import extract
+    from .update_providers import Release
+    from .update_providers.versions import parse_version
 
     user, server = get_accessible_server(server_id, request, db)
     if not user:
@@ -733,8 +736,102 @@ async def preview_plugin_monitoring(server_id: int, request: Request, db: Sessio
         plugin = next((item for item in list_plugins(server) if item['filename'] == data.get('filename')), None)
         if not plugin:
             return JSONResponse({'error': 'Installed plugin not found; reload the Plugins page'}, status_code=404)
-        provider = custom_provider(data.get('provider'), data.get('project'), data.get('version_pattern', ''),
-                                   data.get('link_pattern', ''), data.get('installed_pattern', ''))
+    except ValueError as error:
+        return JSONResponse({'error': str(error)}, status_code=400)
+
+    if data.get('evaluate_only') is True:
+        preview_input = data.get('preview_input')
+        pattern = data.get('version_pattern', '')
+        kind = data.get('provider')
+        project = data.get('project')
+        if (not isinstance(preview_input, str) or len(preview_input) > 1024 * 1024
+                or not isinstance(pattern, str) or len(pattern) > 1024):
+            return JSONResponse({'error': 'The saved preview data or version expression is invalid'}, status_code=400)
+        source_label = 'Release tag/version' if kind in {'github', 'modrinth'} else 'Source metadata'
+        source_value = preview_input if kind in {'github', 'modrinth'} else None
+        detected = None
+        diagnostic = {
+            'source_label': source_label,
+            'source_value': source_value,
+            'captured_value': None,
+            'pattern_status': 'error',
+            'comparable': False,
+            'error': None,
+        }
+        try:
+            if pattern:
+                detected = extract(pattern, preview_input)
+            elif kind in {'github', 'modrinth'}:
+                detected = preview_input
+            elif kind == 'jenkins':
+                detected = data.get('default_version')
+                if not isinstance(detected, str) or not detected:
+                    raise SourceError('Jenkins did not return a default build number to compare')
+            else:
+                raise SourceError('A version expression with a capture group is required')
+        except ValueError as error:
+            message = str(error)
+            state = 'no_match' if 'did not match' in message else 'invalid' if 'Invalid extraction expression' in message else 'error'
+            diagnostic.update(pattern_status=state, error=message)
+            return {
+                'status': 'Check failed', 'update_available': False,
+                'installed_version': plugin.get('version'), 'error': message,
+                'version_preview': diagnostic,
+            }
+
+        diagnostic.update(
+            captured_value=detected,
+            pattern_status='matched' if pattern else 'not_set',
+            comparable=parse_version(detected) is not None,
+        )
+        if parse_version(detected) is None:
+            message = f'Detected version "{detected}" cannot be compared; adjust the version expression'
+            diagnostic.update(pattern_status='uncomparable', error=message)
+            return {
+                'status': 'Check failed', 'update_available': False,
+                'latest_version': detected, 'installed_version': plugin.get('version'),
+                'error': message, 'version_preview': diagnostic,
+            }
+
+        provider = None
+        release = None
+        try:
+            provider = custom_provider(kind, project, pattern, data.get('link_pattern', ''), data.get('installed_pattern', ''))
+            release = Release(detected, str(data.get('release_url') or provider.project))
+            installed_comparison, installed_source = provider.installed_details(plugin.get('version'), plugin['filename'])
+            comparison = provider.compare(plugin.get('version'), release, filename=plugin['filename'])
+            result = {
+                'status': 'Check failed' if comparison is None else 'Update available' if comparison > 0 else 'Current',
+                'update_available': comparison is not None and comparison > 0,
+                'latest_version': provider.display_version(release),
+                'installed_version': provider.display_installed(plugin.get('version'), release, filename=plugin['filename']),
+                'installed_comparison': installed_comparison,
+                'installed_comparison_source': installed_source,
+                'error': 'Installed version/build cannot be reliably compared' if comparison is None else None,
+                'version_preview': diagnostic,
+            }
+            return result
+        except ValueError as error:
+            message = str(error)
+            return {
+                'status': 'Check failed',
+                'update_available': False,
+                'latest_version': provider.display_version(release) if provider and release else detected,
+                'installed_version': plugin.get('version'),
+                'error': message,
+                'version_preview': diagnostic,
+            }
+
+    try:
+        if data.get('mode') == 'global':
+            from .monitoring_defaults import default_for, FIELDS
+            defaults, error = default_for(plugin['name'])
+            if not defaults or defaults.get('error') or error:
+                raise ValueError(error or (defaults or {}).get('error') or 'No shared update settings are available for this plugin')
+            provider = custom_provider(*(defaults[field] for field in FIELDS))
+        else:
+            provider = custom_provider(data.get('provider'), data.get('project'), data.get('version_pattern', ''),
+                                       data.get('link_pattern', ''), data.get('installed_pattern', ''))
     except ValueError as error:
         return JSONResponse({'error': str(error)}, status_code=400)
     now = datetime.utcnow()
@@ -752,8 +849,22 @@ async def preview_plugin_monitoring(server_id: int, request: Request, db: Sessio
             if not result.get('comparison_details'):
                 raise
         result['source_url'] = provider.project
+        result['version_preview'] = provider.preview_diagnostics
+        result['preview_input'] = provider.preview_input if isinstance(provider.preview_input, str) and len(provider.preview_input) <= 1024 * 1024 else None
+        result['default_version'] = provider.preview_default_version
         return result
     except SourceError as error:
+        if getattr(provider, 'preview_diagnostics', None):
+            return {
+                'status': 'Check failed',
+                'update_available': False,
+                'installed_version': plugin.get('version'),
+                'source_url': provider.project,
+                'error': str(error),
+                'version_preview': provider.preview_diagnostics,
+                'preview_input': provider.preview_input if isinstance(provider.preview_input, str) and len(provider.preview_input) <= 1024 * 1024 else None,
+                'default_version': provider.preview_default_version,
+            }
         return JSONResponse({'error': str(error)}, status_code=400)
     except Exception:
         return JSONResponse({'error': 'Preview failed: the source was unavailable or returned invalid metadata'}, status_code=400)
