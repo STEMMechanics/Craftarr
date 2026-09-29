@@ -3207,6 +3207,22 @@ input[type="checkbox"] {
   grid-column: 1 / -1;
 }
 
+.settings-toggle-field {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+}
+
+.settings-toggle-field > input[type="checkbox"] {
+  flex: 0 0 auto;
+}
+
+.settings-toggle-field > span {
+  flex: 1;
+}
+
 .settings-save-row {
   grid-column: 1 / -1;
 

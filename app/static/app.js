@@ -5775,7 +5775,8 @@ function checkedOf(id) {
 updatePropertiesPage();
 loadAdvancedProperties();
 
-async function saveOwnProfile() {
+async function saveOwnProfile(event) {
+  event?.preventDefault();
   const username = document
     .getElementById(
       "settings-profile-username",
