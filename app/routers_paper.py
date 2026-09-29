@@ -201,6 +201,10 @@ def start(
             server.java_path,
         )
 
+        server.plugins_dirty = False
+        server.plugin_session_pid = pid
+        db.commit()
+
         return {
             "running": True,
             "pid": pid,

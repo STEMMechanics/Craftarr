@@ -242,7 +242,7 @@ def test_systemd_status_parses_properties_by_name(monkeypatch):
     status = processes._systemd_status(config)
 
     assert status == {
-        "running": True, "state": "running", "console_available": False,
+        "running": True, "state": "starting", "console_available": False,
         "pid": 4321, "backend": "systemd", "active_state": "active",
         "service_name": "survival",
         "unit_name": "craftarr-server@survival.service",

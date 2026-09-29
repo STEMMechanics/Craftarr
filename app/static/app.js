@@ -1078,7 +1078,7 @@ async function updateSystemStats() {
         }" aria-label="${server.state === "stopped" || (!server.state && !server.running) ? "Start" : "Stop"} ${escapeHtml(server.name)}" title="${server.state === "stopped" || (!server.state && !server.running) ? "Start" : "Stop"} server" ${
           server.state === "stopped" || (!server.state && !server.running)
             ? ""
-            : (["starting", "running"].includes(server.state || "running") && server.console_available !== false ? "" : "disabled")
+            : ((server.state || (server.running ? "running" : "stopped")) === "running" && server.console_available !== false ? "" : "disabled")
         } onclick="systemServerAction(${Number(server.id)}, '${
           server.state === "stopped" || (!server.state && !server.running) ? "start" : "stop"
         }', this)"><i class="fa-solid fa-${server.state === "stopped" || (!server.state && !server.running) ? "play" : "stop"}" aria-hidden="true"></i></button>
@@ -1188,7 +1188,7 @@ async function updateServerStatus() {
 
   const setControls = (state, consoleAvailable) => {
     if (startButton) startButton.disabled = state !== "stopped";
-    if (stopButton) stopButton.disabled = !consoleAvailable || !["starting", "running"].includes(state);
+    if (stopButton) stopButton.disabled = !consoleAvailable || state !== "running";
     if (restartButton) restartButton.disabled = !consoleAvailable || state !== "running";
 
     if (startButton) {
@@ -1201,10 +1201,10 @@ async function updateServerStatus() {
     if (stopButton) {
       stopButton.title = state === "stopping"
         ? "Server is shutting down"
-        : !consoleAvailable
-          ? "Server console unavailable"
-          : state === "starting"
-            ? "Stop server startup"
+        : state === "starting"
+          ? "Wait for the server to finish starting"
+          : !consoleAvailable
+            ? "Server console unavailable"
             : "Stop server";
     }
     if (restartButton) {
@@ -1318,7 +1318,7 @@ async function updateServerDots() {
           const action = button.classList.contains("start") ? "start" : "stop";
           button.disabled = action === "start"
             ? state !== "stopped"
-            : data.console_available === false || !["starting", "running"].includes(state);
+            : data.console_available === false || state !== "running";
         }
       });
 
@@ -1346,6 +1346,7 @@ let consoleFilters = new Set();
 let lastConsoleSignature = "";
 let playerData = null;
 let playerFilter = "all";
+let playerSort = "name-asc";
 let playerPage = 1;
 const PLAYER_PAGE_SIZE = 25;
 let pluginData = [];
@@ -2995,6 +2996,9 @@ function renderPlayerPage() {
     return;
   }
 
+  const sortControl = document.getElementById("player-sort");
+  if (sortControl) sortControl.value = playerSort;
+
   setText(
     "players-online-count",
     playerData.online_count,
@@ -3145,6 +3149,34 @@ function renderPlayerList() {
     },
   );
 
+  const compareName = (left, right) =>
+    String(left.name || "").localeCompare(
+      String(right.name || ""),
+      undefined,
+      {sensitivity: "base"},
+    );
+  const lastOnlineTime = (player) => {
+    const timestamp = Date.parse(player.last_online || "");
+    return Number.isFinite(timestamp) ? timestamp : null;
+  };
+  players.sort((left, right) => {
+    if (playerSort === "name-desc") return compareName(right, left);
+    if (playerSort === "online-first") {
+      return Number(right.online) - Number(left.online) || compareName(left, right);
+    }
+    if (playerSort === "last-online-desc" || playerSort === "last-online-asc") {
+      const leftTime = lastOnlineTime(left);
+      const rightTime = lastOnlineTime(right);
+      if (leftTime === null || rightTime === null) {
+        if (leftTime === rightTime) return compareName(left, right);
+        return leftTime === null ? 1 : -1;
+      }
+      const direction = playerSort === "last-online-desc" ? -1 : 1;
+      return (leftTime - rightTime) * direction || compareName(left, right);
+    }
+    return compareName(left, right);
+  });
+
   if (!players.length) {
     list.innerHTML = '<div class="empty-message">No players found.</div>';
     const pagination = document.getElementById("player-pagination");
@@ -3185,7 +3217,7 @@ function renderPlayerList() {
         : "Read from Minecraft player data";
       const canManagePlayers = document.querySelector(".players-page")?.dataset.canManage === "true";
       const statusBadges = [
-        player.whitelisted ? '<span class="player-state-badge is-allowed"><i class="fa-solid fa-check" aria-hidden="true"></i>Allowed</span>' : "",
+        player.whitelisted ? '<span class="player-state-badge is-whitelisted"><i class="fa-solid fa-check" aria-hidden="true"></i>Whitelisted</span>' : "",
         player.operator ? `<span class="player-state-badge is-admin"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i>Server admin${player.op_level == null ? "" : ` · L${escapeHtml(player.op_level)}`}</span>` : "",
         player.banned ? '<span class="player-state-badge is-blocked"><i class="fa-solid fa-ban" aria-hidden="true"></i>Blocked</span>' : "",
       ].filter(Boolean).join("") || '';
@@ -3249,7 +3281,7 @@ function renderPlayerList() {
                                 "
                             >
                                 ${
-        player.whitelisted ? "✓ Allowed" : "+ Allow to join"
+        player.whitelisted ? "✓ Whitelisted" : "+ Whitelist"
       }
                             </button>
 
@@ -3510,6 +3542,13 @@ document.addEventListener(
     }
   },
 );
+
+document.addEventListener("change", (event) => {
+  if (event.target.id !== "player-sort") return;
+  playerSort = event.target.value;
+  playerPage = 1;
+  renderPlayerList();
+});
 
 updatePlayersPage();
 
@@ -8056,7 +8095,13 @@ function parseUtcTimestamp(value) {
   return new Date(hasTimezone ? timestamp : `${timestamp}Z`);
 }
 
-function drawMetricChart(canvasId, rows, value, label) {
+function drawMetricChart(
+  canvasId,
+  rows,
+  value,
+  label,
+  formatValue = (point) => point.toLocaleString(),
+) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   const ratio = window.devicePixelRatio || 1;
@@ -8078,7 +8123,14 @@ function drawMetricChart(canvasId, rows, value, label) {
     canvas.title = `${label}: no historical data yet`;
     return;
   }
-  const maximum = Math.max(1, ...values);
+  const maximum = Math.max(...values);
+  const scaleMaximum = Math.max(1, maximum);
+  const peakIndex = values.reduce(
+    (peak, point, index) => point > values[peak] ? index : peak,
+    0,
+  );
+  const latestText = formatValue(values.at(-1), rows.at(-1));
+  const peakText = formatValue(maximum, rows[peakIndex]);
   const chartToken = {
     "metric-cpu": "--sm-green-dark",
     "metric-memory": "--sm-blue-dark",
@@ -8107,21 +8159,21 @@ function drawMetricChart(canvasId, rows, value, label) {
     const x = values.length === 1
       ? xInset
       : xInset + index * (width - xInset * 2) / (values.length - 1);
-    const y = yBottom - (point / maximum) * (yBottom - yTop);
+    const y = yBottom - (point / scaleMaximum) * (yBottom - yTop);
     index ? context.lineTo(x, y) : context.moveTo(x, y);
   });
   context.stroke();
   context.fillStyle = rootStyle.getPropertyValue("--sm-muted").trim() || "#64748b";
   context.font = "12px Poppins, sans-serif";
-  context.fillText(`Latest ${values.at(-1).toLocaleString()} · peak ${maximum.toLocaleString()}`, 8, height - 5);
+  context.fillText(`Latest ${latestText} · Peak ${peakText}`, 8, height - 5);
 
-  const summary = `${label}: latest ${values.at(-1).toLocaleString()}, peak ${maximum.toLocaleString()}, ${values.length} readings`;
+  const summary = `${label}: latest ${latestText}, peak ${peakText}, ${values.length} readings`;
   canvas.setAttribute("aria-label", summary);
   canvas.title = summary;
   const describePoint = (index) => {
     const row = rows[index];
     const recorded = row?.recorded_at ? new Date(row.recorded_at).toLocaleString() : `Reading ${index + 1}`;
-    return `${label}: ${values[index].toLocaleString()} · ${recorded}`;
+    return `${label}: ${formatValue(values[index], row)} · ${recorded}`;
   };
   canvas.onmousemove = (event) => {
     const bounds = canvas.getBoundingClientRect();
@@ -8142,24 +8194,33 @@ async function loadServerMetrics() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Unable to load metrics");
     const rows = data.metrics || [];
-    drawMetricChart("metric-cpu", rows, (row) => row.cpu_percent, "CPU %");
+    drawMetricChart(
+      "metric-cpu",
+      rows,
+      (row) => row.cpu_percent,
+      "CPU use",
+      (point) => `${Math.round(point).toLocaleString()}%`,
+    );
     drawMetricChart(
       "metric-memory",
       rows,
-      (row) => Math.round(row.memory_bytes / 1048576),
-      "MiB",
+      (row) => row.memory_bytes / 1048576,
+      "Memory",
+      (_point, row) => formatMemoryBytes(row.memory_bytes || 0),
     );
     drawMetricChart(
       "metric-players",
       rows,
       (row) => row.player_count,
-      "Players",
+      "Players online",
+      (point) => `${point.toLocaleString()} ${point === 1 ? "player" : "players"}`,
     );
     drawMetricChart(
       "metric-uptime",
       rows,
-      (row) => Math.round((row.uptime_seconds || 0) / 60),
-      "Minutes",
+      (row) => row.uptime_seconds || 0,
+      "Time online",
+      (point, row) => row.uptime_seconds == null ? "Offline" : formatUptime(point),
     );
   } catch (error) {
     ["metric-cpu", "metric-memory", "metric-players", "metric-uptime"].forEach(

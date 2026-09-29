@@ -214,25 +214,31 @@ def player_data_last_online(player_data_directory: Path | None, player_uuid):
     except (TypeError, ValueError, AttributeError):
         return None, False
 
+    player_ids = tuple(
+        dict.fromkeys(
+            (normalized_uuid.replace("-", ""), normalized_uuid)
+        )
+    )
     exact_timestamps = []
     estimated_timestamps = []
-    for suffix in (".dat", ".dat_old"):
-        path = player_data_directory / f"{normalized_uuid}{suffix}"
-        try:
-            resolved = path.resolve()
-            if resolved.is_relative_to(player_data_directory) and resolved.is_file():
-                stat = resolved.stat()
-                last_played = _cached_nbt_last_played(
-                    str(resolved),
-                    stat.st_mtime_ns,
-                    stat.st_size,
-                )
-                if last_played is not None and last_played > 0:
-                    exact_timestamps.append(last_played / 1000)
-                else:
-                    estimated_timestamps.append(stat.st_mtime)
-        except (OSError, RuntimeError):
-            continue
+    for player_id in player_ids:
+        for suffix in (".dat", ".dat_old"):
+            path = player_data_directory / f"{player_id}{suffix}"
+            try:
+                resolved = path.resolve()
+                if resolved.is_relative_to(player_data_directory) and resolved.is_file():
+                    stat = resolved.stat()
+                    last_played = _cached_nbt_last_played(
+                        str(resolved),
+                        stat.st_mtime_ns,
+                        stat.st_size,
+                    )
+                    if last_played is not None and last_played > 0:
+                        exact_timestamps.append(last_played / 1000)
+                    else:
+                        estimated_timestamps.append(stat.st_mtime)
+            except (OSError, RuntimeError):
+                continue
     if not exact_timestamps and not estimated_timestamps:
         return None, False
     estimated = not exact_timestamps
@@ -362,9 +368,22 @@ def get_player_data(
     try:
         resolved_root = root.resolve()
         world_directory = (resolved_root / properties.get("level-name", "world")).resolve()
-        candidate = (world_directory / "playerdata").resolve()
-        if world_directory.is_relative_to(resolved_root) and candidate.is_relative_to(resolved_root):
-            player_data_directory = candidate
+        if world_directory.is_relative_to(resolved_root):
+            # Minecraft 26.1 moved player files from <world>/playerdata to
+            # <world>/players/data. Prefer the new location, while retaining
+            # compatibility with older server layouts.
+            candidates = (
+                world_directory / "players" / "data",
+                world_directory / "playerdata",
+            )
+            for candidate in candidates:
+                resolved_candidate = candidate.resolve()
+                if (
+                    resolved_candidate.is_relative_to(resolved_root)
+                    and resolved_candidate.is_dir()
+                ):
+                    player_data_directory = resolved_candidate
+                    break
     except (OSError, RuntimeError, ValueError):
         pass
 

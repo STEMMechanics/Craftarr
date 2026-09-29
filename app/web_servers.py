@@ -1185,6 +1185,7 @@ def web_start_server(
         # A successful start means pending
         # plugin changes have now been loaded.
         server.plugins_dirty = False
+        server.plugin_session_pid = pid
 
         db.commit()
 
@@ -1336,6 +1337,7 @@ def web_restart_server(
 
         # Restart loaded any changed plugins.
         server.plugins_dirty = False
+        server.plugin_session_pid = pid
 
         db.commit()
 

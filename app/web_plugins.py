@@ -82,8 +82,32 @@ def plugin_action_requires_restart(
     return False
 
 
+def sync_plugin_restart_session(db, server, status: dict | None = None) -> dict:
+    status = status or server_status(server.id)
+    running = bool(status.get("running"))
+    pid = status.get("pid") if running else None
+    changed = False
+
+    if not running:
+        if server.plugin_session_pid is not None or server.plugins_dirty:
+            server.plugin_session_pid = None
+            server.plugins_dirty = False
+            changed = True
+    elif pid is not None and server.plugin_session_pid != pid:
+        previous_pid = server.plugin_session_pid
+        server.plugin_session_pid = pid
+        if previous_pid is not None:
+            server.plugins_dirty = False
+        changed = True
+
+    if changed:
+        db.commit()
+    return status
+
+
 def record_plugin_restart_requirement(db, server, required: bool) -> bool:
-    if required and not server.plugins_dirty:
+    status = sync_plugin_restart_session(db, server)
+    if required and status.get("running") and not server.plugins_dirty:
         server.plugins_dirty = True
         db.commit()
     return bool(server.plugins_dirty)
@@ -246,6 +270,8 @@ def plugins_data(
             status_code=403,
         )
 
+    status = sync_plugin_restart_session(db, server)
+    running = bool(status.get("running"))
 
     if has_permission(user, "plugins.manage"):
         normalize_previous_plugin_filenames(server)
@@ -278,7 +304,7 @@ def plugins_data(
             server.plugins_dirty,
 
         "running":
-            bool(server_status(server.id).get("running")),
+            running,
     }
 
 
