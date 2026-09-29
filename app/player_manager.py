@@ -368,9 +368,22 @@ def get_player_data(
     try:
         resolved_root = root.resolve()
         world_directory = (resolved_root / properties.get("level-name", "world")).resolve()
-        candidate = (world_directory / "playerdata").resolve()
-        if world_directory.is_relative_to(resolved_root) and candidate.is_relative_to(resolved_root):
-            player_data_directory = candidate
+        if world_directory.is_relative_to(resolved_root):
+            # Minecraft 26.1 moved player files from <world>/playerdata to
+            # <world>/players/data. Prefer the new location, while retaining
+            # compatibility with older server layouts.
+            candidates = (
+                world_directory / "players" / "data",
+                world_directory / "playerdata",
+            )
+            for candidate in candidates:
+                resolved_candidate = candidate.resolve()
+                if (
+                    resolved_candidate.is_relative_to(resolved_root)
+                    and resolved_candidate.is_dir()
+                ):
+                    player_data_directory = resolved_candidate
+                    break
     except (OSError, RuntimeError, ValueError):
         pass
 
