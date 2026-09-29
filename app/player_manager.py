@@ -35,6 +35,7 @@ DISCONNECT_PATTERN = re.compile(
 )
 
 MAX_PLAYER_NBT_BYTES = 32 * 1024 * 1024
+PLAYER_DATA_TIMESTAMP_TOLERANCE_SECONDS = 60
 
 
 def read_json_file(
@@ -234,15 +235,31 @@ def player_data_last_online(player_data_directory: Path | None, player_uuid):
                         stat.st_size,
                     )
                     if last_played is not None and last_played > 0:
-                        exact_timestamps.append(last_played / 1000)
+                        exact_timestamp = last_played / 1000
+                        exact_timestamps.append(exact_timestamp)
+                        if (
+                            stat.st_mtime
+                            > exact_timestamp + PLAYER_DATA_TIMESTAMP_TOLERANCE_SECONDS
+                        ):
+                            estimated_timestamps.append(stat.st_mtime)
                     else:
                         estimated_timestamps.append(stat.st_mtime)
             except (OSError, RuntimeError):
                 continue
     if not exact_timestamps and not estimated_timestamps:
         return None, False
-    estimated = not exact_timestamps
-    timestamp = max(exact_timestamps or estimated_timestamps)
+    exact_timestamp = max(exact_timestamps, default=None)
+    estimated_timestamp = max(estimated_timestamps, default=None)
+    if estimated_timestamp is not None and (
+        exact_timestamp is None
+        or estimated_timestamp
+        > exact_timestamp + PLAYER_DATA_TIMESTAMP_TOLERANCE_SECONDS
+    ):
+        timestamp = estimated_timestamp
+        estimated = True
+    else:
+        timestamp = exact_timestamp
+        estimated = False
     try:
         value = datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace("+00:00", "Z")
     except (OverflowError, OSError, ValueError):
