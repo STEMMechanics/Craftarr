@@ -248,7 +248,7 @@ class ConfiguredProvider(Provider):
             return extract(self.installed_pattern, str(installed or '')), 'JAR metadata'
         if isinstance(self.source, Jenkins) and not self.version_pattern:
             # Deliberately require a build marker; never mistake 2.0.43 for build 43.
-            pattern = r'(?i)(?:\(build\s+|[- ]build[ .-]*|-b|-SNAPSHOT-)(\d+)(?:\)?(?:\+[a-z0-9]+)?)(?:$|\.jar(?:\.disabled)?$)'
+            pattern = r'(?i)(?:\(build\s+|[- ]build[ .-]*|[-+]b|-SNAPSHOT[-+]b?)(\d+)(?:\)?(?:\+[a-z0-9]+)?)(?:$|\.jar(?:\.disabled)?$)'
             for value, origin in ((installed, 'JAR metadata'), (filename, 'JAR filename')):
                 match = re.search(pattern, str(value or ''))
                 if match:

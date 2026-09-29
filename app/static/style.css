@@ -5061,6 +5061,8 @@ input[type="checkbox"] {
 
 .settings-version-info-field {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 0.5rem;
   justify-content: end;
 }

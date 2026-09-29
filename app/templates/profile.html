@@ -7,7 +7,7 @@
     <section class="page-header">
         <div>
             <h1>My account</h1>
-            <p>Manage your username, email address, and password.</p>
+            <p>Manage your sign-in details and account security.</p>
         </div>
     </section>
 
@@ -32,5 +32,7 @@
             </div>
         </form>
     </section>
+
+    {% include "partials/profile_tfa.html" %}
 </div>
 {% endblock %}
