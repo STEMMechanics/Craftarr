@@ -1,0 +1,72 @@
+<section class="overview-card settings-section">
+    <div class="card-header">Two-Factor Authentication</div>
+    <div class="tfa-settings">
+        <div>
+            <strong>Authenticator App</strong>
+            <p>Protect your account with a time-based one-time password.</p>
+        </div>
+
+        <div id="tfa-disabled-controls" hidden>
+            <button class="button" type="button" onclick="beginTFASetup()">Enable 2FA</button>
+        </div>
+
+        <div id="tfa-enabled-controls" class="tfa-enabled-controls" hidden>
+            <span class="tfa-enabled-label">
+                <i class="fa-solid fa-circle-check" aria-hidden="true"></i>
+                Enabled
+            </span>
+            <button class="button" type="button" onclick="regenerateRecoveryCodes()">Recovery Codes</button>
+            <button class="button danger" type="button" onclick="openDisableTFAModal()">Disable</button>
+        </div>
+    </div>
+</section>
+
+<div id="tfa-setup-modal" class="modal-backdrop" hidden>
+    <div class="modal-card tfa-modal">
+        <h2>Set up two-factor authentication</h2>
+        <p>Scan this QR code with your authenticator app.</p>
+        <div class="tfa-qr-wrap">
+            <img id="tfa-qr-code" class="tfa-qr-code" alt="Two-factor QR code">
+        </div>
+        <div class="tfa-secret">
+            <span>Manual setup key</span>
+            <code id="tfa-secret"></code>
+        </div>
+        <label class="property-field">
+            <span>Enter the current 6-digit code</span>
+            <input id="tfa-confirm-code" type="text" inputmode="numeric" autocomplete="one-time-code">
+        </label>
+        <div id="tfa-setup-error" class="login-error" hidden></div>
+        <div class="modal-actions">
+            <button class="button" type="button" onclick="closeTFASetupModal()">Cancel</button>
+            <button class="button" type="button" onclick="confirmTFASetup()">Enable 2FA</button>
+        </div>
+    </div>
+</div>
+
+<div id="tfa-recovery-modal" class="modal-backdrop" hidden>
+    <div class="modal-card">
+        <h2>Recovery codes</h2>
+        <p>Store these somewhere safe. Each code can only be used once.</p>
+        <div id="tfa-recovery-codes" class="tfa-recovery-codes"></div>
+        <div class="modal-actions">
+            <button class="button" type="button" onclick="closeRecoveryCodesModal()">Done</button>
+        </div>
+    </div>
+</div>
+
+<div id="tfa-disable-modal" class="modal-backdrop" hidden>
+    <div class="modal-card">
+        <h2>Disable two-factor authentication?</h2>
+        <p>Enter your current password to confirm.</p>
+        <label class="property-field">
+            <span>Password</span>
+            <input id="tfa-disable-password" type="password">
+        </label>
+        <div id="tfa-disable-error" class="login-error" hidden></div>
+        <div class="modal-actions">
+            <button class="button" type="button" onclick="closeDisableTFAModal()">Cancel</button>
+            <button class="button danger" type="button" onclick="disableTFA()">Disable</button>
+        </div>
+    </div>
+</div>

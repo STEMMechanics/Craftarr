@@ -2143,6 +2143,8 @@ function renderPluginActions(plugin, canViewFiles, canEditFiles) {
       <details class="plugin-more-actions">
         <summary class="button"><i class="fa-solid fa-ellipsis" aria-hidden="true"></i><span>More</span></summary>
         <div class="plugin-more-menu" role="group" aria-label="More actions for ${escapeHtml(plugin.name)}">
+          ${plugin.suggested_filename && plugin.enabled === true ? `<button class="plugin-menu-action" type="button" onclick="this.closest('details').open=false; correctPluginFilename('${filename}', this)"><i class="fa-solid fa-pen-to-square" aria-hidden="true"></i><span>Correct filename</span></button>` : ""}
+          ${plugin.enabled === true && plugin.previous_version !== true ? `<button class="plugin-menu-action" type="button" onclick="this.closest('details').open=false; checkPluginUpdate('${filename}', this)"><i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i><span>Check for updates</span></button>` : ""}
           <button class="plugin-menu-action" type="button" onclick="this.closest('details').open=false; openPluginMonitoring(${pluginData.indexOf(plugin)})"><i class="fa-solid fa-gear" aria-hidden="true"></i><span>Update settings</span></button>
           ${folderAction}
           <div class="plugin-menu-separator" role="separator"></div>
@@ -2177,13 +2179,15 @@ function renderPluginComparisonDetails(details) {
 }
 
 function pluginHasDownloadableUpdate(plugin) {
-  return plugin?.rollback_copy !== true
+  return plugin?.enabled === true
+    && plugin?.previous_version !== true
     && plugin?.update?.update_available === true
     && typeof plugin.update.download_url === "string"
     && plugin.update.download_url.startsWith("https://");
 }
 
 function renderPluginVersionStatus(plugin, canManage = false) {
+  if (plugin?.enabled !== true) return "";
   const update = plugin.update;
   const updateInstalledVersion = plugin.version_source === "filename"
     ? null
@@ -2192,8 +2196,8 @@ function renderPluginVersionStatus(plugin, canManage = false) {
     .filter((version, index, versions) => version && versions.indexOf(version) === index)
     .join(" | ") || "Unknown";
   const versionPill = `<span class="server-version-pill plugin-version-pill" title="Installed plugin version"><i class="fa-solid fa-cube" aria-hidden="true"></i><span class="visually-hidden">Installed version: </span>${escapeHtml(installedVersion)}</span>`;
-  if (plugin.rollback_copy) {
-    return `<div class="plugin-version-status-row">${versionPill}<span class="server-inline-update-status plugin-update-status is-pending" title="Previous JAR kept disabled for rollback"><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i>Rollback copy</span></div>`;
+  if (plugin.previous_version) {
+    return `<div class="plugin-version-status-row">${versionPill}<span class="server-inline-update-status plugin-update-status is-pending" title="Previous JAR retained in a disabled state in case you need to restore it"><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i>Previous version</span></div>`;
   }
   if (!update) return `<div class="plugin-version-status-row">${versionPill}</div>`;
 
@@ -2469,6 +2473,7 @@ function showPluginDuplicatesModal() {
         if (!response.ok) return showToast(data.error || "Unable to delete plugin", "error");
         latestInstalledPluginFilename = null;
         await updatePluginsPage(true);
+        await refreshNotifications(false);
       });
       selection.append(checkbox, description);
       row.append(selection, remove);
@@ -2532,6 +2537,7 @@ async function disableSelectedDuplicatePlugins() {
   pluginRestartRequired = data.restart_required === true;
   showPluginRestartAlert();
   await updatePluginsPage();
+  await refreshNotifications(false);
 }
 
 function openPluginFolder(path) {
@@ -3631,6 +3637,7 @@ async function togglePlugin(
   showPluginRestartAlert();
 
   await updatePluginsPage();
+  await refreshNotifications(false);
 }
 
 function openPluginRemoveModal(
@@ -3790,6 +3797,7 @@ async function confirmPluginRemove() {
   showPluginRestartAlert();
 
   await updatePluginsPage();
+  await refreshNotifications(false);
 }
 
 function showPluginRestartAlert() {
@@ -7502,6 +7510,20 @@ async function pollSharedSystemOperation() {
 window.setInterval(pollSharedSystemOperation, 1000);
 pollSharedSystemOperation();
 
+function setConsoleUpdateStatus(stateClass, iconClass, label, title = label) {
+  const status = document.getElementById("console-update-status");
+  if (!status) return;
+  status.classList.remove("is-current", "is-update", "is-warning", "is-error", "is-pending");
+  status.classList.add(stateClass);
+  status.title = title || "";
+  const icon = document.createElement("i");
+  icon.className = `fa-solid ${iconClass}`;
+  icon.setAttribute("aria-hidden", "true");
+  const text = document.createElement("span");
+  text.textContent = label;
+  status.replaceChildren(icon, text);
+}
+
 async function updateConsoleVersionStatus() {
   const status = document.getElementById(
     "console-update-status",
@@ -7533,30 +7555,30 @@ async function updateConsoleVersionStatus() {
       data.release_available ===
         false
     ) {
-      status.textContent = "No published releases";
-
-      button.hidden = true;
+      setConsoleUpdateStatus("is-pending", "fa-circle-question", "No published releases");
+      if (button) button.hidden = true;
 
       return;
     }
 
     if (data.update_available) {
       consoleUpdateTag = data.tag;
-
-      status.textContent = `v${data.latest_version} available`;
-
-      button.hidden = false;
+      setConsoleUpdateStatus("is-update", "fa-circle-up", `v${data.latest_version} available`);
+      if (button) button.hidden = false;
     } else {
       consoleUpdateTag = null;
-
-      status.textContent = "Up to date";
-
-      button.hidden = true;
+      setConsoleUpdateStatus("is-current", "fa-circle-check", "Up to date");
+      if (button) button.hidden = true;
     }
-  } catch {
-    status.textContent = "Unable to check for updates";
-
-    button.hidden = true;
+  } catch (error) {
+    consoleUpdateTag = null;
+    setConsoleUpdateStatus(
+      "is-error",
+      "fa-circle-exclamation",
+      "Unable to check for updates",
+      error.message || "Unable to check for updates",
+    );
+    if (button) button.hidden = true;
   }
 }
 
@@ -7576,9 +7598,8 @@ async function upgradeConsole() {
     "installing",
   );
   const button = document.getElementById("console-update-button");
-  const status = document.getElementById("console-update-status");
-  button.disabled = true;
-  status.textContent = "Downloading and verifying...";
+  if (button) button.disabled = true;
+  setConsoleUpdateStatus("is-pending", "fa-spinner fa-spin", "Downloading and verifying…");
   try {
     const response = await fetch("/api/web/settings/update", {
       method: "POST",
@@ -7587,7 +7608,7 @@ async function upgradeConsole() {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Update failed");
-    status.textContent = "Installed; restarting console...";
+    setConsoleUpdateStatus("is-pending", "fa-spinner fa-spin", "Installed; restarting console…");
     setSystemOperationState(
       "Restarting Craftarr",
       "The update is installed. Waiting for the console service to return...",
@@ -7600,7 +7621,7 @@ async function upgradeConsole() {
     button.hidden = true;
     await waitForConsoleRestart();
   } catch (error) {
-    button.disabled = false;
+    if (button) button.disabled = false;
     failSystemOperation(error.message);
     updateConsoleVersionStatus();
   }
@@ -7646,9 +7667,8 @@ async function restartConsoleService() {
   );
 
   const button = document.getElementById("console-restart-button");
-  const status = document.getElementById("console-update-status");
   button.disabled = true;
-  status.textContent = "Restarting console...";
+  setConsoleUpdateStatus("is-pending", "fa-spinner fa-spin", "Restarting console…");
 
   try {
     const response = await fetch("/api/web/settings/restart", {
@@ -7994,9 +8014,8 @@ async function rollbackConsoleUpdate() {
     "installing",
   );
   const button = document.getElementById("console-rollback-button");
-  const status = document.getElementById("console-update-status");
   button.disabled = true;
-  status.textContent = "Restoring previous version...";
+  setConsoleUpdateStatus("is-pending", "fa-spinner fa-spin", "Restoring previous version…");
   try {
     const response = await fetch("/api/web/settings/update", {
       method: "POST",
@@ -8005,7 +8024,7 @@ async function rollbackConsoleUpdate() {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Rollback failed");
-    status.textContent = "Previous version restored; restarting console...";
+    setConsoleUpdateStatus("is-pending", "fa-spinner fa-spin", "Previous version restored; restarting console…");
     setSystemOperationState(
       "Restarting Craftarr",
       "The previous version is restored. Waiting for the console service to return...",
@@ -8630,6 +8649,128 @@ function updateCheckFeedback(scope, updates, serverId) {
       : `No updates found for ${checked.length} checked plugin${checked.length === 1 ? "" : "s"}.`,
     type: "success",
   };
+}
+
+async function checkPluginUpdate(filename, button) {
+  const page = document.querySelector(".plugins-page[data-server-id]");
+  const plugin = pluginData.find((item) => item.filename === filename);
+  if (!page || !plugin || plugin.enabled !== true || plugin.previous_version === true) return;
+
+  const icon = button?.querySelector("i");
+  const label = button?.querySelector("span");
+  const originalIconClass = icon?.className;
+  const originalLabel = label?.textContent;
+  if (button) {
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+  }
+  if (icon) icon.className = "fa-solid fa-spinner fa-spin";
+  if (label) label.textContent = "Checking";
+
+  const progressToast = showToast(`Checking updates for ${plugin.name}…`, "info", 0, { persistent: true });
+  try {
+    const response = await nativeFetch(`/api/web/servers/${page.dataset.serverId}/plugins/check-update`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename }),
+    });
+    connectionFailureLatched = false;
+    if (handleAuthenticationResponse(response)) {
+      progressToast?.remove();
+      return;
+    }
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to check plugin updates.");
+    if (data.skipped) {
+      progressToast?.remove();
+      return;
+    }
+
+    const update = data.update;
+    if (update) plugin.update = update;
+    plugin.suggested_filename = update?.suggested_filename || null;
+    renderPlugins();
+    await refreshNotifications(false);
+
+    let message;
+    let type;
+    if (update?.update_available) {
+      message = update.latest_version
+        ? `Update available for ${plugin.name}: ${update.latest_version}.`
+        : `An update is available for ${plugin.name}.`;
+      type = "info";
+    } else if (update?.status === "Current") {
+      message = update.installed_version
+        ? `${plugin.name} is up to date (${update.installed_version}).`
+        : `${plugin.name} is up to date.`;
+      type = "success";
+    } else if (update?.status === "Incompatible") {
+      message = update.latest_version
+        ? `${plugin.name} has a newer version (${update.latest_version}) that may not match this Minecraft version.`
+        : `A newer version of ${plugin.name} may not match this Minecraft version.`;
+      type = "warning";
+    } else if (update?.status === "Check failed") {
+      message = `Couldn't check ${plugin.name}: ${update.error || "Try again shortly."}`;
+      type = "error";
+    } else if (update?.status === "Monitoring disabled") {
+      message = `Update checks are disabled for ${plugin.name}.`;
+      type = "info";
+    } else {
+      message = `No update source is configured for ${plugin.name}. Open Update settings to configure it.`;
+      type = "warning";
+    }
+    updateToast(progressToast, message, type, { timeout: 6500 });
+  } catch (error) {
+    updateToast(progressToast, error.message || "Unable to check plugin updates.", "error", { timeout: 6500 });
+  } finally {
+    if (icon && originalIconClass) icon.className = originalIconClass;
+    if (label && originalLabel !== undefined) label.textContent = originalLabel;
+    button?.removeAttribute("aria-busy");
+    if (button) button.disabled = false;
+  }
+}
+
+async function correctPluginFilename(filename, button) {
+  const page = document.querySelector(".plugins-page[data-server-id]");
+  const plugin = pluginData.find((item) => item.filename === filename);
+  if (!page || !plugin || plugin.enabled !== true || !plugin.suggested_filename) return;
+
+  const icon = button?.querySelector("i");
+  const label = button?.querySelector("span");
+  const originalIconClass = icon?.className;
+  const originalLabel = label?.textContent;
+  if (button) {
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+  }
+  if (icon) icon.className = "fa-solid fa-spinner fa-spin";
+  if (label) label.textContent = "Correcting";
+
+  const progressToast = showToast(`Correcting ${plugin.name}'s filename…`, "info", 0, { persistent: true });
+  try {
+    const response = await nativeFetch(`/api/web/servers/${page.dataset.serverId}/plugins/correct-filename`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename }),
+    });
+    connectionFailureLatched = false;
+    if (handleAuthenticationResponse(response)) {
+      progressToast?.remove();
+      return;
+    }
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to correct the plugin filename.");
+    await updatePluginsPage();
+    await refreshNotifications(false);
+    updateToast(progressToast, `${plugin.name} filename corrected to ${data.filename}.`, "success", { timeout: 6500 });
+  } catch (error) {
+    updateToast(progressToast, error.message || "Unable to correct the plugin filename.", "error", { timeout: 6500 });
+  } finally {
+    if (icon && originalIconClass) icon.className = originalIconClass;
+    if (label && originalLabel !== undefined) label.textContent = originalLabel;
+    button?.removeAttribute("aria-busy");
+    if (button) button.disabled = false;
+  }
 }
 
 async function checkMonitoredUpdates(button, scope) {

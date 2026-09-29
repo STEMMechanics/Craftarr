@@ -37,6 +37,8 @@ from .plugin_manager import (
     MAX_PLUGIN_BYTES,
     geyser_status,
     duplicate_plugin_groups,
+    safe_plugin_path,
+    normalize_previous_plugin_filenames,
     PluginFileExistsError,
 )
 
@@ -245,10 +247,25 @@ def plugins_data(
         )
 
 
+    if has_permission(user, "plugins.manage"):
+        normalize_previous_plugin_filenames(server)
     plugins = list_plugins(server)
     from .update_monitor import plugin_results
-    for plugin, update in zip(plugins, plugin_results(db, server, plugins)):
-        plugin["update"] = update
+    from .plugin_monitoring import monitoring_config
+    updates = {
+        update["component"]: update
+        for update in plugin_results(db, server, plugins)
+    }
+    for plugin in plugins:
+        if plugin.get("enabled") is True:
+            plugin_update = updates.get(plugin["filename"])
+            plugin["update"] = plugin_update
+            corrected_filename = (plugin_update or {}).get("suggested_filename")
+            if corrected_filename:
+                plugin["suggested_filename"] = corrected_filename
+        else:
+            _, config = monitoring_config(db, server.id, plugin["name"])
+            plugin["update"] = {"monitoring": config}
 
     return {
         "plugins": plugins,
@@ -314,15 +331,15 @@ async def update_installed_plugin(server_id: int, request: Request, db: Session 
         updated_name = result["plugin"]["name"]
         updated_version = result["plugin"].get("version")
         message = f"Updated {updated_name}{f' to {updated_version}' if updated_version else ''} on the server."
-        if result["rollback_filename"]:
-            message += " The previous JAR is disabled and available for rollback."
+        if result["previous_filename"]:
+            message += " The existing JAR was kept disabled. You can choose which version is enabled from the Plugins menu."
         if action_requires_restart:
             message += " Restart the server to load the update."
         return {
             "success": True,
             "message": message,
             "plugin": result["plugin"],
-            "rollback_filename": result["rollback_filename"],
+            "previous_filename": result["previous_filename"],
             "restart_required": restart_required,
             "action_requires_restart": action_requires_restart,
             "duplicates": duplicate_plugin_groups(list_plugins(server)),
@@ -332,6 +349,76 @@ async def update_installed_plugin(server_id: int, request: Request, db: Session 
     except Exception:
         logger.exception("Plugin update installation failed for server %s", server.id)
         return JSONResponse({"error": "The plugin update could not be installed"}, status_code=500)
+
+
+@router.post("/api/web/servers/{server_id}/plugins/correct-filename")
+async def correct_plugin_filename(server_id: int, request: Request, db: Session = Depends(get_db)):
+    from .models import UpdateMonitorLease
+    from .update_monitor import acquire_lease, CheckInProgress, plugin_results
+
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not server or not has_permission(user, "plugins.manage"):
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+    try:
+        data = await request.json()
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "Invalid filename correction request"}, status_code=400)
+    filename = data.get("filename") if isinstance(data, dict) else None
+    if not isinstance(filename, str) or not filename:
+        return JSONResponse({"error": "Select a valid plugin"}, status_code=400)
+
+    installed = next((plugin for plugin in list_plugins(server) if plugin["filename"] == filename), None)
+    if not installed or installed.get("enabled") is not True:
+        return JSONResponse({"error": "Enabled plugin file changed or no longer exists"}, status_code=409)
+    current_path = safe_plugin_path(server, filename)
+
+    try:
+        acquire_lease(db, datetime.utcnow())
+    except CheckInProgress as error:
+        return JSONResponse({"error": str(error)}, status_code=409)
+
+    target_path = None
+    try:
+        from .paper import inspect_paper_jar
+        try:
+            server.minecraft_version = inspect_paper_jar(Path(server.directory) / server.jar_name)["version"]
+        except (OSError, ValueError, RuntimeError):
+            pass
+        update = next(
+            (item for item in plugin_results(db, server, [installed])
+             if item.get("component") == filename),
+            None,
+        )
+        corrected_filename = (update or {}).get("suggested_filename")
+        if not corrected_filename:
+            return JSONResponse({"error": "The plugin filename already matches its detected build"}, status_code=409)
+        target_path = safe_plugin_path(server, corrected_filename)
+        if target_path.exists():
+            return JSONResponse({"error": "A plugin JAR with the corrected filename already exists"}, status_code=409)
+
+        current_path.rename(target_path)
+        row = db.get(ServerUpdateCheck, (server.id, filename))
+        if row:
+            db.delete(row)
+        db.commit()
+        return {"success": True, "filename": corrected_filename}
+    except (ValueError, FileNotFoundError, OSError) as error:
+        db.rollback()
+        if target_path and target_path.exists() and not current_path.exists():
+            target_path.rename(current_path)
+        return JSONResponse({"error": str(error)}, status_code=409)
+    except Exception:
+        db.rollback()
+        if target_path and target_path.exists() and not current_path.exists():
+            target_path.rename(current_path)
+        logger.exception("Plugin filename correction failed for %s on server %s", filename, server.id)
+        return JSONResponse({"error": "The plugin filename could not be corrected"}, status_code=500)
+    finally:
+        db.rollback()
+        db.query(UpdateMonitorLease).filter_by(id=1).update({"expires_at": datetime.min})
+        db.commit()
 
 
 @router.post("/api/web/servers/{server_id}/plugins/duplicates/resolve")
@@ -504,11 +591,12 @@ def check_plugin_updates(
 
     job_id = uuid.uuid4().hex
     now = datetime.utcnow().isoformat()
+    plugins = list_plugins(server)
     progress = {
         "job_id": job_id,
         "status": "running",
         "completed": 0,
-        "total": len(list_plugins(server)),
+        "total": sum(plugin.get("enabled") is True for plugin in plugins),
         "current_plugin": None,
         "started_at": now,
         "updated_at": now,
@@ -524,6 +612,65 @@ def check_plugin_updates(
         return JSONResponse({"error": "A plugin update check is already running."}, status_code=409)
     background_tasks.add_task(_run_plugin_update_check, server.id, job_id)
     return {"job_id": job_id, "progress": progress}
+
+
+@router.post("/api/web/servers/{server_id}/plugins/check-update")
+async def check_single_plugin_update(server_id: int, request: Request, db: Session = Depends(get_db)):
+    from .models import UpdateMonitorLease
+    from .update_monitor import acquire_lease, CheckInProgress, plugin_results
+
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not server or not has_permission(user, "plugins.manage"):
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+    try:
+        data = await request.json()
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "Invalid update check request"}, status_code=400)
+    filename = data.get("filename") if isinstance(data, dict) else None
+    if not isinstance(filename, str) or not filename:
+        return JSONResponse({"error": "Select a valid plugin"}, status_code=400)
+
+    installed = next((plugin for plugin in list_plugins(server) if plugin["filename"] == filename), None)
+    if not installed:
+        return JSONResponse({"error": "Plugin file changed or no longer exists"}, status_code=409)
+    if installed.get("enabled") is not True:
+        return {"skipped": True}
+
+    try:
+        acquire_lease(db, datetime.utcnow())
+    except CheckInProgress as error:
+        return JSONResponse({"error": str(error)}, status_code=409)
+
+    try:
+        from .paper import inspect_paper_jar
+        try:
+            server.minecraft_version = inspect_paper_jar(Path(server.directory) / server.jar_name)["version"]
+        except (OSError, ValueError, RuntimeError):
+            pass
+        result = next(
+            (item for item in plugin_results(db, server, [installed], fetch=True, force=True)
+             if item.get("component") == filename),
+            None,
+        )
+        if result is None:
+            return JSONResponse({"error": "Unable to check plugin updates. Try again."}, status_code=500)
+        row = db.get(ServerUpdateCheck, (server.id, filename))
+        if row is None:
+            row = ServerUpdateCheck(server_id=server.id, component=filename)
+            db.add(row)
+        row.payload = json.dumps(result)
+        db.commit()
+        return {"update": result}
+    except Exception:
+        db.rollback()
+        logger.exception("Plugin update check failed for %s on server %s", filename, server.id)
+        return JSONResponse({"error": "Unable to check plugin updates. Try again."}, status_code=500)
+    finally:
+        db.rollback()
+        db.query(UpdateMonitorLease).filter_by(id=1).update({"expires_at": datetime.min})
+        db.commit()
 
 
 @router.get("/api/web/servers/{server_id}/plugins/update-progress")

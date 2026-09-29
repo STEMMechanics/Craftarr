@@ -114,6 +114,29 @@ def _filename_plugin_version(
     return match.group(1) if match else None
 
 
+_PLUGIN_BUILD_FILENAME = re.compile(
+    r"(?i)(?:\(build\s+|[- ]build[ .-]*|[-+]b|-SNAPSHOT[-+]b?)(?P<build>\d+)(?:\)?(?:\+[a-z0-9]+)?)(?=\.jar$)"
+)
+
+
+def filename_for_plugin_build(filename: str, build: str) -> str | None:
+    """Return a versioned JAR filename with its detected build number corrected."""
+    build = str(build or "")
+    if Path(filename).name != filename or not re.fullmatch(r"\d+", build):
+        return None
+    disabled = filename.endswith(".jar.disabled")
+    display_filename = filename[:-9] if disabled else filename
+    match = _PLUGIN_BUILD_FILENAME.search(display_filename)
+    if not match or match.group("build") == build:
+        return None
+    corrected = (
+        display_filename[:match.start("build")]
+        + build
+        + display_filename[match.end("build"):]
+    )
+    return corrected + (".disabled" if disabled else "")
+
+
 def plugin_info(
     path: Path,
 ) -> dict:
@@ -189,7 +212,7 @@ def plugin_info(
     return {
         "filename": filename,
 
-        "rollback_copy": bool(re.search(r"\.rollback-[0-9a-f]{12}\.jar\.disabled$", filename, re.IGNORECASE)),
+        "previous_version": bool(re.search(r"\.(?:previous|rollback)-[0-9a-f]{12}\.jar\.disabled$", filename, re.IGNORECASE)),
 
         "name":
             name
@@ -447,6 +470,26 @@ def safe_plugin_path(
     return path
 
 
+def normalize_previous_plugin_filenames(server) -> None:
+    """Rename legacy disabled rollback JARs to neutral previous-version names."""
+    directory = plugins_directory(server)
+    if not directory.is_dir():
+        return
+    legacy_name = re.compile(r"^(?P<stem>.+)\.rollback-(?P<token>[0-9a-f]{12})\.jar\.disabled$", re.IGNORECASE)
+    for path in directory.iterdir():
+        match = legacy_name.fullmatch(path.name)
+        if not match or not path.is_file():
+            continue
+        token = match.group("token")
+        target = directory / f"{match.group('stem')}.previous-{token}.jar.disabled"
+        while target.exists():
+            target = directory / f"{match.group('stem')}.previous-{uuid.uuid4().hex[:12]}.jar.disabled"
+        try:
+            path.rename(target)
+        except OSError:
+            continue
+
+
 def install_plugin_update(server, filename: str, url: str, *, keep_previous: bool = True, expected_name: str | None = None, expected_version: str | None = None, provider_name: str | None = None) -> dict:
     """Install a monitored release on the server, optionally retaining the old JAR disabled."""
     if Path(filename).name != filename or not filename.lower().endswith((".jar", ".jar.disabled")):
@@ -467,7 +510,7 @@ def install_plugin_update(server, filename: str, url: str, *, keep_previous: boo
     opener = urllib.request.build_opener(_SafeRedirectHandler())
     request = urllib.request.Request(url, headers={"User-Agent": "Craftarr-Console"})
     temporary_path = None
-    rollback_path = None
+    previous_path = None
     replaced_path = None
     moved_current = False
     try:
@@ -501,20 +544,9 @@ def install_plugin_update(server, filename: str, url: str, *, keep_previous: boo
         if expected_version:
             version_token = re.sub(r"[^A-Za-z0-9.+_-]", "", expected_version).strip(".-_")
             current_version = _filename_plugin_version(filename.removesuffix(".disabled"), expected_name)
-            if provider_name and provider_name.casefold() == "jenkins" and re.fullmatch(r"\d+", version_token):
-                display_filename = filename.removesuffix(".disabled")
-                build_match = re.search(
-                    r"(?i)(?:\(build\s+|[- ]build[ .-]*|-b|-SNAPSHOT-)(?P<build>\d+)(?:\)?(?:\+[a-z0-9]+)?)(?=\.jar$)",
-                    display_filename,
-                )
-                if build_match:
-                    target_filename = (
-                        display_filename[:build_match.start("build")]
-                        + version_token
-                        + display_filename[build_match.end("build"):]
-                    )
-                    if not current["enabled"]:
-                        target_filename += ".disabled"
+            corrected_build_filename = filename_for_plugin_build(filename, version_token)
+            if corrected_build_filename:
+                target_filename = corrected_build_filename
             elif (
                 not updated_metadata.get("version")
                 and re.fullmatch(r"v?\d[A-Za-z0-9.+_-]*", version_token, re.IGNORECASE)
@@ -532,7 +564,7 @@ def install_plugin_update(server, filename: str, url: str, *, keep_previous: boo
         updated_plugin = plugin_info(temporary_path)
         updated_plugin["filename"] = target_filename
         updated_plugin["enabled"] = current["enabled"]
-        updated_plugin["rollback_copy"] = False
+        updated_plugin["previous_version"] = False
         if not updated_metadata.get("version"):
             filename_version = _filename_plugin_version(target_filename.removesuffix(".disabled"), expected_name)
             updated_plugin["version"] = filename_version
@@ -541,10 +573,10 @@ def install_plugin_update(server, filename: str, url: str, *, keep_previous: boo
         if keep_previous:
             base_name = filename[:-9] if filename.endswith(".jar.disabled") else filename
             stem = base_name[:-4]
-            while rollback_path is None or rollback_path.exists():
-                rollback_name = f"{stem}.rollback-{uuid.uuid4().hex[:12]}.jar.disabled"
-                rollback_path = safe_plugin_path(server, rollback_name)
-            os.replace(current_path, rollback_path)
+            while previous_path is None or previous_path.exists():
+                previous_name = f"{stem}.previous-{uuid.uuid4().hex[:12]}.jar.disabled"
+                previous_path = safe_plugin_path(server, previous_name)
+            os.replace(current_path, previous_path)
             moved_current = True
         elif target_path != current_path:
             while replaced_path is None or replaced_path.exists():
@@ -559,15 +591,15 @@ def install_plugin_update(server, filename: str, url: str, *, keep_previous: boo
             moved_current = False
         return {
             "plugin": updated_plugin,
-            "rollback_filename": rollback_path.name if keep_previous else None,
+            "previous_filename": previous_path.name if keep_previous else None,
         }
     except Exception:
         if moved_current:
             if target_path.exists():
                 target_path.unlink(missing_ok=True)
-            previous_path = rollback_path if keep_previous else replaced_path
-            if previous_path and previous_path.exists() and not current_path.exists():
-                os.replace(previous_path, current_path)
+            retained_path = previous_path if keep_previous else replaced_path
+            if retained_path and retained_path.exists() and not current_path.exists():
+                os.replace(retained_path, current_path)
         raise
     finally:
         if temporary_path:

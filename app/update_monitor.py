@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from . import update_providers as providers
 from .models import (Server, UpstreamUpdateCache, ServerUpdateCheck,
                      UpdateNotification, UpdateMonitorLease, User)
-from .plugin_manager import list_plugins
+from .plugin_manager import filename_for_plugin_build, list_plugins
 from .plugin_monitoring import monitoring_config
 from .update_providers.http_source import SourceError
 from .paper import inspect_paper_jar
@@ -116,6 +116,12 @@ def compare_release(name, installed, provider, cache, minecraft_version, filenam
             result.pop('comparison_details', None)
             result.update(update_available=True, status='Compatibility unknown' if compatible == 'Unknown' else 'Update available')
         else:
+            if comparison_details:
+                suggested_filename = filename_for_plugin_build(
+                    filename or '', comparison_details.get('installed_comparison', ''),
+                )
+                if suggested_filename:
+                    result['suggested_filename'] = suggested_filename
             result.pop('comparison_details', None)
             result['status'] = 'Current'
     except SourceError as exc:
@@ -130,14 +136,18 @@ def compare_release(name, installed, provider, cache, minecraft_version, filenam
 def plugin_results(db, server, plugins=None, *, fetch=False, force=False, now=None, seen=None, on_progress=None):
     now = now or datetime.utcnow()
     results = []
-    plugins = list(plugins if plugins is not None else list_plugins(server))
+    plugins = [
+        plugin
+        for plugin in (plugins if plugins is not None else list_plugins(server))
+        if plugin.get('enabled') is True
+    ]
     total = len(plugins)
     for index, plugin in enumerate(plugins, start=1):
         if on_progress:
             on_progress(index - 1, total, plugin['name'])
-        if plugin.get('rollback_copy'):
+        if plugin.get('previous_version'):
             result = base_result(plugin['name'], plugin.get('version'))
-            result.update(status='Rollback copy', component=plugin['filename'], notification_key=plugin['name'])
+            result.update(status='Previous version', component=plugin['filename'], notification_key=plugin['name'])
             results.append(result)
             if on_progress:
                 on_progress(index, total, None)

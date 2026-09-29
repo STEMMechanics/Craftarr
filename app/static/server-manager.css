@@ -749,11 +749,11 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .plugin-update-confirm-list li strong { min-width: 0; color: var(--sm-text); overflow-wrap: anywhere; }
 .plugin-update-confirm-list li span { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; color: #526a80; font-size: 11px; }
 .plugin-update-confirm-list li i { color: var(--sm-blue-dark); font-size: 10px; }
-.plugin-update-rollback-option { display: flex; align-items: flex-start; gap: 10px; margin: 14px 0 12px; padding: 12px; border: 1px solid #c9ddf0; border-radius: 12px; background: #f3f8fd; color: var(--sm-text); cursor: pointer; }
-.plugin-update-rollback-option > input { width: 17px; height: 17px; flex: 0 0 17px; margin: 2px 0 0; accent-color: var(--sm-blue-dark); }
-.plugin-update-rollback-option > span { display: grid; gap: 3px; }
-.plugin-update-rollback-option strong { font-size: 12px; }
-.plugin-update-rollback-option small { color: var(--sm-muted); font-size: 11px; line-height: 1.45; }
+.plugin-update-previous-option { display: flex; align-items: flex-start; gap: 10px; margin: 14px 0 12px; padding: 12px; border: 1px solid #c9ddf0; border-radius: 12px; background: #f3f8fd; color: var(--sm-text); cursor: pointer; }
+.plugin-update-previous-option > input { width: 17px; height: 17px; flex: 0 0 17px; margin: 2px 0 0; accent-color: var(--sm-blue-dark); }
+.plugin-update-previous-option > span { display: grid; gap: 3px; }
+.plugin-update-previous-option strong { font-size: 12px; }
+.plugin-update-previous-option small { color: var(--sm-muted); font-size: 11px; line-height: 1.45; }
 .plugin-update-modal-card .modal-actions { margin-top: 17px; }
 .backup-row { display: grid !important; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 14px !important; padding: 14px 12px !important; border-top: 1px solid #e9eff5; }
 .backup-main { display: flex; min-width: 0; align-items: center; gap: 12px; }
