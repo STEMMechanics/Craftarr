@@ -144,18 +144,19 @@ def _systemd_status(config: ServerProcessConfig) -> dict:
     except ValueError:
         pid = None
     active_states = {"active", "activating", "deactivating"}
+    running = active in active_states
+    console_available = running and _systemd_console_available(config)
     if active == "activating":
         state = "starting"
     elif active == "deactivating":
         state = "stopping"
     elif active == "active":
-        state = _read_systemd_lifecycle_state(config, pid) or "running"
+        lifecycle_state = _read_systemd_lifecycle_state(config, pid)
+        state = lifecycle_state or ("running" if console_available else "starting")
     elif active in {"inactive", "failed"}:
         state = "stopped"
     else:
         state = "unknown"
-    running = active in active_states
-    console_available = running and _systemd_console_available(config)
     enabled_result = _systemctl(config, "is-enabled", check=False)
     enabled = enabled_result.returncode == 0
     return {

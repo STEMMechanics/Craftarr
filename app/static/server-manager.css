@@ -506,7 +506,7 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .player-readonly-state { display: flex; min-width: 0; flex-direction: column; align-items: flex-end; gap: 5px; }
 .player-state-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .player-state-badge { display: inline-flex; min-height: 30px; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid #dfe8ef; border-radius: 10px; background: #f6f9fb; color: #5e7182; font-size: 11px; font-weight: 700; }
-.player-state-badge.is-allowed { border-color: #d1e7d8; background: #f2faf4; color: #317049; }
+.player-state-badge.is-whitelisted { border-color: #d1e7d8; background: #f2faf4; color: #317049; }
 .player-state-badge.is-admin { border-color: #d6e1f2; background: #f3f7fd; color: #43669a; }
 .player-state-badge.is-blocked { border-color: #edd9d6; background: #fcf5f4; color: #99554e; }
 .player-actions-hint { color: #75889a; font-size: 10px; }

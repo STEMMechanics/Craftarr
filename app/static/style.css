@@ -1007,8 +1007,33 @@ button.restart:hover {
   margin-bottom: 14px;
 }
 
+.player-list-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.player-sort-control {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.player-sort-control select {
+  min-height: 38px;
+  padding: 7px 30px 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: white;
+  color: var(--text);
+  font: inherit;
+}
+
 .player-filters {
   display: flex;
+  flex-wrap: wrap;
   gap: 7px;
 }
 
@@ -1041,14 +1066,15 @@ button.restart:hover {
 
 .player-add-row {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
 
   gap: 8px;
-
-  margin-bottom: 14px;
 }
 
 .player-add-row input {
-  width: 330px;
+  flex: 1 1 220px;
+  min-width: 180px;
 }
 
 /* PLAYER LIST */
@@ -1185,6 +1211,16 @@ button.restart:hover {
   .players-tools {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .player-list-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .player-sort-control select {
+    flex: 1;
+    min-width: 0;
   }
 
   .player-search {
@@ -3693,7 +3729,8 @@ input[type="checkbox"] {
   .settings-content,
   .property-grid,
   .paper-management-body,
-  .player-management-body {
+  .player-management-body,
+  .player-add-body {
     padding: 16px 14px;
   }
 
@@ -3712,6 +3749,12 @@ input[type="checkbox"] {
 
   .ip-ban-entry {
     grid-template-columns: 1fr;
+  }
+
+  .player-add-row input {
+    flex: 0 0 auto;
+    width: 100%;
+    min-width: 0;
   }
 
   .ip-ban-entry-actions .button {
@@ -4512,6 +4555,7 @@ input[type="checkbox"] {
 
 /* Player management */
 .player-management-card,
+.player-add-card,
 .ip-bans-card {
   margin-top: 16px;
   padding-bottom: 0;
@@ -4523,12 +4567,15 @@ input[type="checkbox"] {
 
 .player-management-header > div span,
 .player-management-header > div small,
+.player-add-card .card-header > div span,
+.player-add-card .card-header > div small,
 .whitelist-control strong,
 .whitelist-control small {
   display: block;
 }
 
 .player-management-header > div small,
+.player-add-card .card-header > div small,
 .whitelist-control small {
   margin-top: 4px;
   color: var(--muted);
@@ -4549,6 +4596,10 @@ input[type="checkbox"] {
 
 .player-management-body {
   padding: 20px;
+}
+
+.player-add-body {
+  padding: 18px 20px;
 }
 
 .player-list {

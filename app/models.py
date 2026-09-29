@@ -226,6 +226,11 @@ class Server(Base):
         default=False,
     )
 
+    plugin_session_pid = Column(
+        Integer,
+        nullable=True,
+    )
+
     users = relationship(
         "User",
         secondary=user_server_access,

@@ -67,6 +67,12 @@ from .server_archives import (
 router = APIRouter()
 
 
+def _record_plugin_session_start(db, server, pid) -> None:
+    server.plugins_dirty = False
+    server.plugin_session_pid = pid
+    db.commit()
+
+
 def server_name_slug(name: str) -> str:
     slug = re.sub(r"[^a-z0-9-]+", "-", name.casefold().replace(" ", "-"))
     slug = re.sub(r"-+", "-", slug).strip("-")[:100]
@@ -511,7 +517,7 @@ async def rename_server_api(
                 pass
         if was_running and not server_status(server.id).get("running"):
             try:
-                start_server(
+                pid = start_server(
                     server.id,
                     server.directory,
                     server.memory,
@@ -520,6 +526,7 @@ async def rename_server_api(
                     server.min_memory,
                     server.java_path,
                 )
+                _record_plugin_session_start(db, server, pid)
             except Exception:
                 pass
         return JSONResponse({"error": f"Unable to rename server: {error}"}, status_code=400)
@@ -527,7 +534,7 @@ async def rename_server_api(
     restart_warning = None
     if was_running:
         try:
-            start_server(
+            pid = start_server(
                 server.id,
                 server.directory,
                 server.memory,
@@ -536,6 +543,7 @@ async def rename_server_api(
                 server.min_memory,
                 server.java_path,
             )
+            _record_plugin_session_start(db, server, pid)
         except Exception as error:
             restart_warning = (
                 f"Server renamed, but it could not be restarted automatically: {error}"
@@ -733,7 +741,7 @@ async def save_properties_api(
         changes_committed = True
 
         if stopped_for_save:
-            start_server(
+            pid = start_server(
                 server.id,
                 server.directory,
                 server.memory,
@@ -742,6 +750,7 @@ async def save_properties_api(
                 server.min_memory,
                 server.java_path,
             )
+            _record_plugin_session_start(db, server, pid)
 
     except Exception as error:
 
@@ -754,7 +763,7 @@ async def save_properties_api(
 
         if stopped_for_save and not changes_committed:
             try:
-                start_server(
+                pid = start_server(
                     server.id,
                     server.directory,
                     server.memory,
@@ -763,6 +772,7 @@ async def save_properties_api(
                     server.min_memory,
                     server.java_path,
                 )
+                _record_plugin_session_start(db, server, pid)
             except Exception:
                 pass
 

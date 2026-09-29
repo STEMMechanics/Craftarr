@@ -1,7 +1,7 @@
 <div class="players-page" data-server-id="{{ server.id }}" data-can-manage="{{ 'true' if user.can('players.manage') else 'false' }}" data-page-title="Players">
   <div class="player-summary-grid">
     <div class="overview-card summary-card"><span class="card-label">Online now</span><div id="players-online-count" class="summary-value success-text">-</div></div>
-    <div class="overview-card summary-card"><span class="card-label">Allowed players</span><div id="players-whitelist-count" class="summary-value">-</div></div>
+    <div class="overview-card summary-card"><span class="card-label">Whitelisted players</span><div id="players-whitelist-count" class="summary-value">-</div></div>
     <div class="overview-card summary-card"><span class="card-label">Server admins</span><div id="players-op-count" class="summary-value accent">-</div></div>
     <div class="overview-card summary-card"><span class="card-label">Blocked players</span><div id="players-ban-count" class="summary-value danger-text">-</div></div>
   </div>
@@ -20,19 +20,24 @@
         <div class="player-filters">
           <button class="button player-filter active" data-filter="all">All <span id="filter-all-count">0</span></button>
           <button class="button player-filter" data-filter="online">Online <span id="filter-online-count">0</span></button>
-          <button class="button player-filter" data-filter="whitelisted">Allowed <span id="filter-whitelist-count">0</span></button>
+          <button class="button player-filter" data-filter="whitelisted">Whitelisted <span id="filter-whitelist-count">0</span></button>
           <button class="button player-filter" data-filter="operator">Server admins <span id="filter-op-count">0</span></button>
           <button class="button player-filter" data-filter="banned">Blocked <span id="filter-ban-count">0</span></button>
         </div>
-        <input id="player-search" class="player-search" type="search" placeholder="Search players...">
+        <div class="player-list-controls">
+          <label class="player-sort-control" for="player-sort">
+            <span>Sort</span>
+            <select id="player-sort">
+              <option value="name-asc">Name (A–Z)</option>
+              <option value="name-desc">Name (Z–A)</option>
+              <option value="last-online-desc">Last online (newest)</option>
+              <option value="last-online-asc">Last online (oldest)</option>
+              <option value="online-first">Online first</option>
+            </select>
+          </label>
+          <input id="player-search" class="player-search" type="search" placeholder="Search players...">
+        </div>
       </div>
-
-      {% if user.can("players.manage") %}<div class="player-add-row">
-        <input id="player-add-name" type="text" placeholder="Player name" maxlength="16">
-        <button class="button" onclick="addPlayerAction('whitelist')">Allow to join</button>
-        <button class="button secondary" onclick="addPlayerAction('op')">Make server admin</button>
-        <button class="button danger" onclick="addPlayerAction('ban')">Block player</button>
-      </div>{% endif %}
 
       <div id="player-list" class="player-list"><div class="empty-message">Loading players...</div></div>
       <nav id="player-pagination" class="player-pagination" hidden aria-label="Player list pages">
@@ -42,6 +47,20 @@
       </nav>
     </div>
   </section>
+
+  {% if user.can("players.manage") %}<section class="overview-card player-add-card">
+    <div class="card-header">
+      <div><span>Player actions</span><small>Add a player to the whitelist, make them a server admin, or block them.</small></div>
+    </div>
+    <div class="player-add-body">
+      <div class="player-add-row">
+        <input id="player-add-name" type="text" placeholder="Player name" aria-label="Player name" maxlength="16">
+        <button class="button" onclick="addPlayerAction('whitelist')">Whitelist</button>
+        <button class="button secondary" onclick="addPlayerAction('op')">Make server admin</button>
+        <button class="button danger" onclick="addPlayerAction('ban')">Block player</button>
+      </div>
+    </div>
+  </section>{% endif %}
 
   <section class="overview-card ip-bans-card">
     <div class="card-header">
