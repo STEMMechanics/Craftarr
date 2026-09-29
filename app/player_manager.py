@@ -99,8 +99,8 @@ def read_properties(
     return properties
 
 
-def _read_nbt_last_played(data: bytes) -> int | None:
-    """Read the LastPlayed long from a compressed or raw player NBT file."""
+def _read_nbt_player_metadata(data: bytes) -> tuple[int | None, str | None]:
+    """Read LastPlayed and Bukkit's lastKnownName from a player NBT file."""
     try:
         with gzip.GzipFile(fileobj=io.BytesIO(data)) as compressed:
             payload = compressed.read(MAX_PLAYER_NBT_BYTES + 1)
@@ -119,6 +119,7 @@ def _read_nbt_last_played(data: bytes) -> int | None:
 
     offset = 0
     last_played = None
+    last_known_name = None
 
     def read(size: int) -> bytes:
         nonlocal offset
@@ -139,7 +140,7 @@ def _read_nbt_last_played(data: bytes) -> int | None:
         return read(length).decode("utf-8", errors="replace")
 
     def read_payload(tag_type: int, name: str | None = None, depth: int = 0):
-        nonlocal last_played
+        nonlocal last_played, last_known_name
         if depth > 64:
             raise ValueError("Player NBT nesting is too deep")
 
@@ -161,7 +162,9 @@ def _read_nbt_last_played(data: bytes) -> int | None:
             length = read_int()
             read(length)
         elif tag_type == 8:
-            read_string()
+            value = read_string()
+            if name == "lastKnownName":
+                last_known_name = value
         elif tag_type == 9:
             element_type = read_unsigned_byte()
             length = read_int()
@@ -188,23 +191,78 @@ def _read_nbt_last_played(data: bytes) -> int | None:
     try:
         root_type = read_unsigned_byte()
         if root_type != 10:
-            return None
+            return None, None
         read_string()  # Root compound name.
         read_payload(root_type)
     except (ValueError, IndexError, struct.error):
-        return None
+        return None, None
 
-    return last_played
+    return last_played, last_known_name
 
 
 @lru_cache(maxsize=8192)
-def _cached_nbt_last_played(path: str, modified_ns: int, size: int) -> int | None:
+def _cached_nbt_player_metadata(
+    path: str,
+    modified_ns: int,
+    size: int,
+) -> tuple[int | None, str | None]:
     if size > MAX_PLAYER_NBT_BYTES:
-        return None
+        return None, None
     try:
-        return _read_nbt_last_played(Path(path).read_bytes())
+        return _read_nbt_player_metadata(Path(path).read_bytes())
     except OSError:
-        return None
+        return None, None
+
+
+def player_data_profiles(player_data_directory: Path | None) -> dict:
+    """Map Bukkit last-known names to their most recently saved UUID file."""
+    if player_data_directory is None:
+        return {}
+
+    profiles = {}
+    try:
+        resolved_directory = player_data_directory.resolve()
+        for path in player_data_directory.iterdir():
+            if path.suffix.lower() != ".dat":
+                continue
+            try:
+                player_uuid = str(UUID(path.stem))
+                resolved_path = path.resolve()
+                if (
+                    not resolved_path.is_relative_to(resolved_directory)
+                    or not resolved_path.is_file()
+                ):
+                    continue
+                stat = resolved_path.stat()
+                last_played, last_known_name = _cached_nbt_player_metadata(
+                    str(resolved_path),
+                    stat.st_mtime_ns,
+                    stat.st_size,
+                )
+            except (OSError, RuntimeError, ValueError):
+                continue
+
+            if not last_known_name or not last_known_name.strip():
+                continue
+
+            key = last_known_name.casefold()
+            candidate = {
+                "name": last_known_name,
+                "uuid": player_uuid,
+                "modified": stat.st_mtime,
+                "last_played": last_played or 0,
+            }
+            current = profiles.get(key)
+            if current is None or (
+                candidate["modified"], candidate["last_played"]
+            ) > (
+                current["modified"], current["last_played"]
+            ):
+                profiles[key] = candidate
+    except (OSError, RuntimeError, ValueError):
+        return profiles
+
+    return profiles
 
 
 def player_data_last_online(player_data_directory: Path | None, player_uuid):
@@ -229,7 +287,7 @@ def player_data_last_online(player_data_directory: Path | None, player_uuid):
                 resolved = path.resolve()
                 if resolved.is_relative_to(player_data_directory) and resolved.is_file():
                     stat = resolved.stat()
-                    last_played = _cached_nbt_last_played(
+                    last_played, _ = _cached_nbt_player_metadata(
                         str(resolved),
                         stat.st_mtime_ns,
                         stat.st_size,
@@ -429,6 +487,7 @@ def get_player_data(
         [],
     )
 
+    saved_profiles = player_data_profiles(player_data_directory)
 
     whitelist = {
         item.get("name", "").casefold():
@@ -476,6 +535,7 @@ def get_player_data(
     names.update(operators)
     names.update(banned)
     names.update(online)
+    names.update(saved_profiles)
 
 
     players = []
@@ -508,17 +568,24 @@ def get_player_data(
             )
         )
 
+        saved_profile = saved_profiles.get(
+            key,
+            {}
+        )
+
         name = (
             online.get(key)
             or cached.get("name")
             or whitelist_entry.get("name")
             or op_entry.get("name")
             or banned_entry.get("name")
+            or saved_profile.get("name")
             or key
         )
 
         uuid = (
-            cached.get("uuid")
+            saved_profile.get("uuid")
+            or cached.get("uuid")
             or whitelist_entry.get("uuid")
             or op_entry.get("uuid")
             or banned_entry.get("uuid")
