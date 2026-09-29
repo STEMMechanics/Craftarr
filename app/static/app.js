@@ -3094,6 +3094,35 @@ function setText(
   }
 }
 
+function formatLastOnlineDate(date) {
+  const differenceMs = date.getTime() - Date.now();
+  const absoluteDifferenceMs = Math.abs(differenceMs);
+  const absoluteDate = new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+
+  if (absoluteDifferenceMs > 30 * 24 * 60 * 60 * 1000) {
+    return absoluteDate;
+  }
+  if (absoluteDifferenceMs < 60 * 1000) {
+    return "just now";
+  }
+
+  const units = [
+    {name: "day", milliseconds: 24 * 60 * 60 * 1000},
+    {name: "hour", milliseconds: 60 * 60 * 1000},
+    {name: "minute", milliseconds: 60 * 1000},
+  ];
+  const unit = units.find((candidate) => absoluteDifferenceMs >= candidate.milliseconds);
+  const relativeDate = new Intl.RelativeTimeFormat(undefined, {numeric: "auto"});
+
+  return relativeDate.format(
+    Math.round(differenceMs / unit.milliseconds),
+    unit.name,
+  );
+}
+
 function renderPlayerList() {
   const list = document.getElementById(
     "player-list",
@@ -3207,14 +3236,13 @@ function renderPlayerList() {
         ? `https://mc-heads.net/avatar/${encodeURIComponent(player.uuid)}/40`
         : "";
       const lastOnlineDate = player.last_online ? new Date(player.last_online) : null;
-      const lastOnlineLabel = lastOnlineDate && !Number.isNaN(lastOnlineDate.getTime())
-        ? `Last online ${new Intl.DateTimeFormat(undefined, {dateStyle: "medium", timeStyle: "short"}).format(lastOnlineDate)}${player.last_online_estimated ? " (estimated)" : ""}`
+      const hasLastOnlineDate = lastOnlineDate && !Number.isNaN(lastOnlineDate.getTime());
+      const lastOnlineLabel = hasLastOnlineDate
+        ? `Last online ${formatLastOnlineDate(lastOnlineDate)}`
         : "Last online unknown";
-      const lastOnlineTitle = !player.last_online
+      const lastOnlineTitle = !hasLastOnlineDate
         ? "No saved player data was found"
-        : player.last_online_estimated
-        ? "Estimated from the last saved player data"
-        : "Read from Minecraft player data";
+        : `Last online ${new Intl.DateTimeFormat(undefined, {dateStyle: "medium", timeStyle: "short"}).format(lastOnlineDate)}`;
       const canManagePlayers = document.querySelector(".players-page")?.dataset.canManage === "true";
       const statusBadges = [
         player.whitelisted ? '<span class="player-state-badge is-whitelisted"><i class="fa-solid fa-check" aria-hidden="true"></i>Whitelisted</span>' : "",
