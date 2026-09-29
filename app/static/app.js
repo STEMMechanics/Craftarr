@@ -3145,16 +3145,18 @@ function renderPlayerList() {
   )
     .trim()
     .toLowerCase();
+  const normalizedSearch = search.replace(/-/g, "");
 
   let players = playerData.players.filter(
     (player) => {
-      if (
-        search &&
-        !player.name
-          .toLowerCase()
-          .includes(search)
-      ) {
-        return false;
+      if (search) {
+        const playerName = String(player.name || "").toLowerCase();
+        const playerUuid = String(player.uuid || "").toLowerCase();
+        const uuidMatches = playerUuid.includes(search)
+          || (normalizedSearch && playerUuid.replace(/-/g, "").includes(normalizedSearch));
+        if (!playerName.includes(search) && !uuidMatches) {
+          return false;
+        }
       }
 
       switch (
@@ -3281,9 +3283,10 @@ function renderPlayerList() {
                                 <strong>
                                     ${escapeHtml(player.name)}
                                 </strong>
+                                ${player.uuid ? `<small class="player-uuid">UUID: ${escapeHtml(player.uuid)}</small>` : ""}
 
                                 <small>
-                                    ${player.online ? "Online" : `<span title="${escapeHtml(lastOnlineTitle)}">Offline · ${escapeHtml(lastOnlineLabel)}</span>`}
+                                    ${player.online ? "Online" : `Offline · <span class="player-last-online" title="${escapeHtml(lastOnlineTitle)}">${escapeHtml(lastOnlineLabel)}</span>`}
                                 </small>
 
                             </div>
