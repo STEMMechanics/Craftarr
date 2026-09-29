@@ -7,22 +7,27 @@
     <section class="page-header">
         <div>
             <h1>My account</h1>
-            <p>Change your name or password.</p>
+            <p>Manage your username, email address, and password.</p>
         </div>
     </section>
 
     <section class="overview-card settings-section">
         <div class="card-header"><i class="fa-solid fa-user" aria-hidden="true"></i> Account details</div>
-        <form class="settings-content account-form" method="post" action="/profile">
+        <form class="settings-content account-form" onsubmit="saveOwnProfile(event)">
             <label class="property-field">
                 <span>Username</span>
-                <input name="username" value="{{ user.username }}" required>
+                <input id="settings-profile-username" type="text" value="{{ user.username }}" required>
+            </label>
+            <label class="property-field">
+                <span>Email</span>
+                <input id="settings-profile-email" type="email" value="{{ user.email or '' }}">
             </label>
             <label class="property-field">
                 <span>New password</span>
-                <input name="password" type="password" minlength="8" placeholder="Leave blank to keep your current password">
+                <input id="settings-profile-password" type="password" minlength="8" placeholder="Leave blank to keep your current password">
             </label>
             <div class="settings-save-row">
+                <span id="profile-save-status" class="muted-small" role="status" aria-live="polite"></span>
                 <button class="button success" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i> Save changes</button>
             </div>
         </form>
