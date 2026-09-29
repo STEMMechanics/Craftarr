@@ -1103,6 +1103,10 @@ button.restart:hover {
   gap: 11px;
 }
 
+.player-identity > div {
+  min-width: 0;
+}
+
 .player-identity strong,
 .player-identity small {
   display: block;
@@ -1114,6 +1118,16 @@ button.restart:hover {
   color: var(--muted);
 
   font-size: 12px;
+}
+
+.player-identity .player-uuid {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+}
+
+.player-last-online {
+  cursor: help;
 }
 
 .player-online-dot {
