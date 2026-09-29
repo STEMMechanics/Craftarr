@@ -186,10 +186,19 @@
             class="modal-note"
         ></p>
 
+        <p id="plugin-remove-status" class="modal-note plugin-remove-status" role="status" aria-live="polite" hidden>
+            <i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i>
+            <span>Removing plugin files…</span>
+        </p>
+
+        <p id="plugin-remove-error" class="modal-note plugin-remove-error" role="alert" hidden></p>
+
 
         <div class="modal-actions">
 
             <button
+                id="cancel-plugin-remove"
+                type="button"
                 class="button"
                 onclick="closePluginRemoveModal()"
             >
@@ -197,10 +206,13 @@
             </button>
 
             <button
+                id="confirm-plugin-remove"
+                type="button"
                 class="button danger"
                 onclick="confirmPluginRemove()"
             >
-                Remove
+                <i id="plugin-remove-spinner" class="fa-solid fa-spinner fa-spin" aria-hidden="true" hidden></i>
+                <span id="plugin-remove-button-text">Remove</span>
             </button>
 
         </div>

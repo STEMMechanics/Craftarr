@@ -1351,6 +1351,7 @@ const PLAYER_PAGE_SIZE = 25;
 let pluginData = [];
 let pluginMonitoringPreviousFocus = null;
 let pluginPendingRemoval = null;
+let pluginRemovalInProgress = false;
 let pluginPendingReplacement = null;
 let pluginPendingUpdates = [];
 let pluginUpdatePreviousFocus = null;
@@ -3644,6 +3645,15 @@ function openPluginRemoveModal(
   }
 
   pluginPendingRemoval = plugin;
+  pluginRemovalInProgress = false;
+  setPluginRemoveBusy(false);
+  const progress = document.getElementById("plugin-remove-status");
+  const error = document.getElementById("plugin-remove-error");
+  if (progress) progress.hidden = true;
+  if (error) {
+    error.hidden = true;
+    error.textContent = "";
+  }
 
   document.getElementById(
     "remove-plugin-name",
@@ -3680,53 +3690,98 @@ function openPluginRemoveModal(
 }
 
 function closePluginRemoveModal() {
+  if (pluginRemovalInProgress) return;
+  setPluginRemoveBusy(false);
   document.getElementById(
     "plugin-remove-modal",
   ).hidden = true;
 
   pluginPendingRemoval = null;
+  const progress = document.getElementById("plugin-remove-status");
+  const error = document.getElementById("plugin-remove-error");
+  if (progress) progress.hidden = true;
+  if (error) {
+    error.hidden = true;
+    error.textContent = "";
+  }
+}
+
+function setPluginRemoveBusy(busy) {
+  const modal = document.getElementById("plugin-remove-modal");
+  const card = modal?.querySelector(".modal-card");
+  const removeButton = document.getElementById("confirm-plugin-remove");
+  const removeButtonText = document.getElementById("plugin-remove-button-text");
+  const spinner = document.getElementById("plugin-remove-spinner");
+  const cancelButton = document.getElementById("cancel-plugin-remove");
+  const configCheckbox = document.getElementById("remove-plugin-config");
+  if (card) {
+    if (busy) card.setAttribute("aria-busy", "true");
+    else card.removeAttribute("aria-busy");
+  }
+  if (removeButton) removeButton.disabled = busy;
+  if (removeButtonText) removeButtonText.textContent = busy ? "Removing…" : "Remove";
+  if (spinner) spinner.hidden = !busy;
+  if (cancelButton) cancelButton.disabled = busy;
+  if (configCheckbox) configCheckbox.disabled = busy;
+  const progress = document.getElementById("plugin-remove-status");
+  if (progress) progress.hidden = !busy;
 }
 
 async function confirmPluginRemove() {
-  if (!pluginPendingRemoval) {
+  if (!pluginPendingRemoval || pluginRemovalInProgress) {
     return;
   }
 
   const page = document.querySelector(
     ".plugins-page",
   );
+  if (!page) return;
 
-  const response = await fetch(
-    `/api/web/servers/${page.dataset.serverId}/plugins/action`,
-    {
-      method: "POST",
+  const plugin = pluginPendingRemoval;
+  const error = document.getElementById("plugin-remove-error");
+  const progress = document.getElementById("plugin-remove-status");
+  if (error) {
+    error.hidden = true;
+    error.textContent = "";
+  }
+  pluginRemovalInProgress = true;
+  setPluginRemoveBusy(true);
 
-      headers: {
-        "Content-Type": "application/json",
+  let removed = false;
+  let data;
+  try {
+    const response = await fetch(
+      `/api/web/servers/${page.dataset.serverId}/plugins/action`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          filename: plugin.filename,
+          action: "remove",
+          remove_config: document.getElementById("remove-plugin-config").checked,
+        }),
       },
-
-      body: JSON.stringify({
-        filename: pluginPendingRemoval.filename,
-
-        action: "remove",
-
-        remove_config: document.getElementById(
-          "remove-plugin-config",
-        ).checked,
-      }),
-    },
-  );
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    alert(
-      data.error ||
-        "Unable to remove plugin",
     );
 
-    return;
+    data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Unable to remove plugin");
+    }
+    removed = true;
+  } catch (removeError) {
+    if (progress) progress.hidden = true;
+    if (error) {
+      error.textContent = removeError.message || "Unable to remove plugin";
+      error.hidden = false;
+    }
+  } finally {
+    pluginRemovalInProgress = false;
+    setPluginRemoveBusy(false);
   }
+
+  if (!removed) return;
 
   pluginRestartRequired = data.restart_required === true;
 

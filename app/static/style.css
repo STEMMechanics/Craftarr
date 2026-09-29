@@ -1839,6 +1839,31 @@ button.restart:hover {
   font-size: 11px !important;
 }
 
+.plugin-remove-status,
+.plugin-remove-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0 !important;
+}
+
+.plugin-remove-status[hidden],
+.plugin-remove-error[hidden] {
+  display: none;
+}
+
+.plugin-remove-status {
+  color: var(--muted) !important;
+}
+
+.plugin-remove-error {
+  color: var(--danger) !important;
+}
+
+#confirm-plugin-remove > i:not([hidden]) {
+  margin-right: 7px;
+}
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;
