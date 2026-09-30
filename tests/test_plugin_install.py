@@ -1,3 +1,4 @@
+import io
 import zipfile
 from types import SimpleNamespace
 
@@ -5,7 +6,8 @@ import pytest
 
 from app.plugin_manager import (
     _validate_public_https_url, duplicate_plugin_groups, geyser_status,
-    enable_plugin, install_plugin_file, list_plugins, PluginFileExistsError,
+    enable_plugin, install_plugin_file, install_plugin_update, list_plugins,
+    PluginFileExistsError,
 )
 from app.web_plugins import plugin_action_requires_restart
 
@@ -13,6 +15,40 @@ from app.web_plugins import plugin_action_requires_restart
 def make_plugin(path, version="1.0"):
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("plugin.yml", f"name: Example\nversion: {version}\n")
+
+
+def stub_plugin_update_download(monkeypatch, jar_bytes):
+    class Response:
+        headers = {"Content-Length": str(len(jar_bytes))}
+
+        def __init__(self):
+            self.stream = io.BytesIO(jar_bytes)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def geturl(self):
+            return "https://example.com/plugin.jar"
+
+        def read(self, size):
+            return self.stream.read(size)
+
+    class Opener:
+        def open(self, _request, timeout):
+            assert timeout == 120
+            return Response()
+
+    monkeypatch.setattr("app.plugin_manager._validate_public_https_url", lambda _url: None)
+    monkeypatch.setattr("app.plugin_manager.urllib.request.build_opener", lambda *_args: Opener())
+
+
+def plugin_bytes(version):
+    jar = io.BytesIO()
+    make_plugin(jar, version=version)
+    return jar.getvalue()
 
 
 @pytest.mark.parametrize(("action", "filenames", "running", "expected"), [
@@ -100,6 +136,81 @@ def test_install_plugin_file_rejects_non_plugin_jar(tmp_path):
         archive.writestr("example.txt", "no metadata")
     with pytest.raises(ValueError, match="plugin.yml"):
         install_plugin_file(SimpleNamespace(directory=str(tmp_path / "server")), source, "bad.jar")
+
+
+def test_plugin_update_keeps_previous_jar_disabled_by_default(tmp_path, monkeypatch):
+    server = SimpleNamespace(directory=str(tmp_path / "server"))
+    plugin_dir = tmp_path / "server" / "plugins"
+    plugin_dir.mkdir(parents=True)
+    current_path = plugin_dir / "example.jar"
+    make_plugin(current_path, version="1.0")
+    original_bytes = current_path.read_bytes()
+    stub_plugin_update_download(monkeypatch, plugin_bytes("2.0"))
+
+    result = install_plugin_update(
+        server,
+        "example.jar",
+        "https://example.com/plugin.jar",
+        expected_name="Example",
+        expected_version="2.0",
+    )
+
+    previous_path = plugin_dir / result["previous_filename"]
+    assert result["deleted_previous"] is False
+    assert previous_path.name.endswith(".jar.disabled")
+    assert previous_path.read_bytes() == original_bytes
+    assert result["plugin"]["version"] == "2.0"
+    assert result["plugin"]["enabled"] is True
+    plugins = {plugin["filename"]: plugin for plugin in list_plugins(server)}
+    assert plugins[previous_path.name]["enabled"] is False
+
+
+def test_plugin_update_deletes_previous_jar_only_after_validation(tmp_path, monkeypatch):
+    server = SimpleNamespace(directory=str(tmp_path / "server"))
+    plugin_dir = tmp_path / "server" / "plugins"
+    plugin_dir.mkdir(parents=True)
+    current_path = plugin_dir / "example.jar"
+    make_plugin(current_path, version="1.0")
+    original_bytes = current_path.read_bytes()
+    stub_plugin_update_download(monkeypatch, plugin_bytes("2.0"))
+
+    result = install_plugin_update(
+        server,
+        "example.jar",
+        "https://example.com/plugin.jar",
+        delete_previous=True,
+        expected_name="Example",
+        expected_version="2.0",
+    )
+
+    assert result["deleted_previous"] is True
+    assert result["previous_filename"] is None
+    assert result["plugin"]["version"] == "2.0"
+    assert current_path.read_bytes() != original_bytes
+    assert not list(plugin_dir.glob("*.previous-*.jar.disabled"))
+
+
+def test_plugin_update_preserves_current_jar_when_download_is_invalid(tmp_path, monkeypatch):
+    server = SimpleNamespace(directory=str(tmp_path / "server"))
+    plugin_dir = tmp_path / "server" / "plugins"
+    plugin_dir.mkdir(parents=True)
+    current_path = plugin_dir / "example.jar"
+    make_plugin(current_path, version="1.0")
+    original_bytes = current_path.read_bytes()
+    stub_plugin_update_download(monkeypatch, b"not a valid JAR")
+
+    with pytest.raises(ValueError, match="valid JAR archive"):
+        install_plugin_update(
+            server,
+            "example.jar",
+            "https://example.com/plugin.jar",
+            delete_previous=True,
+            expected_name="Example",
+            expected_version="2.0",
+        )
+
+    assert current_path.read_bytes() == original_bytes
+    assert sorted(path.name for path in plugin_dir.iterdir()) == ["example.jar"]
 
 
 def test_plugin_url_rejects_non_https_before_dns():

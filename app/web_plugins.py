@@ -323,8 +323,8 @@ async def update_installed_plugin(server_id: int, request: Request, db: Session 
         return JSONResponse({"error": "Invalid update request"}, status_code=400)
 
     filename = data.get("filename") if isinstance(data, dict) else None
-    keep_previous = data.get("keep_previous", True) if isinstance(data, dict) else True
-    if not isinstance(filename, str) or not isinstance(keep_previous, bool):
+    delete_previous = data.get("delete_previous", False) if isinstance(data, dict) else False
+    if not isinstance(filename, str) or not isinstance(delete_previous, bool):
         return JSONResponse({"error": "Select a valid plugin update"}, status_code=400)
 
     plugins = list_plugins(server)
@@ -349,7 +349,7 @@ async def update_installed_plugin(server_id: int, request: Request, db: Session 
             server,
             filename,
             download_url,
-            keep_previous=keep_previous,
+            delete_previous=delete_previous,
             expected_name=installed["name"],
             expected_version=expected_version if isinstance(expected_version, str) else None,
             provider_name=update.get("provider"),
@@ -361,7 +361,9 @@ async def update_installed_plugin(server_id: int, request: Request, db: Session 
         request.state.audit_details = result["plugin"].get("filename", updated_name)
         message = f"Updated {updated_name}{f' to {updated_version}' if updated_version else ''} on the server."
         if result["previous_filename"]:
-            message += " The existing JAR was kept disabled. You can choose which version is enabled from the Plugins menu."
+            message += f" The previous version was kept disabled as {result['previous_filename']}."
+        elif result["deleted_previous"]:
+            message += " The previous version was deleted after the downloaded JAR passed validation and installed successfully."
         if action_requires_restart:
             message += " Restart the server to load the update."
         return {
@@ -369,6 +371,7 @@ async def update_installed_plugin(server_id: int, request: Request, db: Session 
             "message": message,
             "plugin": result["plugin"],
             "previous_filename": result["previous_filename"],
+            "deleted_previous": result["deleted_previous"],
             "restart_required": restart_required,
             "action_requires_restart": action_requires_restart,
             "duplicates": duplicate_plugin_groups(list_plugins(server)),
