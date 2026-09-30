@@ -3248,7 +3248,7 @@ function renderPlayerList() {
       const canManagePlayers = document.querySelector(".players-page")?.dataset.canManage === "true";
       const statusBadges = [
         player.whitelisted ? '<span class="player-state-badge is-whitelisted"><i class="fa-solid fa-check" aria-hidden="true"></i>Whitelisted</span>' : "",
-        player.operator ? `<span class="player-state-badge is-admin"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i>Server admin${player.op_level == null ? "" : ` · L${escapeHtml(player.op_level)}`}</span>` : "",
+        player.operator ? `<span class="player-state-badge is-admin"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i>OP${player.op_level == null ? "" : ` · L${escapeHtml(player.op_level)}`}</span>` : "",
         player.banned ? '<span class="player-state-badge is-blocked"><i class="fa-solid fa-ban" aria-hidden="true"></i>Blocked</span>' : "",
       ].filter(Boolean).join("") || '';
 
@@ -3330,7 +3330,7 @@ function renderPlayerList() {
                                     )
                                 "
                             >
-                                ${player.operator ? "✓ Admin" : "+ Admin"}
+                                ${player.operator ? "✓ OP" : "+ OP"}
                             </button>
 
 
@@ -3421,7 +3421,19 @@ async function playerAction(
   );
 
   if (!page) {
-    return;
+    return false;
+  }
+
+  let reason;
+  if (action === "ban" || action === "pardon") {
+    const label = action === "ban" ? "ban" : "unban";
+    reason = window.prompt(`Reason to ${label} ${player}:`);
+    if (reason === null) return false;
+    reason = reason.trim();
+    if (!reason) {
+      alert("A reason is required.");
+      return false;
+    }
   }
 
   const response = await fetch(
@@ -3436,6 +3448,7 @@ async function playerAction(
       body: JSON.stringify({
         player,
         action,
+        reason,
       }),
     },
   );
@@ -3448,13 +3461,14 @@ async function playerAction(
         "Player action failed",
     );
 
-    return;
+    return false;
   }
 
   setTimeout(
     updatePlayersPage,
     500,
   );
+  return true;
 }
 
 function addPlayerAction(
@@ -3473,9 +3487,9 @@ function addPlayerAction(
   playerAction(
     player,
     action,
-  );
-
-  input.value = "";
+  ).then((success) => {
+    if (success) input.value = "";
+  });
 }
 
 async function toggleWhitelist() {
@@ -3583,25 +3597,40 @@ document.addEventListener("change", (event) => {
 
 updatePlayersPage();
 
-async function ipBanAction(ip, action) {
+async function ipBanAction(ip, action, reason = "") {
   const page = document.querySelector(".players-page");
+  if (!page) return false;
+  if (action === "pardon") {
+    reason = window.prompt(`Reason to unban ${ip}:`);
+    if (reason === null) return false;
+  }
+  reason = String(reason || "").trim();
+  if (!reason) {
+    alert("A reason is required.");
+    return false;
+  }
   const response = await fetch(
     `/api/web/servers/${page.dataset.serverId}/ip-bans/action`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ip, action }),
+      body: JSON.stringify({ ip, action, reason }),
     },
   );
   const data = await response.json();
-  if (!response.ok) return alert(data.error || "Unable to update IP ban");
+  if (!response.ok) {
+    alert(data.error || "Unable to update IP ban");
+    return false;
+  }
   setTimeout(updatePlayersPage, 300);
+  return true;
 }
 
 function banIpAddress(event) {
   event.preventDefault();
   const form = event.currentTarget;
-  ipBanAction(form.elements.ip.value, "ban").then(() => form.reset());
+  ipBanAction(form.elements.ip.value, "ban", form.elements.reason.value)
+    .then((success) => { if (success) form.reset(); });
 }
 
 setInterval(

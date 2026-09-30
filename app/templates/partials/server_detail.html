@@ -73,8 +73,8 @@
 
   {% if user.can("console.view") %}
   <section class="overview-card dashboard-activity-card">
-    <div class="card-header"><div><h2>Recent activity</h2><p>What your server has been doing.</p></div><a class="quiet-link" href="/servers/{{ server.id }}/logs" hx-get="/servers/{{ server.id }}/logs" hx-target="#page-content" hx-push-url="true">See all <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></a></div>
-    <pre id="overview-logs" aria-live="polite">Loading recent activity…</pre>
+    <div class="card-header"><div><h2>Recent logs</h2><p>Latest messages from your Minecraft server.</p></div><a class="quiet-link" href="/servers/{{ server.id }}/logs" hx-get="/servers/{{ server.id }}/logs" hx-target="#page-content" hx-push-url="true">View logs <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></a></div>
+    <pre id="overview-logs" aria-live="polite">Loading latest logs…</pre>
   </section>
   {% endif %}
 

@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import shutil
@@ -34,6 +35,7 @@ from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
 from .database import get_db
+from .audit import record_audit_event
 
 from .models import (
     Server,
@@ -107,6 +109,7 @@ load_dotenv(
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 templates = Jinja2Templates(
     directory="app/templates"
@@ -819,6 +822,19 @@ def create_server_web(
             status_code=500,
             detail=str(error),
         )
+
+
+    try:
+        record_audit_event(
+            db,
+            server_id=server.id,
+            server_name=server.name,
+            actor_user_id=user.id,
+            actor_username=user.username,
+            action="Server created",
+        )
+    except Exception:
+        logger.exception("Unable to audit server creation for server %s", server.id)
 
 
     return RedirectResponse(
@@ -1764,6 +1780,18 @@ async def import_server_archive(
             raise ValueError("Server name, directory, or service name is already managed") from error
         db.refresh(server)
 
+        try:
+            record_audit_event(
+                db,
+                server_id=server.id,
+                server_name=server.name,
+                actor_user_id=user.id,
+                actor_username=user.username,
+                action="Server imported from archive",
+            )
+        except Exception:
+            logger.exception("Unable to audit archive import for server %s", server.id)
+
         return JSONResponse({
             "success": True,
             "redirect_url": f"/servers/{server.id}",
@@ -1917,6 +1945,18 @@ def import_server(
         db.rollback()
         raise HTTPException(status_code=409, detail="Server name, directory, service name, or port is already managed") from error
     db.refresh(server)
+
+    try:
+        record_audit_event(
+            db,
+            server_id=server.id,
+            server_name=server.name,
+            actor_user_id=user.id,
+            actor_username=user.username,
+            action="Server imported",
+        )
+    except Exception:
+        logger.exception("Unable to audit server import for server %s", server.id)
 
 
     return RedirectResponse(

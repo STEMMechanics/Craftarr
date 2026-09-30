@@ -101,6 +101,7 @@ async def save_advanced_properties_api(server_id: int, request: Request, db: Ses
     data = await request.json()
     content = str(data.get("content", ""))
     if data.get("validate_only") is True:
+        request.state.skip_audit = True
         return {"success": True, "warning": yaml_sanity_warning(content)}
     try:
         warning = save_advanced_property(
@@ -110,6 +111,7 @@ async def save_advanced_properties_api(server_id: int, request: Request, db: Ses
         )
     except (OSError, ValueError) as error:
         return JSONResponse({"error": str(error)}, status_code=400)
+    request.state.audit_details = str(data.get("path", "Advanced settings file"))
     running = bool(server_status(server.id).get("running"))
     return {
         "success": True,
@@ -385,6 +387,7 @@ async def set_systemd_enabled_api(
         set_systemd_enabled(server.id, enabled)
     except RuntimeError as error:
         return JSONResponse({"error": str(error)}, status_code=400)
+    request.state.audit_details = "Automatic startup enabled" if enabled else "Automatic startup disabled"
     return {
         "success": True,
         "message": "Automatic startup enabled." if enabled else "Automatic startup disabled.",
@@ -549,6 +552,9 @@ async def rename_server_api(
                 f"Server renamed, but it could not be restarted automatically: {error}"
             )
 
+    request_state = getattr(request, "state", None)
+    if request_state is not None:
+        request_state.audit_details = f"{old_name} → {name}"
     return {
         "success": True,
         "message": f"Server renamed to {name}.",
@@ -590,6 +596,10 @@ async def save_properties_api(
         )
 
     data = await request.json()
+    changed_setting_names = sorted(
+        key for key in data
+        if key not in {"restart_if_running", "enabled_at_boot"}
+    )
     error_field = None
     original_backend = server.process_backend
     current_status = server_status(server.id)
@@ -782,6 +792,9 @@ async def save_properties_api(
         )
 
     running = bool(server_status(server.id).get("running"))
+    request.state.audit_action = "Server settings changed"
+    if changed_setting_names:
+        request.state.audit_details = "Updated settings: " + ", ".join(changed_setting_names)
 
     return {
         "success": True,

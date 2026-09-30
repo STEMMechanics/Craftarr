@@ -136,6 +136,7 @@ async def upload_plugin(server_id: int, request: Request, plugin: UploadFile = F
         restart_required = record_plugin_restart_requirement(
             db, server, action_requires_restart,
         )
+        request.state.audit_details = result.get("filename", filename)
         return {
             "plugin": result,
             "restart_required": restart_required,
@@ -172,6 +173,7 @@ async def download_plugin(server_id: int, request: Request, db: Session = Depend
         restart_required = record_plugin_restart_requirement(
             db, server, action_requires_restart,
         )
+        request.state.audit_details = result.get("filename", "Plugin JAR")
         return {
             "plugin": result,
             "restart_required": restart_required,
@@ -356,6 +358,7 @@ async def update_installed_plugin(server_id: int, request: Request, db: Session 
         restart_required = record_plugin_restart_requirement(db, server, action_requires_restart)
         updated_name = result["plugin"]["name"]
         updated_version = result["plugin"].get("version")
+        request.state.audit_details = result["plugin"].get("filename", updated_name)
         message = f"Updated {updated_name}{f' to {updated_version}' if updated_version else ''} on the server."
         if result["previous_filename"]:
             message += " The existing JAR was kept disabled. You can choose which version is enabled from the Plugins menu."
@@ -429,6 +432,7 @@ async def correct_plugin_filename(server_id: int, request: Request, db: Session 
         if row:
             db.delete(row)
         db.commit()
+        request.state.audit_details = f"{filename} → {corrected_filename}"
         return {"success": True, "filename": corrected_filename}
     except (ValueError, FileNotFoundError, OSError) as error:
         db.rollback()
@@ -582,6 +586,12 @@ async def plugin_action(
     restart_required = record_plugin_restart_requirement(
         db, server, action_requires_restart,
     )
+    request.state.audit_action = {
+        "enable": "Plugins enabled",
+        "disable": "Plugins disabled",
+        "remove": "Plugins removed",
+    }[action]
+    request.state.audit_details = ", ".join(filenames)
 
     return {
         "success": True,

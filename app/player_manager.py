@@ -809,13 +809,13 @@ def kick_player(
 def ban_player(
     server,
     player: str,
+    reason: str | None = None,
 ):
     require_running(server)
-
-    send_command(
-        server.id,
-        f"ban {player}",
-    )
+    command = f"ban {player}"
+    if reason:
+        command += f" {reason}"
+    send_command(server.id, command)
 
 
 def pardon_player(
@@ -830,13 +830,14 @@ def pardon_player(
     )
 
 
-def ban_ip(server, address: str):
+def ban_ip(server, address: str, reason: str | None = None):
     require_running(server)
     try:
         normalized = str(ipaddress.ip_address(address.strip()))
     except ValueError as error:
         raise RuntimeError("A valid IPv4 or IPv6 address is required") from error
-    send_command(server.id, f"ban-ip {normalized}")
+    reason_suffix = f" {reason}" if reason else ""
+    send_command(server.id, f"ban-ip {normalized}{reason_suffix}")
 
 
 def pardon_ip(server, address: str):
