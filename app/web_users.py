@@ -14,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from .auth import hash_password
+from .audit import record_audit_event
 from .database import get_db
 from .models import AccessRole, Server, User
 from .permissions import has_permission
@@ -361,9 +362,35 @@ async def save_server_access(
         else []
     )
 
+    previous_servers = {server.id: server for server in edit_user.servers}
+    selected_servers = {server.id: server for server in servers}
+
     edit_user.servers = servers
 
     db.commit()
+
+    for server_id in sorted(selected_servers.keys() - previous_servers.keys()):
+        server = selected_servers[server_id]
+        record_audit_event(
+            db,
+            server_id=server.id,
+            server_name=server.name,
+            actor_user_id=admin.id,
+            actor_username=admin.username,
+            action="Server access assigned",
+            details=f"Access assigned to {edit_user.username}",
+        )
+    for server_id in sorted(previous_servers.keys() - selected_servers.keys()):
+        server = previous_servers[server_id]
+        record_audit_event(
+            db,
+            server_id=server.id,
+            server_name=server.name,
+            actor_user_id=admin.id,
+            actor_username=admin.username,
+            action="Server access revoked",
+            details=f"Access revoked from {edit_user.username}",
+        )
 
     return RedirectResponse(
         f"/users/{user_id}",
@@ -406,8 +433,21 @@ def delete_user(
             status_code=303,
         )
 
+    assigned_servers = list(edit_user.servers)
+    deleted_username = edit_user.username
     db.delete(edit_user)
     db.commit()
+
+    for server in assigned_servers:
+        record_audit_event(
+            db,
+            server_id=server.id,
+            server_name=server.name,
+            actor_user_id=admin.id,
+            actor_username=admin.username,
+            action="Server access revoked",
+            details=f"Access revoked from deleted user {deleted_username}",
+        )
 
     return RedirectResponse(
         "/users",

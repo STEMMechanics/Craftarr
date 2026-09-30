@@ -95,6 +95,22 @@ def players_page(
     )
 
 
+def required_reason(data: dict) -> tuple[str | None, str | None]:
+    raw_reason = data.get("reason")
+    if not isinstance(raw_reason, str):
+        return None, "A reason is required"
+    if any(ord(character) < 32 or ord(character) == 127 for character in raw_reason):
+        return None, "Reason cannot contain control characters"
+    # Collapse whitespace, including newlines, before passing a ban reason to
+    # the Minecraft console command.
+    reason = " ".join(raw_reason.split())
+    if not reason:
+        return None, "A reason is required"
+    if len(reason) > 500:
+        return None, "Reason cannot exceed 500 characters"
+    return reason, None
+
+
 @router.get(
     "/api/web/servers/{server_id}/players"
 )
@@ -186,6 +202,8 @@ async def whitelist_enabled(
             {"error": str(error)},
             status_code=400,
         )
+
+    request.state.audit_action = "Whitelist enabled" if enabled else "Whitelist disabled"
 
     return {
         "success": True,
@@ -283,13 +301,27 @@ async def player_action(
             status_code=400,
         )
 
+    reason = None
+    if action in {"ban", "pardon"}:
+        reason, reason_error = required_reason(data)
+        if reason_error:
+            return JSONResponse({"error": reason_error}, status_code=400)
+    action_labels = {
+        "whitelist": "Player whitelisted",
+        "unwhitelist": "Player removed from whitelist",
+        "op": "Player made OP",
+        "deop": "Player removed as OP",
+        "kick": "Player kicked",
+        "ban": "Player banned",
+        "pardon": "Player unbanned",
+    }
+
 
     try:
-
-        handler(
-            server,
-            player,
-        )
+        if action == "ban":
+            handler(server, player, reason)
+        else:
+            handler(server, player)
 
     except RuntimeError as error:
 
@@ -297,6 +329,10 @@ async def player_action(
             {"error": str(error)},
             status_code=400,
         )
+
+    request.state.audit_action = action_labels[action]
+    request.state.audit_details = player
+    request.state.audit_reason = reason
 
 
     return {
@@ -317,8 +353,21 @@ async def ip_ban_action(server_id: int, request: Request, db: Session = Depends(
     handler = {"ban": ban_ip, "pardon": pardon_ip}.get(action)
     if not handler:
         return JSONResponse({"error": "Invalid action"}, status_code=400)
+    reason = None
+    if action in {"ban", "pardon"}:
+        reason, reason_error = required_reason(data)
+        if reason_error:
+            return JSONResponse({"error": reason_error}, status_code=400)
     try:
-        handler(server, address)
+        if action == "ban":
+            handler(server, address, reason)
+        else:
+            handler(server, address)
     except RuntimeError as error:
         return JSONResponse({"error": str(error)}, status_code=400)
+    request.state.audit_action = (
+        "IP address banned" if action == "ban" else "IP address unbanned"
+    )
+    request.state.audit_details = address
+    request.state.audit_reason = reason
     return {"success": True}

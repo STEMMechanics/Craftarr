@@ -87,6 +87,8 @@ async def create_server_file(server_id: int, request: Request, db: Session = Dep
         return JSONResponse({"error": str(error)}, status_code=409)
     except (OSError, ValueError) as error:
         return JSONResponse({"error": str(error)}, status_code=400)
+    request.state.audit_action = "Server file created"
+    request.state.audit_details = path
     return {"success": True, "path": path}
 
 
@@ -270,6 +272,8 @@ async def upload_file(
         await file.close()
 
 
+    request.state.audit_action = "Server file uploaded"
+    request.state.audit_details = str(Path(path) / Path(*relative_parts))
     return RedirectResponse(
         (
             f"/servers/{server_id}/files"
@@ -526,6 +530,8 @@ def save_file(
             f"&warning_column={warning['column']}"
         )
 
+    request.state.audit_action = "Server file saved"
+    request.state.audit_details = path
     destination = (
         f"/servers/{server_id}/files?path={quote(parent)}"
         if close and not warning else
@@ -590,6 +596,10 @@ async def mkdir(
             status_code=400,
         )
 
+    request.state.audit_action = "Server folder created"
+    request.state.audit_details = "/".join(
+        part for part in (str(data.get("path", "")).strip("/"), str(data.get("name", "")).strip("/")) if part
+    )
 
     return {
         "success": True
@@ -609,6 +619,8 @@ async def zip_entry(server_id: int, request: Request, db: Session = Depends(get_
         archive_path = create_zip(server, data.get("path", ""))
     except Exception as error:
         return JSONResponse({"error": str(error)}, status_code=400)
+    request.state.audit_action = "Server files archived"
+    request.state.audit_details = archive_path
     return {"success": True, "path": archive_path}
 
 
@@ -630,6 +642,8 @@ async def extract_entry(server_id: int, request: Request, db: Session = Depends(
         )
     except (ValueError, FileNotFoundError, zipfile.BadZipFile) as error:
         return JSONResponse({"error": str(error)}, status_code=400)
+    request.state.audit_action = "Server archive extracted"
+    request.state.audit_details = str(data.get("path", ""))
     return {"success": True, "conflicts": conflicts}
 
 
@@ -687,6 +701,8 @@ async def rename(
             status_code=400,
         )
 
+    request.state.audit_action = "Server file renamed"
+    request.state.audit_details = f"{data.get('path', '')} → {data.get('name', '')}"
 
     return {
         "success": True
@@ -743,6 +759,8 @@ async def delete(
             status_code=400,
         )
 
+    request.state.audit_action = "Server file deleted"
+    request.state.audit_details = str(data.get("path", ""))
 
     return {
         "success": True
@@ -797,6 +815,8 @@ async def move(
             {"error": str(error)},
             status_code=400,
         )
+    request.state.audit_action = "Server file moved"
+    request.state.audit_details = f"{data.get('source', '')} → {data.get('destination', '')}"
 
     return {
         "success": True

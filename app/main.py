@@ -1,3 +1,5 @@
+import logging
+
 from .env import getenv
 
 from dotenv import load_dotenv
@@ -16,10 +18,13 @@ from .config import COOKIE_SECURE, SECRET_KEY
 from .migrations import upgrade_database
 from .processes import register_server
 
-from .database import (
-    SessionLocal,
+from .database import SessionLocal
+from .models import Server, User
+from .audit import (
+    describe_request_action,
+    record_audit_event,
+    server_id_from_request,
 )
-from .models import User
 
 from .routers_auth import (
     router as auth_router,
@@ -64,6 +69,7 @@ from .web_backups import (
 from .web_logs import (
     router as web_logs_router,
 )
+from .web_audit import router as web_audit_router
 
 from .web_properties import (
     router as web_properties_router,
@@ -141,6 +147,76 @@ async def force_password_change(request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def record_server_audit_events(request, call_next):
+    method = request.method.upper()
+    if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return await call_next(request)
+
+    server_id = server_id_from_request(request)
+    if server_id is None:
+        return await call_next(request)
+
+    path = request.url.path
+    if path.endswith((
+        "/files/yaml-check",
+        "/plugins/check-updates",
+        "/plugins/check-update",
+        "/plugins/monitoring/preview",
+        "/paper/check-updates",
+    )):
+        return await call_next(request)
+
+    actor_id = request.session.get("user_id")
+    if not actor_id:
+        return await call_next(request)
+
+    server_name = f"Server {server_id}"
+    actor_username = None
+    db = SessionLocal()
+    try:
+        server = db.get(Server, server_id)
+        if server:
+            server_name = server.name
+        actor = db.get(User, actor_id)
+        if actor and actor.enabled:
+            actor_username = actor.username
+    except Exception:
+        pass
+    finally:
+        db.close()
+
+    response = await call_next(request)
+    if getattr(request.state, "skip_audit", False):
+        return response
+    successful_response = 200 <= response.status_code < 300
+    if 300 <= response.status_code < 400 and getattr(request.state, "audit_action", None):
+        successful_response = True
+    if not successful_response or not actor_username:
+        return response
+
+    try:
+        db = SessionLocal()
+        record_audit_event(
+            db,
+            server_id=server_id,
+            server_name=server_name,
+            actor_user_id=actor_id,
+            actor_username=actor_username,
+            action=describe_request_action(request),
+            details=getattr(request.state, "audit_details", None),
+            reason=getattr(request.state, "audit_reason", None),
+        )
+    except Exception:
+        # Audit failures must not turn a completed server action into a failed
+        # response. Keep the original action outcome intact.
+        logging.getLogger(__name__).exception("Unable to record server audit event")
+    finally:
+        if "db" in locals():
+            db.close()
+    return response
+
+
 # This must wrap the function middleware above so request.session is populated
 # before forced-password enforcement runs.
 app.add_middleware(
@@ -201,6 +277,8 @@ app.include_router(
 app.include_router(
     web_logs_router
 )
+
+app.include_router(web_audit_router)
 
 app.include_router(
     web_properties_router

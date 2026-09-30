@@ -15,6 +15,7 @@ from .auth import (
 )
 
 from .database import get_db
+from .audit import record_audit_event
 
 from .models import (
     Server,
@@ -132,6 +133,15 @@ def create_server(
 
     db.refresh(server)
 
+    record_audit_event(
+        db,
+        server_id=server.id,
+        server_name=server.name,
+        actor_user_id=admin.id,
+        actor_username=admin.username,
+        action="Server created",
+    )
+
     return server
 
 
@@ -163,6 +173,10 @@ def update_server(
     changes = payload.model_dump(
         exclude_unset=True
     )
+    changed_fields = [
+        field for field, value in changes.items()
+        if getattr(server, field) != value
+    ]
 
     requested_backend = changes.get("process_backend", server.process_backend)
     if (
@@ -199,6 +213,17 @@ def update_server(
     db.refresh(server)
     register_server(server)
 
+    if changed_fields:
+        record_audit_event(
+            db,
+            server_id=server.id,
+            server_name=server.name,
+            actor_user_id=admin.id,
+            actor_username=admin.username,
+            action="Server settings changed",
+            details="Changed fields: " + ", ".join(changed_fields),
+        )
+
     return server
 
 
@@ -226,8 +251,17 @@ def delete_server(
             detail="Server not found",
         )
 
+    server_name = server.name
     db.delete(server)
     db.commit()
+    record_audit_event(
+        db,
+        server_id=server_id,
+        server_name=server_name,
+        actor_user_id=admin.id,
+        actor_username=admin.username,
+        action="Server deleted",
+    )
 
 
 @router.post(
@@ -281,6 +315,15 @@ def assign_server_access(
         user.servers.append(server)
 
         db.commit()
+        record_audit_event(
+            db,
+            server_id=server.id,
+            server_name=server.name,
+            actor_user_id=admin.id,
+            actor_username=admin.username,
+            action="Server access assigned",
+            details=f"Access assigned to {user.username}",
+        )
 
 
 @router.post(
@@ -324,3 +367,12 @@ def revoke_server_access(
         user.servers.remove(server)
 
         db.commit()
+        record_audit_event(
+            db,
+            server_id=server.id,
+            server_name=server.name,
+            actor_user_id=admin.id,
+            actor_username=admin.username,
+            action="Server access revoked",
+            details=f"Access revoked from {user.username}",
+        )

@@ -1,0 +1,32 @@
+<div class="server-audit-page" data-page-title="Audit">
+  <section class="overview-card server-audit-card">
+    <div class="card-header">
+      <div><span>Server audit</span><small>Changes and actions recorded for {{ server.name }}.</small></div>
+      <span class="plugin-count">{{ audit_total_events }} events</span>
+    </div>
+
+    <div class="server-audit-list">
+      {% for event in events %}
+      <article class="server-audit-row">
+        <div class="server-audit-heading">
+          <strong>{{ event.action }}</strong>
+          <time datetime="{{ event.created_at.isoformat() }}Z">{{ event.created_at.strftime("%Y-%m-%d %H:%M:%S") }} UTC</time>
+        </div>
+        {% if event.details %}<div class="server-audit-details">{{ event.details }}</div>{% endif %}
+        {% if event.reason %}<div class="server-audit-reason"><span>Reason</span><p>{{ event.reason }}</p></div>{% endif %}
+        <div class="server-audit-actor">By {{ event.actor_username }}</div>
+      </article>
+      {% else %}
+      <div class="empty-message">No audit events have been recorded for this server yet.</div>
+      {% endfor %}
+    </div>
+
+    {% if audit_total_pages > 1 %}
+    <nav class="server-audit-pagination" aria-label="Audit pages">
+      <a class="button" href="/servers/{{ server.id }}/audit?page={{ audit_page - 1 }}" hx-get="/servers/{{ server.id }}/audit?page={{ audit_page - 1 }}" hx-target="#page-content" hx-push-url="true" {% if audit_page <= 1 %}aria-disabled="true"{% endif %}>Previous</a>
+      <span>Page {{ audit_page }} of {{ audit_total_pages }}</span>
+      <a class="button" href="/servers/{{ server.id }}/audit?page={{ audit_page + 1 }}" hx-get="/servers/{{ server.id }}/audit?page={{ audit_page + 1 }}" hx-target="#page-content" hx-push-url="true" {% if audit_page >= audit_total_pages %}aria-disabled="true"{% endif %}>Next</a>
+    </nav>
+    {% endif %}
+  </section>
+</div>

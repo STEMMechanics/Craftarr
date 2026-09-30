@@ -62,6 +62,8 @@ def cancel_backup_job(server_id: int, job_id: int, request: Request, db: Session
         return JSONResponse({"error": "Backup worker is no longer available"}, status_code=409)
     job.message = "Cancellation requested"
     db.commit()
+    request.state.audit_action = "Backup cancellation requested"
+    request.state.audit_details = job.label or f"Backup job {job.id}"
     return {"success": True}
 
 
@@ -229,6 +231,9 @@ async def create_backup_api(
         job.id
     )
 
+    request.state.audit_action = "Backup queued"
+    request.state.audit_details = job.label or f"Backup job {job.id}"
+
     return {
         "success": True,
         "job_id": job.id,
@@ -280,6 +285,8 @@ async def delete_backup_api(
             {"error": str(error)},
             status_code=400,
         )
+
+    request.state.audit_details = str(data.get("filename", ""))
 
     return {
         "success": True
@@ -347,6 +354,8 @@ async def restore_backup_api(
             {"error": str(error)},
             status_code=400,
         )
+
+    request.state.audit_details = str(data.get("filename", ""))
 
     return {
         "success": True

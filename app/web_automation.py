@@ -207,6 +207,8 @@ async def create_schedule(server_id: int, request: Request, db: Session = Depend
     db.add(task)
     db.commit()
     db.refresh(task)
+    request.state.audit_action = "Scheduled task created"
+    request.state.audit_details = task.name
     return _task_json(task)
 
 
@@ -230,6 +232,8 @@ async def update_schedule(server_id: int, task_id: int, request: Request, db: Se
         setattr(task, key, value)
     task.next_run_at = next_task_run(task, datetime.utcnow())
     db.commit()
+    request.state.audit_action = "Scheduled task updated"
+    request.state.audit_details = task.name
     return _task_json(task)
 
 
@@ -251,6 +255,8 @@ def run_schedule_now(server_id: int, task_id: int, request: Request, db: Session
         return JSONResponse({"error": "A backup is already running"}, status_code=409)
     if not start_task_now(task.id, backup_server_id=server.id):
         return JSONResponse({"error": "A backup is already starting"}, status_code=409)
+    request.state.audit_action = "Scheduled backup started"
+    request.state.audit_details = task.name
     return {"success": True}
 
 
@@ -267,6 +273,8 @@ def delete_schedule(server_id: int, task_id: int, request: Request, db: Session 
     # Keep the task row so its immutable execution audit remains available.
     task.enabled = False
     db.commit()
+    request.state.audit_action = "Scheduled task disabled"
+    request.state.audit_details = task.name
     return {"success": True}
 
 

@@ -468,3 +468,18 @@ class PluginMonitoringSetting(Base):
     link_pattern = Column(Text, nullable=False, default='')
     installed_pattern = Column(Text, nullable=False, default='')
     asset_pattern = Column(Text, nullable=False, default='')
+
+
+class ServerAuditEvent(Base):
+    __tablename__ = "server_audit_events"
+
+    id = Column(Integer, primary_key=True)
+    # Keep audit history after a server or user is removed. Names are snapshots.
+    server_id = Column(Integer, nullable=False, index=True)
+    server_name = Column(String(100), nullable=False)
+    actor_user_id = Column(Integer, nullable=True, index=True)
+    actor_username = Column(String(64), nullable=False)
+    action = Column(String(255), nullable=False)
+    details = Column(Text, nullable=True)
+    reason = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
