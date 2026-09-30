@@ -1923,8 +1923,8 @@ function openPluginUpdateModal(filename = null) {
   const list = document.getElementById("plugin-update-modal-list");
   const state = document.getElementById("plugin-update-modal-state");
   const confirm = document.getElementById("confirm-plugin-update");
-  const keepPrevious = document.getElementById("plugin-update-keep-previous");
-  if (!modal || !title || !summary || !list || !state || !confirm || !keepPrevious) return;
+  const deleteCurrent = document.getElementById("plugin-update-delete-current");
+  if (!modal || !title || !summary || !list || !state || !confirm || !deleteCurrent) return;
 
   pluginPendingUpdates = targets.map((plugin) => ({...plugin}));
   pluginUpdatePreviousFocus = document.activeElement;
@@ -1938,7 +1938,7 @@ function openPluginUpdateModal(filename = null) {
     const latest = plugin.update?.latest_version || "New version";
     return `<li><strong>${escapeHtml(plugin.name)}</strong><span>${escapeHtml(installed)} <i class="fa-solid fa-arrow-right" aria-hidden="true"></i> ${escapeHtml(latest)}</span></li>`;
   }).join("");
-  keepPrevious.checked = true;
+  deleteCurrent.checked = false;
   state.textContent = pluginServerRunning
     ? "The server is running. If an enabled plugin changes, restart it to load the new version."
     : "If a plugin is currently disabled, its updated JAR will stay disabled.";
@@ -1959,24 +1959,25 @@ function closePluginUpdateModal() {
 async function confirmPluginUpdate() {
   if (!pluginPendingUpdates.length || pluginUpdateInProgress) return;
   const targets = pluginPendingUpdates;
-  const keepPrevious = document.getElementById("plugin-update-keep-previous")?.checked === true;
+  const deleteCurrentVersion = document.getElementById("plugin-update-delete-current")?.checked === true;
   const button = document.getElementById("confirm-plugin-update");
   if (button) button.disabled = true;
   closePluginUpdateModal();
   try {
-    await installPluginUpdates(targets, keepPrevious);
+    await installPluginUpdates(targets, deleteCurrentVersion);
   } finally {
     if (button) button.disabled = false;
   }
 }
 
-async function installPluginUpdates(plugins, keepPrevious) {
+async function installPluginUpdates(plugins, deleteCurrentVersion) {
   const page = document.querySelector(".plugins-page");
   if (!page || !plugins.length) return;
   pluginUpdateInProgress = true;
   renderPlugins();
   const total = plugins.length;
   const successes = [];
+  const retainedPreviousVersions = [];
   const failures = [];
   let progress = showToast(
     `Preparing ${total === 1 ? plugins[0].name : `${total} plugin updates`}…`,
@@ -1996,7 +1997,7 @@ async function installPluginUpdates(plugins, keepPrevious) {
         const response = await nativeFetch(`/api/web/servers/${page.dataset.serverId}/plugins/update`, {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({filename: plugin.filename, keep_previous: keepPrevious}),
+          body: JSON.stringify({filename: plugin.filename, delete_previous: deleteCurrentVersion}),
         });
         if (handleAuthenticationResponse(response)) {
           progress?.remove();
@@ -2006,6 +2007,9 @@ async function installPluginUpdates(plugins, keepPrevious) {
         try { data = await response.json(); } catch { /* Use the HTTP status below. */ }
         if (!response.ok) throw new Error(data.error || "Plugin update failed");
         successes.push(plugin.name);
+        if (typeof data.previous_filename === "string" && data.previous_filename) {
+          retainedPreviousVersions.push(data.previous_filename);
+        }
         pluginRestartRequired = pluginRestartRequired || data.restart_required === true;
       } catch (error) {
         failures.push(`${plugin.name}: ${error.message || "Update failed"}`);
@@ -2019,8 +2023,14 @@ async function installPluginUpdates(plugins, keepPrevious) {
     showPluginRestartAlert();
     await updatePluginsPage(false);
     await refreshNotifications(false);
+    const retainedSummary = retainedPreviousVersions.length
+      ? ` Previous versions kept disabled: ${retainedPreviousVersions.join(", ")}.`
+      : "";
+    const deletedSummary = successes.length && deleteCurrentVersion
+      ? " Previous versions were deleted after validation and successful installation."
+      : "";
     const summary = successes.length
-      ? `Updated ${successes.length} of ${total} plugin${total === 1 ? "" : "s"}.${pluginRestartRequired ? " Restart the server to load enabled updates." : ""}`
+      ? `Updated ${successes.length} of ${total} plugin${total === 1 ? "" : "s"}.${retainedSummary}${deletedSummary}${pluginRestartRequired ? " Restart the server to load enabled updates." : ""}`
       : `No plugins were updated.`;
     const failureDetail = failures.length ? ` Failed: ${failures.join("; ")}` : "";
     if (successes.length) {

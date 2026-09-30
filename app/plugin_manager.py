@@ -490,8 +490,8 @@ def normalize_previous_plugin_filenames(server) -> None:
             continue
 
 
-def install_plugin_update(server, filename: str, url: str, *, keep_previous: bool = True, expected_name: str | None = None, expected_version: str | None = None, provider_name: str | None = None) -> dict:
-    """Install a monitored release on the server, optionally retaining the old JAR disabled."""
+def install_plugin_update(server, filename: str, url: str, *, delete_previous: bool = False, expected_name: str | None = None, expected_version: str | None = None, provider_name: str | None = None) -> dict:
+    """Install a validated release, retaining the old JAR disabled unless deletion is requested."""
     if Path(filename).name != filename or not filename.lower().endswith((".jar", ".jar.disabled")):
         raise ValueError("Select a valid installed plugin file")
 
@@ -570,7 +570,7 @@ def install_plugin_update(server, filename: str, url: str, *, keep_previous: boo
             updated_plugin["version"] = filename_version
             updated_plugin["version_source"] = "filename" if filename_version else None
 
-        if keep_previous:
+        if not delete_previous:
             base_name = filename[:-9] if filename.endswith(".jar.disabled") else filename
             stem = base_name[:-4]
             while previous_path is None or previous_path.exists():
@@ -591,13 +591,14 @@ def install_plugin_update(server, filename: str, url: str, *, keep_previous: boo
             moved_current = False
         return {
             "plugin": updated_plugin,
-            "previous_filename": previous_path.name if keep_previous else None,
+            "previous_filename": previous_path.name if previous_path else None,
+            "deleted_previous": delete_previous,
         }
     except Exception:
         if moved_current:
             if target_path.exists():
                 target_path.unlink(missing_ok=True)
-            retained_path = previous_path if keep_previous else replaced_path
+            retained_path = previous_path if not delete_previous else replaced_path
             if retained_path and retained_path.exists() and not current_path.exists():
                 os.replace(retained_path, current_path)
         raise
