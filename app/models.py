@@ -310,8 +310,11 @@ class RemoteNode(Base):
     name = Column(String(100), nullable=False, unique=True)
     base_url = Column(String(1000), nullable=False, unique=True)
     token_ciphertext = Column(Text, nullable=False)
+    app_version = Column(String(40), nullable=True)
     last_connected_at = Column(DateTime, nullable=True)
     last_error = Column(String(255), nullable=True)
+    outage_started_at = Column(DateTime, nullable=True)
+    offline_alert_sent = Column(Boolean, nullable=False, default=False)
     servers = relationship(
         "RemoteServer",
         back_populates="node",

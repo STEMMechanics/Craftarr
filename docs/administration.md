@@ -52,14 +52,14 @@ Scheduled backups can copy completed local ZIP files to configured
 Install rclone on the Craftarr host, then add and test destinations in
 **Settings → Off-site Backups**. Credentials are kept in a private,
 service-owned configuration file and are not returned to the browser.
-From a hub, choose the owning console in **Configure for console** to manage
+From a hub, choose the owning Node in **Configure for Node** to manage
 that host's destinations without signing in to its local web interface. rclone
 must still be installed on the host that will create and upload the backup.
 
-When a server is on a linked console, its backup list, restore/create actions,
+When a server is on a linked Node, its backup list, restore/create actions,
 schedules, job progress and results are managed through the hub and executed on
-the console that owns that server. The archive stays on that console (and its
-configured off-site destination); linking consoles does not copy large backup
+the Node that owns that server. The archive stays on that Node (and its
+configured off-site destination); linking Nodes does not copy large backup
 files between them. Backup completion and failure events appear in the hub's
 notification center for users who can view that server's backups.
 
@@ -111,19 +111,19 @@ clients can retrieve it from `GET /api/instance`; server records returned by
 `<node-id>:<local-server-id>`. The existing integer server ID remains local to
 that Craftarr installation. The node ID is an identifier, not a credential.
 
-## Linking Craftarr consoles
+## Linking Craftarr Nodes
 
-Run the same Craftarr release on each console. HTTPS is recommended between
-consoles. HTTP links are also supported when you explicitly acknowledge the
+Run the same Craftarr release on each Node. HTTPS is recommended between
+Nodes. HTTP links are also supported when you explicitly acknowledge the
 warning; use them only across a trusted private network such as Tailscale or a
 VPN. HTTP does not encrypt the full-access token or server traffic, so anyone
-able to monitor that network path could capture them. On the managed console, open **Settings →
-Linked console access token**. The active token remains visible there and can
+able to monitor that network path could capture them. On the managed Node, open **Settings →
+Node access token**. The active token remains visible there and can
 be copied whenever a hub needs to be linked or reconnected. On the hub, open
-**Settings → Linked Craftarr consoles → Link console**, enter the managed
-console's URL and token, and connect. The hub checks the token and imports the
+**Settings → Linked Nodes → Link Node**, enter the managed
+Node's URL and token, and connect. The hub checks the token and imports the
 server list before saving the link. Use the hub's **Users** settings to assign
-each user the specific local and linked servers they can open.
+each user the specific local and linked Node servers they can open.
 
 Opening a linked server console requires the user's **View assigned servers**
 and **View server consoles** permissions, plus access to that server. Sending
@@ -132,46 +132,49 @@ Minecraft commands also requires **Send console commands** permission.
 The token is a full server-management credential for a trusted hub. The hub
 stores it encrypted and uses its own signed-in user's role and server
 assignments to authorize each proxied request. User accounts on the managed
-console continue to govern direct sign-ins to that console. Keep the token
+Node continue to govern direct sign-ins to that Node. Keep the token
 private, and give it only to a hub you administer. Use a stable
-`CRAFTARR_CONSOLE_SECRET` on each console so saved node tokens remain
+`CRAFTARR_CONSOLE_SECRET` on each Node so saved node tokens remain
 decryptable and visible after restarts.
 
-To rotate a token, generate a replacement on the managed console, then edit
+To rotate a token, generate a replacement on the managed Node, then edit
 the saved link on every hub and paste the new value. Rotation invalidates the
-previous token immediately. The hub keeps the remote node ID, cached server
+previous token immediately. The hub keeps the remote Node ID, cached server
 IDs, and user assignments when you update the saved token, so access resumes
 with the same server assignments after the new token is saved. Use **Refresh**
-on the linked console row to import server additions, changes, and removals.
+on the linked Node row to import server additions, changes, and removals.
 
 Tokens created before persistent token display was added are stored only as
 hashes and cannot be recovered. Regenerate such a token once and update every
 hub using it; the replacement remains visible for future use.
 
-The managed console accepts the token for its node inventory API and
+The managed Node accepts the token for its node inventory API and
 server-scoped management requests. The hub refreshes the remote server list,
 shared plugin update settings and remote update/backup notifications
 automatically. Shared plugin settings use the newest saved file revision;
-changes made directly on either console converge within about a minute. In-app
-notifications and remote outage notices are shown on the hub and filtered by
+changes made directly on either Node converge within about a minute. In-app
+notifications and Node outage notices are shown on the hub and filtered by
 the hub user's server assignments and content permissions. Outage and recovery
-emails go to hub administrators when SMTP is configured on the hub. System
+emails go to hub administrators when SMTP is configured on the hub. Node
+outage emails wait five minutes by default; you can change the delay in
+**Settings → System Alert Emails**. System
 resource alert thresholds configured on the hub are applied to linked hosts;
 those alerts appear in the hub and use the hub's SMTP settings. If a remote
-host cannot reach its hub for three minutes, it resumes its own configured
+Node cannot reach its hub for three minutes, it resumes its own configured
 plugin update and system alert email delivery. When hub SMTP is not configured,
-the remote console keeps using its own configured email delivery. Notification
+the remote Node keeps using its own configured email delivery. Notification
 read state is stored per hub account, so it follows that user between browsers
 without sharing read status with other users.
 
 The hub owns user roles and server assignments. Each server's files, backup
-archives, schedules and runtime state remain on the console that runs it, but
+archives, schedules and runtime state remain on the Node that runs it, but
 are managed through the hub. Off-site credentials stay stored on their owning
-console even when you edit them from the hub. The hub's SMTP settings handle
-linked-console alerts when configured. A remote console uses its own SMTP when
+Node even when you edit them from the hub. The hub's SMTP settings handle
+linked Node alerts when configured. A remote Node uses its own SMTP when
 the hub has no email service configured or has not checked in for three
-minutes. Keep both consoles updated to a release that includes the node API
-required for linking.
+minutes. Nodes can connect across Craftarr versions, though some functions may
+be unavailable on an older Node. Keep Nodes updated to use all available
+functions.
 
 ## Accounts and security
 

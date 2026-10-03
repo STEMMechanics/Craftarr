@@ -75,7 +75,7 @@ class GatewayUser:
 
     @property
     def role_name(self) -> str:
-        return "Linked console user"
+        return "Linked Node user"
 
 
 def _gateway_user(request: Request, db: Session):

@@ -5,16 +5,26 @@
             <span id="server-log-count" class="plugin-count">{{ total_logs }} files</span>
         </div>
 
+        <div class="server-log-selection-toolbar">
+            <label><input id="server-log-select-all" type="checkbox" aria-label="Select all log files"><span>Select all files</span></label>
+            <span id="server-log-selection-count" role="status" aria-live="polite">No files selected</span>
+            <button id="server-log-download-selected" class="button" type="button" onclick="downloadSelectedServerLogs()" disabled>
+                <i class="fa-solid fa-download" aria-hidden="true"></i><span>Download selected</span>
+            </button>
+        </div>
+
         <div id="server-log-rows">
         {% for log in logs %}
-        <a class="server-log-row{% if log.name == selected_log %} active{% endif %}"
-           href="/servers/{{ server.id }}/logs?file={{ log.name|urlencode }}"
-           hx-get="/servers/{{ server.id }}/logs?file={{ log.name|urlencode }}"
-           hx-target="#page-content" hx-push-url="true">
-            <span class="server-log-name"><i class="fa-regular fa-file-lines"></i>{{ log.name }}</span>
-            <span>{{ log.modified.strftime("%Y-%m-%d %H:%M:%S") }}</span>
-            <span>{{ log.size_display }}</span>
-        </a>
+        <div class="server-log-row{% if log.name == selected_log %} active{% endif %}" data-log-name="{{ log.name }}">
+            <label class="server-log-checkbox"><input type="checkbox" data-log-checkbox="{{ log.name }}" aria-label="Select {{ log.name }}"></label>
+            <a class="server-log-link" href="/servers/{{ server.id }}/logs?file={{ log.name|urlencode }}"
+               hx-get="/servers/{{ server.id }}/logs?file={{ log.name|urlencode }}"
+               hx-target="#page-content" hx-push-url="true">
+                <span class="server-log-name"><i class="fa-regular fa-file-lines" aria-hidden="true"></i>{{ log.name }}</span>
+                <span>{{ log.modified.strftime("%Y-%m-%d %H:%M:%S") }}</span>
+                <span>{{ log.size_display }}</span>
+            </a>
+        </div>
         {% else %}
         <div class="empty-message">No Minecraft log files were found in this server's <code>logs</code> directory.</div>
         {% endfor %}

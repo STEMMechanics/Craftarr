@@ -1,5 +1,8 @@
+from tempfile import SpooledTemporaryFile
+from zipfile import ZIP_DEFLATED, ZipFile
+
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from .database import get_db
@@ -47,6 +50,20 @@ def logs_data(
         "total_pages": total_pages,
         "total_logs": len(list_server_logs(server)),
     }
+
+
+@router.get("/api/web/servers/{server_id}/logs/manifest")
+def logs_manifest_data(
+    server_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not server or not has_permission(user, "console.view"):
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+    return {"files": [log["name"] for log in list_server_logs(server)]}
 
 
 @router.get("/api/web/servers/{server_id}/logs/latest")
@@ -148,3 +165,59 @@ def download_log(
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     return FileResponse(path, filename=path.name)
+
+
+def _stream_spooled_file(file):
+    try:
+        while chunk := file.read(64 * 1024):
+            yield chunk
+    finally:
+        file.close()
+
+
+@router.post("/api/web/servers/{server_id}/logs/download")
+async def download_selected_logs(
+    server_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not server or not has_permission(user, "console.view"):
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+
+    try:
+        payload = await request.json()
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "Select log files to download."}, status_code=400)
+    requested = payload.get("files") if isinstance(payload, dict) else None
+    if not isinstance(requested, list) or not requested:
+        return JSONResponse({"error": "Select log files to download."}, status_code=400)
+    if len(requested) > 5000 or any(not isinstance(name, str) for name in requested):
+        return JSONResponse({"error": "Select up to 5000 log files."}, status_code=400)
+
+    available = {item["name"] for item in list_server_logs(server)}
+    selected = list(dict.fromkeys(requested))
+    if any(name not in available for name in selected):
+        return JSONResponse({"error": "A selected log file is no longer available. Refresh the list and try again."}, status_code=404)
+
+    archive = SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
+    try:
+        with ZipFile(archive, "w", compression=ZIP_DEFLATED) as zip_file:
+            for name in selected:
+                try:
+                    path = safe_log_path(server, name)
+                except ValueError as error:
+                    raise HTTPException(status_code=404, detail=str(error)) from error
+                zip_file.write(path, arcname=path.name)
+        archive.seek(0)
+    except Exception:
+        archive.close()
+        raise
+
+    return StreamingResponse(
+        _stream_spooled_file(archive),
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="server-logs.zip"'},
+    )

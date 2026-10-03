@@ -156,8 +156,7 @@
 
 
             <div class="file-size" aria-label="File size">
-
-                {{ entry.size_display }}
+                {{ '-' if entry.is_dir else entry.size_display }}
 
             </div>
 

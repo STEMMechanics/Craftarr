@@ -215,7 +215,7 @@ def execute_task(task_id: int, *, reschedule: bool = True) -> None:
                     run.status = "warning"
                     run.detail += f" · off-site copy failed: {error}"
                     job.status = "complete"
-                    job.message = "Backup complete; off-site copy failed"
+                    job.message = f"Backup complete; off-site copy failed: {error}"
                 job.finished_at = datetime.utcnow()
         else:
             raise RuntimeError("Unsupported scheduled task type")

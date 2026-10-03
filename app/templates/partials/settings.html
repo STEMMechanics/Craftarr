@@ -1,4 +1,4 @@
-<div class="settings-page" data-page-title="Settings">
+<div class="settings-page" data-page-title="Settings" data-app-version="{{ app_version }}">
     {% if user.can("roles.manage") %}
     <section class="overview-card settings-section">
         <div class="card-header">
@@ -111,9 +111,9 @@
     </section>
 
     <section class="overview-card settings-section">
-        <div class="card-header">Linked console access token</div>
+        <div class="card-header">Node access token</div>
         <div class="settings-content">
-            <p class="modal-note full-width">The active full-access token stays visible here so you can copy it whenever needed. Add this console in the hub's linked consoles below. Regenerating immediately invalidates the old token; update every hub using it.</p>
+            <p class="modal-note full-width">The active full-access Node token stays visible here so you can copy it whenever needed. Add this Node in the hub's linked Nodes below. Regenerating immediately invalidates the old token; update every hub using it.</p>
             <div class="node-token-row full-width">
                 <input id="node-access-token" type="text" readonly autocomplete="off" placeholder="No token generated" spellcheck="false">
                 <button id="copy-node-token" class="icon-button" type="button" aria-label="Copy node token" title="Copy token" onclick="copyNodeAccessToken()" disabled><i class="fa-solid fa-copy" aria-hidden="true"></i></button>
@@ -125,23 +125,23 @@
 
     <section class="overview-card settings-section">
         <div class="card-header">
-            <span>Linked Craftarr consoles</span>
-            <button class="settings-header-button" type="button" onclick="openRemoteNodeModal()"><i class="fa-solid fa-plus" aria-hidden="true"></i> Link console</button>
+            <span>Linked Nodes</span>
+            <button class="settings-header-button" type="button" onclick="openRemoteNodeModal()"><i class="fa-solid fa-plus" aria-hidden="true"></i> Link Node</button>
         </div>
         <div class="settings-content">
-            <p class="modal-note full-width">Add a remote console using its URL and node token. HTTPS is recommended; HTTP is supported after a warning for trusted private networks such as Tailscale or a VPN. This console applies user roles and server assignments before forwarding management requests.</p>
-            <div id="remote-node-list" class="settings-user-list full-width"><div class="empty-message">Loading linked consoles...</div></div>
+            <p class="modal-note full-width">Add a remote Node using its URL and Node token. HTTPS is recommended; HTTP is supported after a warning for trusted private networks such as Tailscale or a VPN. This hub applies user roles and server assignments before forwarding management requests.</p>
+            <div id="remote-node-list" class="settings-user-list full-width"><div class="empty-message">Loading linked Nodes...</div></div>
         </div>
     </section>
 
     <div id="remote-node-modal" class="modal-backdrop" hidden>
         <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="remote-node-modal-title">
-            <h2 id="remote-node-modal-title">Link Craftarr console</h2>
+            <h2 id="remote-node-modal-title">Link Craftarr Node</h2>
             <input id="remote-node-id" type="hidden">
             <label class="property-field full-width"><span>Display name</span><input id="remote-node-name" maxlength="100" placeholder="Survival network"></label>
             <label class="property-field full-width"><span>Craftarr URL</span><input id="remote-node-url" type="url" inputmode="url" placeholder="https://craftarr.example.com" autocomplete="url"></label>
             <p class="modal-note full-width">HTTPS is recommended. HTTP can be used over a trusted private network; Craftarr will ask you to acknowledge the risk before connecting.</p>
-            <label class="property-field full-width"><span>Node token</span><input id="remote-node-token" type="password" autocomplete="new-password" placeholder="Paste the token from the remote console"></label>
+            <label class="property-field full-width"><span>Node token</span><input id="remote-node-token" type="password" autocomplete="new-password" placeholder="Paste the token from the remote Node"></label>
             <p id="remote-node-save-status" class="modal-note" role="status"></p>
             <div class="modal-actions"><button class="button" type="button" onclick="closeRemoteNodeModal()">Cancel</button><button class="button success" type="button" onclick="saveRemoteNode()">Connect</button></div>
         </div>
@@ -153,7 +153,7 @@
             <a class="settings-header-button" href="/api/web/settings/plugin-monitoring-repository/download"><i class="fa-solid fa-download" aria-hidden="true"></i> Download</a>
         </div>
         <div class="settings-content plugin-monitoring-repository-content">
-            <p class="modal-note full-width">These settings are available to every server and synchronize across linked consoles. Plugin settings can use this shared source or keep a server-specific source. Uploading replaces the shared repository. Use version 1 YAML, up to 256 KiB.</p>
+            <p class="modal-note full-width">These settings are available to every server and synchronize across linked Nodes. Plugin settings can use this shared source or keep a server-specific source. Uploading replaces the shared repository. Use version 1 YAML, up to 256 KiB.</p>
             <label class="property-field full-width" for="plugin-monitoring-repository-editor">
                 <span>Repository file (YAML)</span>
                 <textarea id="plugin-monitoring-repository-editor" rows="20" spellcheck="false" autocapitalize="off"></textarea>
@@ -178,7 +178,7 @@
             </div>
         </div>
         <div class="settings-content">
-            <label class="property-field full-width"><span>Configure for console</span><select id="offsite-node-select" onchange="loadOffsiteBackupSettings()"><option value="">This console</option></select><small>Each console keeps its own off-site credentials and rclone configuration.</small></label>
+            <label class="property-field full-width"><span>Configure for Node</span><select id="offsite-node-select" onchange="loadOffsiteBackupSettings()"><option value="">This Node</option></select><small>Each Node keeps its own off-site credentials and rclone configuration.</small></label>
             <div id="offsite-remote-list" class="offsite-remote-list full-width"><div class="empty-message">Loading destinations...</div></div>
             <div class="offsite-test-content full-width">
                 <label class="offsite-test-content-header">Test Connection</label>
@@ -209,7 +209,7 @@
             <p>rclone is optional. Local backups continue to work when it is not installed.</p>
             <p>The official install command below supports macOS, Ubuntu, Oracle Linux and other Linux/BSD systems with <code>curl</code> and <code>sudo</code> available.</p>
             <ol class="setup-steps">
-                <li><strong>Install rclone on the console server</strong><code>sudo -v; curl https://rclone.org/install.sh | sudo bash</code></li>
+                <li><strong>Install rclone on this Node</strong><code>sudo -v; curl https://rclone.org/install.sh | sudo bash</code></li>
                 <li><strong>Return here and press Refresh</strong><span>The panel will then create and manage the restricted rclone configuration for you.</span></li>
             </ol>
             <p class="modal-note">The installation command is from the official rclone project. Review it at rclone.org/install before running it if required by your security policy.</p>
@@ -223,7 +223,7 @@
     <div id="offsite-remote-modal" class="modal-backdrop" hidden>
         <div class="modal-card offsite-remote-modal" role="dialog" aria-modal="true" aria-labelledby="offsite-remote-title">
             <h2 id="offsite-remote-title">Add off-site destination</h2>
-            <p>Credentials are written to the selected console's private rclone configuration and are never returned to the browser.</p>
+            <p>Credentials are written to the selected Node's private rclone configuration and are never returned to the browser.</p>
             <div class="offsite-remote-form">
                 <label class="property-field"><span>Name</span><input id="offsite-remote-name" maxlength="50" placeholder="family-backups"></label>
                 <label class="property-field"><span>Storage provider</span><select id="offsite-remote-backend" onchange="updateOffsiteRemoteFields()"><option value="b2">Backblaze B2</option><option value="storj">Storj</option><option value="sftp">SFTP server</option></select></label>
@@ -373,7 +373,11 @@
                 <span>Cooldown (minutes)</span>
                 <input id="system-alert-cooldown" type="number" min="1" max="10080" value="60">
             </label>
-            <p class="modal-note full-width">The same thresholds apply to linked consoles. Resource alerts appear in the hub for settings administrators and are emailed through the hub's SMTP settings.</p>
+            <label class="property-field">
+                <span>Node offline email delay (minutes)</span>
+                <input id="node-offline-alert-delay" type="number" min="1" max="1440" value="5">
+            </label>
+            <p class="modal-note full-width">The same resource thresholds apply to linked Nodes. Node outage emails are sent after the configured delay (5 minutes by default). Resource alerts appear in the hub for settings administrators and use the hub's SMTP settings.</p>
             <div class="settings-save-row">
                 <span id="system-alert-save-status" class="muted-small"></span>
                 <button class="button" type="button" onclick="saveSystemAlertSettings()">Save Alerts</button>
@@ -472,16 +476,12 @@
                         <button id="console-rollback-button" class="button" onclick="rollbackConsoleUpdate()" hidden {% if not console_restart_available %}disabled aria-describedby="console-runtime-update-note" title="Rollback is available only for systemd service installations."{% endif %}>
                             Roll back
                         </button>
-
-                        <button id="console-restart-button" class="button" onclick="restartConsoleService()" {% if not console_restart_available %}disabled aria-describedby="console-runtime-update-note" title="{% if is_containerized %}Restart the container from TrueNAS or your container manager.{% else %}Console restart requires a systemd service.{% endif %}"{% endif %}>
-                            Restart Console
-                        </button>
                         {% endif %}
                     </div>
                     {% if user.can("system.manage") and not console_restart_available %}
                     <small id="console-runtime-update-note" class="muted-small">
                         {% if is_containerized %}
-                        This console runs in a Docker container. Update or restart its image through TrueNAS or your container manager.
+                        This Node runs in a Docker container. Update or restart its image through TrueNAS or your container manager.
                         {% else %}
                         In-panel updates and restarts require Craftarr to run as a systemd service.
                         {% endif %}
@@ -491,6 +491,14 @@
                 </div>
 
             </div>
+
+            {% if user.can("system.manage") %}
+            <div class="settings-console-restart-row">
+                <button id="console-restart-button" class="button" onclick="restartConsoleService()" {% if not console_restart_available %}disabled aria-describedby="console-runtime-update-note" title="{% if is_containerized %}Restart the container from TrueNAS or your container manager.{% else %}Console restart requires a systemd service.{% endif %}"{% endif %}>
+                    <i class="fa-solid fa-rotate" aria-hidden="true"></i> Restart Console
+                </button>
+            </div>
+            {% endif %}
         </div>
 
     </section>

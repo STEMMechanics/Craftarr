@@ -95,7 +95,7 @@ def _decrypt_secret(ciphertext: str, label: str) -> str:
         return _cipher().decrypt(ciphertext.encode("ascii")).decode("utf-8")
     except (InvalidToken, UnicodeError, ValueError) as error:
         raise ValueError(
-            f"The saved {label} cannot be decrypted. Check that this console's "
+            f"The saved {label} cannot be decrypted. Check that this Node's "
             "CRAFTARR_CONSOLE_SECRET has not changed."
         ) from error
 

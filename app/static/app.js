@@ -231,8 +231,23 @@ window.fetch = async (...args) => {
     const request = args[0];
     const options = args[1] || {};
     const method = String(options.method || request?.method || "GET").toUpperCase();
+    if (!response.ok) {
+      response.clone().json().then((data) => {
+        const requestUrl = typeof request === "string" ? request : request?.url || "";
+        const pathname = new URL(requestUrl, window.location.href).pathname;
+        const serverMatch = pathname.match(/\/api\/web\/servers\/([^/]+)/);
+        if (!serverMatch) return;
+        const serverId = decodeURIComponent(serverMatch[1]);
+        if (data?.node_offline === true) {
+          markServerNodeOffline(serverId);
+        } else if (data?.function_unavailable === true) {
+          markServerFunctionUnavailable(serverId, data.error);
+        }
+      }).catch(() => {});
+    }
     if (!new Set(["GET", "HEAD", "OPTIONS"]).has(method)) {
       response.clone().json().then((data) => {
+        if (data?.function_unavailable === true) return;
         if (data?.suppress_toast) return;
         const message = data?.message || data?.error;
         if (!response.ok) {
@@ -936,10 +951,10 @@ async function refreshNotifications(announceNew = true) {
         );
       }
       if (offlineNodes.length) {
-        showToast(offlineNodes.length === 1 ? offlineNodes[0].title : `${offlineNodes.length} linked consoles are unreachable.`, "warning", 7000);
+        showToast(offlineNodes.length === 1 ? offlineNodes[0].title : `${offlineNodes.length} linked Nodes are unreachable.`, "warning", 7000);
       }
       if (systemAlerts.length) {
-        showToast(systemAlerts.length === 1 ? systemAlerts[0].title : `${systemAlerts.length} linked hosts have high resource usage.`, "warning", 7000);
+        showToast(systemAlerts.length === 1 ? systemAlerts[0].title : `${systemAlerts.length} linked Nodes have high resource usage.`, "warning", 7000);
       }
     }
     previousUpdateNotificationIds = currentIds;
@@ -1055,60 +1070,91 @@ document.addEventListener("keydown", (event) => {
 
 window.addEventListener("resize", closeMorePages);
 
-async function updateSystemStats() {
-  const cpuValue = document.getElementById("cpu-value");
-  const memoryValue = document.getElementById("memory-value");
-  const storageValue = document.getElementById("storage-value");
+let hardwareStatsPending = false;
+let hardwareNodesLoading = false;
 
-  if (!cpuValue || !memoryValue || !storageValue) {
-    return;
-  }
-
+async function loadHardwareNodeOptions() {
+  const page = document.querySelector(".system-page");
+  const select = document.getElementById("hardware-node-select");
+  if (!page || !select || select.dataset.nodesLoaded === "true" || hardwareNodesLoading) return;
+  hardwareNodesLoading = true;
   try {
-    const response = await fetch("/api/system/stats");
+    const response = await fetch("/api/web/hardware/nodes");
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Nodes could not be loaded.");
+    const nodes = data.nodes || [];
+    select.innerHTML = nodes.map((node) => `
+      <option value="${escapeHtml(node.node_id)}">${escapeHtml(node.name)}${node.offline ? " · offline" : ""}</option>
+    `).join("");
+    const selectedNodeId = page.dataset.selectedNodeId;
+    const localNodeId = page.dataset.localNodeId;
+    select.value = nodes.some((node) => node.node_id === selectedNodeId)
+      ? selectedNodeId
+      : localNodeId;
+    select.dataset.nodesLoaded = "true";
+    select.addEventListener("change", updateSystemStats);
+    await updateSystemStats();
+  } catch (error) {
+    select.innerHTML = `<option value="">${escapeHtml(error.message || "Nodes could not be loaded.")}</option>`;
+    showHardwareUnavailable(error.message || "Node list unavailable");
+  } finally {
+    hardwareNodesLoading = false;
+  }
+}
 
+function showHardwareUnavailable(message, nodeOffline = false) {
+  const display = nodeOffline ? "Node offline, try again later" : message;
+  const javaList = document.getElementById("system-java-list");
+  const instances = document.getElementById("system-instance-list");
+  if (javaList) javaList.innerHTML = `<div class="empty-message">${escapeHtml(display)}</div>`;
+  if (instances) instances.innerHTML = `<div class="empty-message">${escapeHtml(display)}</div>`;
+  const warning = document.getElementById("hardware-node-version-warning");
+  if (warning) {
+    warning.hidden = false;
+    warning.textContent = display;
+  }
+  ["cpu-value", "memory-value", "storage-value", "minecraft-running", "minecraft-players"].forEach((id) => setText(id, "—"));
+  ["cpu-detail", "memory-detail", "storage-detail", "minecraft-installed"].forEach((id) => setText(id, display));
+}
+
+async function updateSystemStats() {
+  const page = document.querySelector(".system-page");
+  const select = document.getElementById("hardware-node-select");
+  if (!page || !select || !select.value || hardwareStatsPending) return;
+  hardwareStatsPending = true;
+  try {
+    const nodeId = select.value;
+    const response = await fetch(`/api/web/hardware/stats?node_id=${encodeURIComponent(nodeId)}`);
+    const stats = await response.json();
     if (!response.ok) {
+      showHardwareUnavailable(stats.error || "Node hardware could not be loaded.", stats.node_offline === true);
       return;
     }
 
-    const stats = await response.json();
+    const localVersion = page.dataset.appVersion;
+    const nodeVersion = stats.node?.app_version || stats.app_version;
+    const warning = document.getElementById("hardware-node-version-warning");
+    if (warning) {
+      const versionDiffers = !nodeVersion || nodeVersion !== localVersion;
+      warning.hidden = !versionDiffers;
+      warning.textContent = !nodeVersion
+        ? "This Node did not report its Craftarr version. Some functions may not be available on this Node."
+        : `This Node runs Craftarr ${nodeVersion}; this hub runs Craftarr ${localVersion}. Some functions may not be available on this Node.`;
+    }
 
     document.getElementById("cpu-value").textContent = stats.cpu.percent + "%";
-
     document.getElementById("cpu-bar").style.width = stats.cpu.percent + "%";
-
-    document.getElementById("cpu-detail").textContent = stats.cpu.cores +
-      " logical cores";
-
-    document.getElementById("memory-value").textContent = stats.memory.percent +
-      "%";
-
-    document.getElementById("memory-bar").style.width = stats.memory.percent +
-      "%";
-
-    document.getElementById("memory-detail").textContent = stats.memory.used +
-      " GB / " +
-      stats.memory.total + " GB";
-
-    document.getElementById("storage-value").textContent =
-      stats.storage.percent + "%";
-
-    document.getElementById("storage-bar").style.width = stats.storage.percent +
-      "%";
-
-    document.getElementById("storage-detail").textContent = stats.storage.used +
-      " GB / " +
-      stats.storage.total + " GB";
+    document.getElementById("cpu-detail").textContent = stats.cpu.cores + " logical cores";
+    document.getElementById("memory-value").textContent = stats.memory.percent + "%";
+    document.getElementById("memory-bar").style.width = stats.memory.percent + "%";
+    document.getElementById("memory-detail").textContent = `${stats.memory.used} GB / ${stats.memory.total} GB`;
+    document.getElementById("storage-value").textContent = stats.storage.percent + "%";
+    document.getElementById("storage-bar").style.width = stats.storage.percent + "%";
+    document.getElementById("storage-detail").textContent = `${stats.storage.used} GB / ${stats.storage.total} GB`;
 
     const minecraft = stats.minecraft || { instances: [] };
-    setText(
-      "minecraft-running",
-      `${minecraft.running} / ${minecraft.installed}`,
-    );
-    setText(
-      "minecraft-installed",
-      `${minecraft.running} running · ${minecraft.installed} installed`,
-    );
+    setText("minecraft-running", `${minecraft.running} / ${minecraft.installed}`);
+    setText("minecraft-installed", `${minecraft.running} running · ${minecraft.installed} installed`);
     setText("minecraft-players", minecraft.players_online);
     const javaList = document.getElementById("system-java-list");
     if (javaList) {
@@ -1121,41 +1167,31 @@ async function updateSystemStats() {
     const instances = document.getElementById("system-instance-list");
     if (instances) {
       instances.innerHTML = minecraft.instances.length
-        ? minecraft.instances.map((server) => `
-                    <div class="system-instance-row">
-                      <div><span class="server-status-dot ${
-          statusClass(server.state || (server.running ? "running" : "stopped"))
-        }" data-server-id="${Number(server.id)}" aria-hidden="true"></span><strong>${
-          escapeHtml(server.name)
-        }</strong>
-                      <small class="system-instance-state">${
-          escapeHtml(serverStateLabel(server.state || (server.running ? "running" : "stopped"), server.console_available))
-        }</small><small>Paper ${
-          escapeHtml(server.version || "unknown")
-        } · Java ${server.java || "unknown"} · ${server.players} online</small></div>
-                      <button class="server-control-button ${
-          server.state === "stopped" || (!server.state && !server.running) ? "start" : "stop"
-        }" aria-label="${server.state === "stopped" || (!server.state && !server.running) ? "Start" : "Stop"} ${escapeHtml(server.name)}" title="${server.state === "stopped" || (!server.state && !server.running) ? "Start" : "Stop"} server" ${
-          server.state === "stopped" || (!server.state && !server.running)
-            ? ""
-            : ((server.state || (server.running ? "running" : "stopped")) === "running" && server.console_available !== false ? "" : "disabled")
-        } onclick="systemServerAction(${Number(server.id)}, '${
-          server.state === "stopped" || (!server.state && !server.running) ? "start" : "stop"
-        }', this)"><i class="fa-solid fa-${server.state === "stopped" || (!server.state && !server.running) ? "play" : "stop"}" aria-hidden="true"></i></button>
-                    </div>`).join("")
+        ? minecraft.instances.map((server) => {
+          const id = String(server.id);
+          const state = server.state || (server.running ? "running" : "stopped");
+          const startable = state === "stopped";
+          const action = startable ? "start" : "stop";
+          const actionLabel = startable ? "Start" : "Stop";
+          const disabled = startable ? "" : (state === "running" && server.console_available !== false ? "" : "disabled");
+          return `
+            <div class="system-instance-row">
+              <div><span class="server-status-dot ${statusClass(state)}" data-server-id="${escapeHtml(id)}" aria-hidden="true"></span><strong>${escapeHtml(server.name)}</strong>
+                <small class="system-instance-state">${escapeHtml(serverStateLabel(state, server.console_available))}</small><small>Paper ${escapeHtml(server.version || "unknown")} · Java ${escapeHtml(server.java || "unknown")} · ${Number(server.players) || 0} online</small></div>
+              <button class="server-control-button ${action}" ${disabled} aria-label="${actionLabel} ${escapeHtml(server.name)}" title="${actionLabel} server" onclick="systemServerAction('${escapeJsString(id)}', '${action}', this)"><i class="fa-solid fa-${startable ? "play" : "stop"}" aria-hidden="true"></i></button>
+            </div>`;
+        }).join("")
         : '<div class="empty-message">No accessible Minecraft instances.</div>';
     }
   } catch (error) {
-    console.error("Stats error:", error);
+    showHardwareUnavailable(error.message || "Node hardware could not be loaded.");
+  } finally {
+    hardwareStatsPending = false;
   }
 }
 
-updateSystemStats();
-
-setInterval(
-  updateSystemStats,
-  3000,
-);
+loadHardwareNodeOptions();
+setInterval(updateSystemStats, 5000);
 
 document.body.addEventListener(
   "htmx:afterSwap",
@@ -1175,6 +1211,7 @@ document.body.addEventListener(
     updateActiveNavigation();
     updateDocumentTitle();
 
+    loadHardwareNodeOptions();
     updateSystemStats();
     updateConsolePage();
     updateServerStatus();
@@ -1208,10 +1245,12 @@ function statusClass(state) {
     stopped: "is-offline",
     starting: "is-starting",
     stopping: "is-stopping",
+    node_offline: "is-node-offline",
   })[state] || "is-unknown";
 }
 
 function serverStateLabel(state, consoleAvailable = true) {
+  if (state === "node_offline") return "Node offline";
   if (state === "starting") return "Starting…";
   if (state === "stopping") return "Shutting down…";
   if (state === "stopped") return "Offline";
@@ -1221,6 +1260,7 @@ function serverStateLabel(state, consoleAvailable = true) {
 }
 
 function normalizeServerState(data) {
+  if (data?.node_offline === true || data?.state === "node_offline") return "node_offline";
   if (["running", "stopped", "starting", "stopping"].includes(data?.state)) {
     return data.state;
   }
@@ -1232,15 +1272,75 @@ function setOverviewServerState(state, consoleAvailable = true) {
   const pill = document.getElementById("overview-server-state");
   const label = document.getElementById("overview-server-state-text");
   if (!pill || !label) return;
-  pill.classList.remove("is-online", "is-offline", "is-starting", "is-stopping", "is-unknown");
+  pill.classList.remove("is-online", "is-offline", "is-starting", "is-stopping", "is-node-offline", "is-unknown");
   pill.classList.add(statusClass(state));
   label.textContent = serverStateLabel(state, consoleAvailable);
+}
+
+function markServerNodeOffline(serverId) {
+  const page = document.querySelector("#page-content > [data-server-id]");
+  if (!page || page.dataset.serverId !== serverId) return;
+  page.dataset.nodeOffline = "true";
+
+  let notice = page.querySelector(".server-node-offline-notice");
+  if (!notice) {
+    notice = document.createElement("div");
+    notice.className = "server-node-offline-notice";
+    notice.setAttribute("role", "status");
+    notice.setAttribute("aria-live", "polite");
+    notice.textContent = "Node offline, try again later";
+    page.prepend(notice);
+  }
+
+  document.querySelectorAll("#page-content button, #page-content input, #page-content select, #page-content textarea").forEach((control) => {
+    control.disabled = true;
+  });
+  document.querySelectorAll("#page-content .file-upload-button, #page-content .files-page a[data-edit-path], #page-content .files-page a[href*='/files/edit']").forEach((control) => {
+    control.classList.add("node-offline-disabled");
+    control.setAttribute("aria-disabled", "true");
+    control.setAttribute("tabindex", "-1");
+    control.onclick = (event) => event.preventDefault();
+  });
+  const files = page.querySelector("#file-browser");
+  if (files) files.replaceChildren(Object.assign(document.createElement("div"), {
+    className: "empty-message node-offline-empty",
+    textContent: "Node offline, try again later",
+  }));
+  const plugins = page.querySelector("#plugin-list");
+  if (plugins) plugins.replaceChildren(Object.assign(document.createElement("div"), {
+    className: "empty-message node-offline-empty",
+    textContent: "Node offline, try again later",
+  }));
+  const pluginCount = page.querySelector("#plugin-count");
+  if (pluginCount) pluginCount.textContent = "Node offline";
+  page.querySelectorAll(".server-status-dot").forEach((dot) => {
+    dot.classList.remove("is-online", "is-offline", "is-starting", "is-stopping", "is-unknown", "running");
+    dot.classList.add("is-node-offline");
+    dot.title = "Node offline";
+  });
+}
+
+function markServerFunctionUnavailable(serverId, message) {
+  const page = document.querySelector("#page-content > [data-server-id]");
+  if (!page || page.dataset.serverId !== serverId) return;
+  let notice = page.querySelector(".server-function-unavailable-notice");
+  if (!notice) {
+    notice = document.createElement("div");
+    notice.className = "server-function-unavailable-notice";
+    notice.setAttribute("role", "status");
+    notice.setAttribute("aria-live", "polite");
+    page.prepend(notice);
+  }
+  notice.textContent = message || "This function is not available on the selected server Node. Some functions may require a newer Craftarr version.";
 }
 
 async function updateServerStatus() {
   const startButton = document.getElementById("dashboard-start");
   const restartButton = document.getElementById("dashboard-restart");
   const stopButton = document.getElementById("dashboard-stop");
+  const topbarStart = document.getElementById("topbar-server-start");
+  const topbarStop = document.getElementById("topbar-server-stop");
+  const topbarRestart = document.getElementById("topbar-server-restart");
   const topbar = document.querySelector(".topbar");
   const page = document.querySelector("#page-content > [data-server-id]");
   const serverId = topbar?.dataset.serverId || page?.dataset.serverId;
@@ -1252,16 +1352,28 @@ async function updateServerStatus() {
     if (startButton) startButton.disabled = state !== "stopped";
     if (stopButton) stopButton.disabled = !consoleAvailable || state !== "running";
     if (restartButton) restartButton.disabled = !consoleAvailable || state !== "running";
+    if (topbarStart) topbarStart.disabled = state !== "stopped";
+    if (topbarStop) topbarStop.disabled = !consoleAvailable || state !== "running";
+    if (topbarRestart) topbarRestart.disabled = !consoleAvailable || state !== "running";
+
+    const nodeOffline = state === "node_offline";
+    for (const control of [startButton, stopButton, restartButton, topbarStart, topbarStop, topbarRestart]) {
+      if (control && nodeOffline) control.disabled = true;
+    }
 
     if (startButton) {
-      startButton.title = state === "starting"
+      startButton.title = nodeOffline
+        ? "Node offline"
+        : state === "starting"
         ? "Server is starting"
         : state === "stopping"
           ? "Server is shutting down"
           : "Start server";
     }
     if (stopButton) {
-      stopButton.title = state === "stopping"
+      stopButton.title = nodeOffline
+        ? "Node offline"
+        : state === "stopping"
         ? "Server is shutting down"
         : state === "starting"
           ? "Wait for the server to finish starting"
@@ -1270,14 +1382,19 @@ async function updateServerStatus() {
             : "Stop server";
     }
     if (restartButton) {
-      restartButton.title = state === "starting"
+      restartButton.title = nodeOffline
+        ? "Node offline"
+        : state === "starting"
         ? "Wait for the server to finish starting"
         : state === "stopping"
           ? "Server is shutting down"
           : !consoleAvailable
             ? "Server console unavailable"
-            : "Restart server";
+          : "Restart server";
     }
+    if (topbarStart) topbarStart.title = nodeOffline ? "Node offline" : "Start server";
+    if (topbarStop) topbarStop.title = nodeOffline ? "Node offline" : "Stop server";
+    if (topbarRestart) topbarRestart.title = nodeOffline ? "Node offline" : "Restart server";
   };
 
   try {
@@ -1294,6 +1411,18 @@ async function updateServerStatus() {
     const data = await response.json();
 
     const state = normalizeServerState(data);
+    if (state === "node_offline") {
+      setControls(state, false);
+      setOverviewServerState(state, false);
+      markServerNodeOffline(serverId);
+      return;
+    }
+    const activePage = document.querySelector("#page-content > [data-server-id]");
+    if (activePage?.dataset.serverId === serverId
+      && (activePage.dataset.nodeOffline === "true" || activePage.classList.contains("node-offline-page"))) {
+      window.location.reload();
+      return;
+    }
     const consoleAvailable = data.console_available !== false;
     const confirmedRunning = state === "running" ? true : state === "stopped" ? false : null;
     if (confirmedRunning !== null) {
@@ -1349,7 +1478,7 @@ async function updateServerDots() {
       if (!response.ok) {
         const payload = await response.json().catch(() => null);
         const reason = payload?.error || payload?.detail || `HTTP ${response.status}`;
-        const classes = ["is-online", "is-offline", "is-starting", "is-stopping", "is-unknown"];
+        const classes = ["is-online", "is-offline", "is-starting", "is-stopping", "is-node-offline", "is-unknown"];
         const message = `Status unavailable: ${reason}`;
 
         dots
@@ -1381,7 +1510,7 @@ async function updateServerDots() {
       const data = await response.json();
       const state = normalizeServerState(data);
       if (state === "unknown") continue;
-      const classes = ["is-online", "is-offline", "is-starting", "is-stopping", "is-unknown"];
+      const classes = ["is-online", "is-offline", "is-starting", "is-stopping", "is-node-offline", "is-unknown"];
 
       dots
         .filter((dot) => dot.dataset.serverId === serverId)
@@ -1409,9 +1538,9 @@ async function updateServerDots() {
         const button = row?.querySelector(".server-control-button");
         if (button) {
           const action = button.classList.contains("start") ? "start" : "stop";
-          button.disabled = action === "start"
+          button.disabled = state === "node_offline" || (action === "start"
             ? state !== "stopped"
-            : data.console_available === false || state !== "running";
+            : data.console_available === false || state !== "running");
         }
       });
 
@@ -1420,6 +1549,7 @@ async function updateServerDots() {
       ).forEach((label) => {
         label.textContent = serverStateLabel(state, data.console_available);
       });
+      if (state === "node_offline") markServerNodeOffline(serverId);
     } catch {
       // Keep the last confirmed state when one status poll fails.
     }
@@ -1763,12 +1893,12 @@ async function updatePluginsPage(forceDuplicatePrompt = false) {
     const response = await fetch(
       `/api/web/servers/${serverId}/plugins`,
     );
-
-    if (!response.ok) {
-      throw new Error();
-    }
-
     const data = await response.json();
+    if (data.node_offline === true) {
+      markServerNodeOffline(serverId);
+      return;
+    }
+    if (!response.ok) throw new Error(data.error || "Unable to load plugins.");
 
     const currentPage = document.querySelector(".plugins-page");
     if (!page.isConnected || currentPage?.dataset.serverId !== serverId) {
@@ -5222,6 +5352,13 @@ async function updatePropertiesPage() {
     const p = data.properties;
     const startup = data.startup || {};
     const management = data.management || {};
+    const pauseWhenEmptyField = document.getElementById("property-pause-when-empty-field");
+    if (pauseWhenEmptyField) {
+      pauseWhenEmptyField.hidden = data.paper_pause_supported !== true;
+      if (data.paper_pause_supported === true) {
+        setValue("property-pause-when-empty-seconds", p.pause_when_empty_seconds ?? -1);
+      }
+    }
 
     setValue("property-server-name", management.name || "");
     const instanceDirectory = document.getElementById("property-instance-directory");
@@ -5701,6 +5838,11 @@ async function saveServerProperties(
     ),
   };
 
+  const pauseWhenEmptyField = document.getElementById("property-pause-when-empty-field");
+  if (pauseWhenEmptyField && !pauseWhenEmptyField.hidden) {
+    payload.pause_when_empty_seconds = numberOf("property-pause-when-empty-seconds");
+  }
+
   const response = await fetch(
     `/api/web/servers/${page.dataset.serverId}/properties`,
     {
@@ -5937,6 +6079,197 @@ function serverLogPageUrl(serverId, page, selectedLog = "") {
   return `/servers/${serverId}/logs?${params}`;
 }
 
+const serverLogManifests = new Map();
+
+function serverLogSelectionStorageKey(serverId) {
+  return `craftarr.selectedServerLogs.${serverId}`;
+}
+
+function selectedServerLogNames(serverId) {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(serverLogSelectionStorageKey(serverId)) || "[]");
+    return new Set(Array.isArray(saved) ? saved.filter((name) => typeof name === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveSelectedServerLogNames(serverId, names) {
+  try {
+    sessionStorage.setItem(serverLogSelectionStorageKey(serverId), JSON.stringify([...names]));
+  } catch (error) {
+    console.debug("Unable to persist selected log files", error);
+  }
+}
+
+function updateServerLogSelectionUI() {
+  const page = document.querySelector(".server-logs-page");
+  if (!page) return;
+  const serverId = page.dataset.serverId;
+  const manifestState = serverLogManifests.get(serverId);
+  const names = manifestState?.files || [];
+  const selected = selectedServerLogNames(serverId);
+  const availableSelected = names.filter((name) => selected.has(name));
+  const checkboxes = Array.from(document.querySelectorAll("[data-log-checkbox]"));
+  checkboxes.forEach((checkbox) => {
+    checkbox.checked = selected.has(checkbox.dataset.logCheckbox);
+    checkbox.disabled = manifestState?.available !== true;
+  });
+
+  const selectAll = document.getElementById("server-log-select-all");
+  if (selectAll) {
+    selectAll.checked = names.length > 0 && availableSelected.length === names.length;
+    selectAll.indeterminate = availableSelected.length > 0 && availableSelected.length < names.length;
+    selectAll.disabled = manifestState?.available !== true || names.length === 0;
+  }
+  const count = document.getElementById("server-log-selection-count");
+  if (count) {
+    count.textContent = manifestState?.available === false
+      ? "Bulk download is not available on this Node."
+      : availableSelected.length
+        ? `${availableSelected.length} of ${names.length} files selected`
+        : "No files selected";
+  }
+  const download = document.getElementById("server-log-download-selected");
+  if (download) download.disabled = manifestState?.available !== true || availableSelected.length === 0;
+}
+
+async function loadServerLogManifest(page) {
+  const serverId = page.dataset.serverId;
+  try {
+    const response = await fetch(`/api/web/servers/${serverId}/logs/manifest`, {cache: "no-store"});
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (data.function_unavailable === true) {
+        markServerFunctionUnavailable(serverId, data.error);
+      }
+      throw new Error(data.error || "Unable to list log files.");
+    }
+    const files = Array.isArray(data.files) ? data.files.filter((name) => typeof name === "string") : [];
+    serverLogManifests.set(serverId, {available: true, files});
+    const selected = selectedServerLogNames(serverId);
+    saveSelectedServerLogNames(serverId, new Set([...selected].filter((name) => files.includes(name))));
+  } catch (error) {
+    console.debug("Unable to load the server log manifest", error);
+    serverLogManifests.set(serverId, {available: false, files: []});
+  }
+  updateServerLogSelectionUI();
+}
+
+function initializeServerLogSelection() {
+  const page = document.querySelector(".server-logs-page");
+  if (!page) return;
+  const serverId = page.dataset.serverId;
+  const state = serverLogManifests.get(serverId);
+  if (!page.dataset.selectionInitialized) {
+    page.dataset.selectionInitialized = "true";
+    if (state) updateServerLogSelectionUI();
+    else serverLogManifests.set(serverId, {available: false, files: []});
+    loadServerLogManifest(page);
+  } else {
+    updateServerLogSelectionUI();
+  }
+}
+
+document.body.addEventListener("change", (event) => {
+  const page = document.querySelector(".server-logs-page");
+  const target = event.target;
+  if (!page || !(target instanceof HTMLInputElement)) return;
+  const serverId = page.dataset.serverId;
+  const manifestState = serverLogManifests.get(serverId);
+  const selected = selectedServerLogNames(serverId);
+  if (target.id === "server-log-select-all") {
+    if (target.checked && manifestState?.available) {
+      manifestState.files.forEach((name) => selected.add(name));
+    } else {
+      selected.clear();
+    }
+  } else if (target.dataset.logCheckbox) {
+    if (target.checked) selected.add(target.dataset.logCheckbox);
+    else selected.delete(target.dataset.logCheckbox);
+  } else {
+    return;
+  }
+  saveSelectedServerLogNames(serverId, selected);
+  updateServerLogSelectionUI();
+});
+
+async function downloadSelectedServerLogs() {
+  const page = document.querySelector(".server-logs-page");
+  if (!page) return;
+  const serverId = page.dataset.serverId;
+  const manifestState = serverLogManifests.get(serverId);
+  const selected = [...selectedServerLogNames(serverId)].filter((name) => manifestState?.files.includes(name));
+  if (!selected.length) return;
+  const button = document.getElementById("server-log-download-selected");
+  if (button) button.disabled = true;
+  try {
+    const response = await nativeFetch(`/api/web/servers/${serverId}/logs/download`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({files: selected}),
+    });
+    if (handleAuthenticationResponse(response)) return;
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      const message = data.error || "The selected log files could not be downloaded.";
+      if (data.function_unavailable === true) markServerFunctionUnavailable(serverId, message);
+      throw new Error(message);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "server-logs.zip";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (error) {
+    showToast(error.message || "The selected log files could not be downloaded.", "error");
+  } finally {
+    if (button?.isConnected) button.disabled = false;
+    updateServerLogSelectionUI();
+  }
+}
+
+document.body.addEventListener("htmx:afterSwap", initializeServerLogSelection);
+initializeServerLogSelection();
+
+function createServerLogRow(log, pageElement) {
+  const row = document.createElement("div");
+  row.className = `server-log-row${log.name === pageElement.dataset.selectedLog ? " active" : ""}`;
+  row.dataset.logName = log.name;
+
+  const label = document.createElement("label");
+  label.className = "server-log-checkbox";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.dataset.logCheckbox = log.name;
+  checkbox.setAttribute("aria-label", `Select ${log.name}`);
+  label.appendChild(checkbox);
+
+  const link = document.createElement("a");
+  link.className = "server-log-link";
+  link.href = serverLogPageUrl(pageElement.dataset.serverId, Number(pageElement.dataset.logsPage) || 1, log.name);
+  link.setAttribute("hx-get", link.href);
+  link.setAttribute("hx-target", "#page-content");
+  link.setAttribute("hx-push-url", "true");
+  const name = document.createElement("span");
+  name.className = "server-log-name";
+  const icon = document.createElement("i");
+  icon.className = "fa-regular fa-file-lines";
+  icon.setAttribute("aria-hidden", "true");
+  name.append(icon, document.createTextNode(log.name));
+  const modified = document.createElement("span");
+  modified.textContent = log.modified_display;
+  const size = document.createElement("span");
+  size.textContent = log.size_display;
+  link.append(name, modified, size);
+  row.append(label, link);
+  return row;
+}
+
 async function updateServerLogList() {
   const pageElement = document.querySelector(".server-logs-page");
   const rows = document.getElementById("server-log-rows");
@@ -5951,23 +6284,7 @@ async function updateServerLogList() {
     pageElement.dataset.logsPage = String(data.page);
     rows.replaceChildren();
     for (const log of data.logs || []) {
-      const link = document.createElement("a");
-      link.className = `server-log-row${log.name === pageElement.dataset.selectedLog ? " active" : ""}`;
-      link.href = serverLogPageUrl(pageElement.dataset.serverId, data.page, log.name);
-      link.setAttribute("hx-get", link.href);
-      link.setAttribute("hx-target", "#page-content");
-      link.setAttribute("hx-push-url", "true");
-      const name = document.createElement("span");
-      name.className = "server-log-name";
-      const icon = document.createElement("i");
-      icon.className = "fa-regular fa-file-lines";
-      name.append(icon, document.createTextNode(log.name));
-      const modified = document.createElement("span");
-      modified.textContent = log.modified_display;
-      const size = document.createElement("span");
-      size.textContent = log.size_display;
-      link.append(name, modified, size);
-      rows.appendChild(link);
+      rows.appendChild(createServerLogRow(log, pageElement));
     }
     if (!(data.logs || []).length) {
       const empty = document.createElement("div");
@@ -5976,9 +6293,14 @@ async function updateServerLogList() {
       rows.appendChild(empty);
     }
     if (window.htmx) window.htmx.process(rows);
+    updateServerLogSelectionUI();
 
     const count = document.getElementById("server-log-count");
     if (count) count.textContent = `${data.total_logs} files`;
+    const manifestState = serverLogManifests.get(pageElement.dataset.serverId);
+    if (manifestState?.available === true && Number(data.total_logs) !== manifestState.files.length) {
+      loadServerLogManifest(pageElement);
+    }
     const pagination = document.getElementById("server-log-pagination");
     if (pagination) pagination.hidden = data.total_pages <= 1;
     const label = document.getElementById("server-log-page-label");
@@ -6754,7 +7076,7 @@ async function loadNodeAccessTokenStatus() {
     if (!response.ok) throw new Error(data.error || "Token status could not be loaded.");
     nodeAccessTokenActive = Boolean(data.active);
     if (!nodeAccessTokenActive) {
-      status.textContent = "No token exists yet. Generate one to link this console to a hub.";
+    status.textContent = "No token exists yet. Generate one to link this Node to a hub.";
       return;
     }
     if (data.token_available && data.token) {
@@ -6813,20 +7135,21 @@ async function loadRemoteNodes() {
   try {
     const response = await fetch("/api/web/settings/nodes");
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Linked consoles could not be loaded.");
+    if (!response.ok) throw new Error(data.error || "Linked Nodes could not be loaded.");
     remoteNodeState = data.nodes || [];
+    const localVersion = document.querySelector(".settings-page")?.dataset.appVersion;
     updateOffsiteConsoleOptions();
     list.innerHTML = remoteNodeState.length ? remoteNodeState.map((node) => `
       <div class="settings-user-row remote-node-row">
-        <div><strong>${escapeHtml(node.name)}</strong><small>${escapeHtml(node.base_url)} · ${Number(node.server_count)} server${Number(node.server_count) === 1 ? "" : "s"}${node.last_connected_at ? ` · Last contact ${escapeHtml(new Date(node.last_connected_at).toLocaleString())}` : ""}${node.last_error ? ` · <span class="remote-node-error">${escapeHtml(node.last_error)}</span>` : ""}</small></div>
+        <div><strong>${escapeHtml(node.name)}</strong><small>${escapeHtml(node.base_url)} · Craftarr ${escapeHtml(node.app_version || "version unknown")} · ${Number(node.server_count)} server${Number(node.server_count) === 1 ? "" : "s"}${node.app_version !== localVersion ? ' · <span class="remote-node-version-warning">Some functions may not be available because this Node uses a different version.</span>' : ""}${node.offline ? ' · <span class="remote-node-error">Node offline</span>' : ""}${node.last_connected_at ? ` · Last contact ${escapeHtml(new Date(node.last_connected_at).toLocaleString())}` : ""}${node.last_error && !node.offline ? ` · <span class="remote-node-error">${escapeHtml(node.last_error)}</span>` : ""}</small></div>
         <div class="remote-node-actions">
           <button class="icon-button" type="button" aria-label="Refresh ${escapeHtml(node.name)}" title="Refresh server list" onclick="refreshRemoteNode('${escapeJsString(node.node_id)}')"><i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i></button>
           <button class="button" type="button" onclick="openRemoteNodeModal('${escapeJsString(node.node_id)}')">Edit</button>
           <button class="button danger" type="button" onclick="deleteRemoteNode('${escapeJsString(node.node_id)}', '${escapeJsString(node.name)}')">Remove</button>
         </div>
-      </div>`).join("") : '<div class="empty-message">No linked Craftarr consoles yet.</div>';
+    </div>`).join("") : '<div class="empty-message">No linked Nodes yet.</div>';
   } catch (error) {
-    list.innerHTML = `<div class="empty-message">${escapeHtml(error.message || "Linked consoles could not be loaded.")}</div>`;
+    list.innerHTML = `<div class="empty-message">${escapeHtml(error.message || "Linked Nodes could not be loaded.")}</div>`;
   }
 }
 
@@ -6834,7 +7157,7 @@ function updateOffsiteConsoleOptions() {
   const select = document.getElementById("offsite-node-select");
   if (!select) return;
   const selected = select.value;
-  select.innerHTML = '<option value="">This console</option>' + remoteNodeState.map((node) =>
+  select.innerHTML = '<option value="">This Node</option>' + remoteNodeState.map((node) =>
     `<option value="${escapeHtml(node.node_id)}">${escapeHtml(node.name)}</option>`,
   ).join("");
   if (remoteNodeState.some((node) => node.node_id === selected)) select.value = selected;
@@ -6855,8 +7178,8 @@ function openRemoteNodeModal(nodeId = "") {
   document.getElementById("remote-node-url").value = node?.base_url || "";
   const token = document.getElementById("remote-node-token");
   token.value = "";
-  token.placeholder = node ? "Leave blank to keep the saved token" : "Paste the token from the remote console";
-  document.getElementById("remote-node-modal-title").textContent = node ? "Edit linked console" : "Link Craftarr console";
+  token.placeholder = node ? "Leave blank to keep the saved token" : "Paste the token from the remote Node";
+  document.getElementById("remote-node-modal-title").textContent = node ? "Edit Node" : "Link Craftarr Node";
   document.getElementById("remote-node-save-status").textContent = node
     ? "Changing the token does not change the node ID or server assignments."
     : "The connection is checked before it is saved.";
@@ -6891,12 +7214,12 @@ async function saveRemoteNode() {
       body: JSON.stringify(payload),
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Console could not be linked.");
+    if (!response.ok) throw new Error(data.error || "Node could not be linked.");
     closeRemoteNodeModal();
     await loadRemoteNodes();
     window.location.reload();
   } catch (error) {
-    status.textContent = error.message || "Console could not be linked.";
+    status.textContent = error.message || "Node could not be linked.";
   }
 }
 
@@ -6913,10 +7236,10 @@ async function refreshRemoteNode(nodeId) {
 }
 
 async function deleteRemoteNode(nodeId, name) {
-  if (!confirm(`Unlink ${name}? Its server assignments will be removed from this console.`)) return;
+  if (!confirm(`Unlink ${name}? Its server assignments will be removed from this hub.`)) return;
   const response = await fetch(`/api/web/settings/nodes/${encodeURIComponent(nodeId)}`, { method: "DELETE" });
   const data = await response.json();
-  if (!response.ok) return alert(data.error || "Console could not be unlinked.");
+  if (!response.ok) return alert(data.error || "Node could not be unlinked.");
   await loadRemoteNodes();
   window.location.reload();
 }
@@ -6930,7 +7253,7 @@ async function loadOffsiteBackupSettings() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Off-site backups could not be checked.");
     const selectedNode = remoteNodeState.find((node) => node.node_id === document.getElementById("offsite-node-select")?.value);
-    const consoleLabel = selectedNode ? `${selectedNode.name}: ` : "This console: ";
+    const consoleLabel = selectedNode ? `${selectedNode.name}: ` : "This Node: ";
     status.textContent = data.available
       ? `${consoleLabel}${data.remotes.length} destination${data.remotes.length === 1 ? "" : "s"} configured`
       : data.reason === "not_installed"
@@ -7021,7 +7344,7 @@ function pluginRepositorySyncMessage(data) {
   const errors = Array.isArray(data.sync_errors) ? data.sync_errors : [];
   if (errors.length) return ` Sync is pending for: ${errors.join(", ")}.`;
   const count = Number(data.linked_nodes) || 0;
-  return count ? ` Synchronized with ${count} linked console${count === 1 ? "" : "s"}.` : "";
+  return count ? ` Synchronized with ${count} linked Node${count === 1 ? "" : "s"}.` : "";
 }
 
 function offsiteProviderName(backend) {
@@ -7401,6 +7724,7 @@ async function loadSystemAlertSettings() {
     setValue("system-alert-memory", data.memory_percent);
     setValue("system-alert-storage", data.storage_percent);
     setValue("system-alert-cooldown", data.cooldown_minutes);
+    setValue("node-offline-alert-delay", data.node_offline_delay_minutes);
   } catch (error) {
     document.getElementById("system-alert-save-status").textContent = error.message;
   }
@@ -7416,6 +7740,7 @@ async function saveSystemAlertSettings() {
       memory_percent: numberOf("system-alert-memory"),
       storage_percent: numberOf("system-alert-storage"),
       cooldown_minutes: numberOf("system-alert-cooldown"),
+      node_offline_delay_minutes: numberOf("node-offline-alert-delay"),
     }),
   });
   const data = await response.json();
@@ -7633,6 +7958,9 @@ async function serverAction(
     "dashboard-start",
     "dashboard-stop",
     "dashboard-restart",
+    "topbar-server-start",
+    "topbar-server-stop",
+    "topbar-server-restart",
   ].map((id) => document.getElementById(id)).filter(Boolean);
   controls.forEach((button) => { button.disabled = true; });
 
@@ -9611,3 +9939,52 @@ async function promotePluginMonitoring() {
     button.disabled = false;
   }
 }
+
+function initializeSettingsPanels() {
+  const page = document.querySelector(".settings-page");
+  if (!page) return;
+  page.querySelectorAll(":scope > .settings-section").forEach((section, index) => {
+    const header = section.querySelector(":scope > .card-header");
+    if (!header || header.querySelector(":scope > .settings-collapse-toggle")) return;
+    const titleSource = header.cloneNode(true);
+    titleSource.querySelectorAll("button, a, small, [role='status']").forEach((element) => element.remove());
+    const title = (titleSource.textContent || "Settings panel").replace(/\s+/g, " ").trim();
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `panel-${index}`;
+    const key = `craftarr.settingsPanelCollapsed.${slug}`;
+    let collapsed = false;
+    try {
+      collapsed = localStorage.getItem(key) === "true";
+    } catch {
+      collapsed = false;
+    }
+    section.classList.toggle("is-collapsed", collapsed);
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "settings-collapse-toggle";
+    button.setAttribute("aria-expanded", String(!collapsed));
+    button.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${title}`);
+    button.title = `${collapsed ? "Expand" : "Collapse"} ${title}`;
+    const icon = document.createElement("i");
+    icon.className = `fa-solid fa-chevron-${collapsed ? "down" : "up"}`;
+    icon.setAttribute("aria-hidden", "true");
+    button.appendChild(icon);
+    button.addEventListener("click", () => {
+      const nextCollapsed = !section.classList.contains("is-collapsed");
+      section.classList.toggle("is-collapsed", nextCollapsed);
+      button.setAttribute("aria-expanded", String(!nextCollapsed));
+      button.setAttribute("aria-label", `${nextCollapsed ? "Expand" : "Collapse"} ${title}`);
+      button.title = `${nextCollapsed ? "Expand" : "Collapse"} ${title}`;
+      icon.className = `fa-solid fa-chevron-${nextCollapsed ? "down" : "up"}`;
+      try {
+        localStorage.setItem(key, String(nextCollapsed));
+      } catch {
+        // The panel remains usable when browser storage is disabled.
+      }
+    });
+    header.appendChild(button);
+  });
+}
+
+document.body.addEventListener("htmx:afterSwap", initializeSettingsPanels);
+initializeSettingsPanels();

@@ -43,7 +43,7 @@
             <a class="user-row" href="/users/{{ account.id }}">
                 <div>
                     <strong>{{ account.username }}</strong>
-                    <div class="muted-small">Can access {{ account.servers|length }} server{% if account.servers|length != 1 %}s{% endif %}</div>
+                    <div class="muted-small">{% if account.can("servers.view_all") %}Can access all servers{% else %}Can access {{ account.servers|length }} server{% if account.servers|length != 1 %}s{% endif %}{% endif %}</div>
                 </div>
                 <div class="user-row-right">
                     <span class="role">{{ account.role_name }}</span>
