@@ -18,6 +18,7 @@ SYSTEM_ALERT_DEFAULTS = {
     "system_alert_memory_percent": "95",
     "system_alert_storage_percent": "80",
     "system_alert_cooldown_minutes": "60",
+    "node_offline_alert_delay_minutes": "5",
 }
 
 LOGIN_MESSAGE_KEY = "login_message"
@@ -132,6 +133,7 @@ def get_system_alert_settings(db: Session) -> dict:
         "memory_percent": int(values["system_alert_memory_percent"]),
         "storage_percent": int(values["system_alert_storage_percent"]),
         "cooldown_minutes": int(values["system_alert_cooldown_minutes"]),
+        "node_offline_delay_minutes": int(values["node_offline_alert_delay_minutes"]),
     }
 
 
@@ -139,15 +141,19 @@ def save_system_alert_settings(db: Session, data: dict) -> dict:
     memory = int(data.get("memory_percent", 95))
     storage = int(data.get("storage_percent", 80))
     cooldown = int(data.get("cooldown_minutes", 60))
+    node_offline_delay = int(data.get("node_offline_delay_minutes", 5))
     if not 1 <= memory <= 100 or not 1 <= storage <= 100:
         raise ValueError("Alert thresholds must be between 1 and 100 percent")
     if not 1 <= cooldown <= 10080:
         raise ValueError("Cooldown must be between 1 minute and 7 days")
+    if not 1 <= node_offline_delay <= 1440:
+        raise ValueError("Node offline email delay must be between 1 minute and 24 hours")
     values = {
         "system_alerts_enabled": "true" if data.get("enabled") is True else "false",
         "system_alert_memory_percent": str(memory),
         "system_alert_storage_percent": str(storage),
         "system_alert_cooldown_minutes": str(cooldown),
+        "node_offline_alert_delay_minutes": str(node_offline_delay),
     }
     for key, value in values.items():
         set_setting(db, key, value)

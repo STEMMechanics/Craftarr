@@ -1,6 +1,3 @@
-import shutil
-import psutil
-
 from datetime import datetime, timedelta, timezone
 
 from fastapi import (
@@ -21,12 +18,11 @@ from sqlalchemy.orm import Session
 from .version import APP_VERSION
 from .auth import verify_password
 from .database import get_db
+from .instance_identity import get_node_id
 from .models import Server, User
-from .processes import register_server, server_status
-from .player_manager import get_online_players
+from .hardware import collect_hardware_stats
 from .permissions import has_permission
 from .settings_manager import get_login_message
-from .java_runtime import discover_java_runtimes, resolve_java_path
 
 from .auth import (
     hash_password,
@@ -298,96 +294,11 @@ def web_system_stats(
             status_code=401,
         )
 
-    memory = psutil.virtual_memory()
-
-    disk = shutil.disk_usage("/")
-
-    cpu = psutil.cpu_percent(
-        interval=None
-    )
-
-    def gb(value):
-        return round(
-            value
-            / 1024
-            / 1024
-            / 1024,
-            1,
-        )
-
     if not has_permission(user, "system.view"):
         return JSONResponse({"error": "System view permission required"}, status_code=403)
 
     servers = db.query(Server).order_by(Server.name).all() if has_permission(user, "servers.view_all") else sorted(user.servers, key=lambda item: item.name.lower())
-    java_runtimes = discover_java_runtimes()
-    java_by_path = {runtime["path"]: runtime for runtime in java_runtimes}
-    instances = []
-    total_players = 0
-    running_count = 0
-    for server in servers:
-        try:
-            register_server(server)
-            status = server_status(server.id)
-            running = bool(status.get("running"))
-            state = status.get("state", "running" if running else "stopped")
-            console_available = bool(status.get("console_available"))
-            players = len(get_online_players(server.id)) if state == "running" else 0
-        except Exception:
-            running = False
-            state = "unknown"
-            console_available = False
-            players = 0
-        running_count += int(running)
-        total_players += players
-        try:
-            configured_java = resolve_java_path(server.java_path)
-        except ValueError:
-            configured_java = server.java_path
-        instances.append({
-            "id": server.id, "name": server.name, "version": server.minecraft_version,
-            "running": running, "state": state,
-            "console_available": console_available, "players": players,
-            "java": java_by_path.get(configured_java, {}).get("major"),
-        })
-
-    return {
-        "cpu": {
-            "percent": cpu,
-            "cores":
-                psutil.cpu_count(),
-        },
-
-        "memory": {
-            "used": gb(
-                memory.used
-            ),
-            "total": gb(
-                memory.total
-            ),
-            "percent":
-                memory.percent,
-        },
-
-        "storage": {
-            "used": gb(
-                disk.used
-            ),
-            "total": gb(
-                disk.total
-            ),
-            "percent": round(
-                disk.used
-                / disk.total
-                * 100,
-                1,
-            ),
-        },
-        "minecraft": {
-            "installed": len(instances), "running": running_count,
-            "players_online": total_players, "instances": instances,
-        },
-        "java_runtimes": java_runtimes,
-    }
+    return collect_hardware_stats(servers)
 
 @router.get(
     "/system",
@@ -431,6 +342,8 @@ def system_page(
         ),
         context["active_server"],
     )
+    context["local_node_id"] = get_node_id(db)
+    context["hardware_node_id"] = getattr(context["active_server"], "node_id", context["local_node_id"])
 
     return render_page(
         request,

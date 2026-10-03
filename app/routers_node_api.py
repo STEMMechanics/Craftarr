@@ -62,6 +62,20 @@ def node_servers(
     ]
 
 
+@router.get("/hardware")
+def node_hardware(
+    response: Response,
+    _authorized: None = Depends(require_node_token),
+    db: Session = Depends(get_db),
+):
+    from .hardware import collect_hardware_stats
+
+    response.headers["Cache-Control"] = "no-store"
+    stats = collect_hardware_stats(db.query(Server).order_by(Server.name).all())
+    stats["app_version"] = APP_VERSION
+    return stats
+
+
 @router.get("/plugin-monitoring-settings")
 def node_plugin_monitoring_settings(
     response: Response,
@@ -166,17 +180,23 @@ def node_notifications(
         server = servers.get(job.server_id)
         if not server or not job.finished_at:
             continue
+        offsite_failed = (
+            job.status == "complete"
+            and "off-site copy failed" in (job.message or "").casefold()
+        )
+        notification_status = "warning" if offsite_failed else job.status
         title = {
             "complete": "Backup completed",
             "failed": "Backup failed",
             "cancelled": "Backup cancelled",
-        }[job.status]
+            "warning": "Backup needs attention",
+        }[notification_status]
         message = f"{server.name} · {job.label or job.filename or 'Backup'}"
-        if job.status != "complete" and job.message:
+        if (job.status != "complete" or offsite_failed) and job.message:
             message += f" · {job.message}"
         items.append({
-            "id": f"backup:{job.id}:{job.status}",
-            "kind": f"backup-{job.status}",
+            "id": f"backup:{job.id}:{notification_status}",
+            "kind": f"backup-{notification_status}",
             "server_id": server.id,
             "server": server.name,
             "title": title,
@@ -210,6 +230,7 @@ async def node_system_alerts(
             "memory_percent": int(data.get("memory_percent", 95)),
             "storage_percent": int(data.get("storage_percent", 80)),
             "cooldown_minutes": int(data.get("cooldown_minutes", 60)),
+            "node_offline_delay_minutes": int(data.get("node_offline_delay_minutes", 5)),
         }
         current = get_system_alert_settings(db)
         if current != settings:
@@ -307,3 +328,26 @@ def delete_node_offsite_remote(name: str, _authorized: None = Depends(require_no
     except OffsiteBackupError as error:
         return JSONResponse({"error": str(error)}, status_code=404)
     return {"success": True}
+
+
+@router.api_route(
+    "/{path:path}",
+    methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+)
+def node_function_unavailable(
+    path: str,
+    response: Response,
+    _authorized: None = Depends(require_node_token),
+):
+    """Give linked nodes a stable response for API functions they do not have."""
+    response.headers["Cache-Control"] = "no-store"
+    return JSONResponse(
+        {
+            "error": "This function is not available on this Node.",
+            "function_unavailable": True,
+            "function": path,
+            "app_version": APP_VERSION,
+        },
+        status_code=501,
+        headers={"Cache-Control": "no-store"},
+    )

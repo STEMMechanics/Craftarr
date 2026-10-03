@@ -1,6 +1,7 @@
 """Server-side gateway for a hub console's linked remote Craftarr nodes."""
 
 import base64
+from html import escape
 import json
 import re
 from dataclasses import dataclass
@@ -17,12 +18,14 @@ from .models import RemoteNode, RemoteServer, Server, User
 from .node_security import decrypt_remote_token
 from .permissions import ALL_PERMISSIONS, has_permission
 from .web_context import get_available_servers
+from .version import APP_VERSION
 
 
 SERVER_REF = re.compile(r"(?P<node>[0-9a-fA-F-]{36}):(?P<server_id>[1-9][0-9]*)(?=/|$)")
 HTML_SERVER_PATH = re.compile(rb"(?P<prefix>/servers/)(?P<id>[0-9]+)(?=[/?#&\"'\s])")
 HTML_SERVER_DATA = re.compile(rb"(?P<prefix>data-server-id=[\"'])(?P<id>[0-9]+)(?P<suffix>[\"'])")
 HTML_ACTIVE_SERVER = re.compile(rb"(?P<prefix>active_server_id=)(?P<id>[0-9]+)")
+HTML_PAGE_CONTENT = re.compile(rb"(?P<open><div[^>]*id=[\"']page-content[\"'][^>]*>)")
 
 HOP_BY_HOP_HEADERS = {
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
@@ -109,6 +112,90 @@ def _forbidden(request: Request, status_code: int, message: str):
     return Response(message, status_code=status_code, media_type="text/plain")
 
 
+def _render_remote_node_message(request: Request, node_id: str, server_id: int, *, function_unavailable=False):
+    from .web_context import build_web_context
+    from .web_render import render_page
+
+    db = SessionLocal()
+    try:
+        user_id = request.session.get("user_id")
+        user = db.get(User, user_id) if user_id else None
+        node = db.query(RemoteNode).filter(RemoteNode.node_id == node_id).first()
+        server = (
+            db.query(RemoteServer)
+            .filter(RemoteServer.node_id == node_id, RemoteServer.server_id == server_id)
+            .first()
+        )
+        if not user or not user.enabled or not node or not server:
+            return _forbidden(request, 404, "Remote server not found")
+        context = build_web_context(db, user, active_server=server)
+        context.update({
+            "server": server,
+            "node": node,
+            "function_unavailable": function_unavailable,
+            "page_title": "Function unavailable" if function_unavailable else "Node offline",
+        })
+        return render_page(
+            request,
+            "remote_node_message.html",
+            "partials/remote_node_message.html",
+            context,
+        )
+    finally:
+        db.close()
+
+
+def _node_offline_response(request: Request, node_id: str, server_id: int):
+    message = "Node offline, try again later"
+    if request.url.path.endswith("/status") and request.method.upper() == "GET":
+        return JSONResponse({
+            "state": "node_offline",
+            "running": False,
+            "console_available": False,
+            "node_offline": True,
+            "error": message,
+        })
+    if request.url.path.startswith("/api/") or request.method.upper() != "GET":
+        return JSONResponse({"error": message, "node_offline": True}, status_code=503)
+    return _render_remote_node_message(request, node_id, server_id)
+
+
+def _function_unavailable_response(request: Request, node_id: str, server_id: int, node_version: str | None):
+    message = "This function is not available on the selected server Node."
+    if request.url.path.startswith("/api/") or request.method.upper() != "GET":
+        return JSONResponse({
+            "error": f"{message} Some functions may require a newer Craftarr version.",
+            "function_unavailable": True,
+            "node_version": node_version,
+            "app_version": APP_VERSION,
+        }, status_code=501)
+    return _render_remote_node_message(request, node_id, server_id, function_unavailable=True)
+
+
+def _inject_remote_version_notice(body: bytes, node_version: str | None, request: Request) -> bytes:
+    if node_version == APP_VERSION:
+        return body
+    if node_version:
+        message = (
+            f"This Node runs Craftarr {escape(node_version)} while this hub runs Craftarr {escape(APP_VERSION)}. "
+            "Some functions may not be available on this Node."
+        )
+    else:
+        message = "This Node did not report its Craftarr version. Some functions may not be available on this Node."
+    banner = (
+        '<div class="node-version-warning" role="status" '
+        'style="margin:0 0 1rem;padding:.8rem 1rem;border:1px solid #c4b5fd;border-radius:.75rem;'
+        'background:#f5f3ff;color:#4c1d95;font-weight:600">'
+        f'{escape(message)}</div>'
+    ).encode("utf-8")
+    if request.headers.get("HX-Request") == "true":
+        return banner + body
+    match = HTML_PAGE_CONTENT.search(body)
+    if match:
+        return body[:match.end()] + banner + body[match.end():]
+    return body
+
+
 def _proxy_user_claim(
     user: User,
     node_id: str,
@@ -186,7 +273,7 @@ async def maybe_proxy_remote_server(request: Request):
 
         node = db.query(RemoteNode).filter(RemoteNode.node_id == node_id).first()
         if not node:
-            return _forbidden(request, 404, "Remote node is not linked")
+            return _forbidden(request, 404, "Node is not linked")
         remote_server = (
             db.query(RemoteServer)
             .filter(RemoteServer.node_id == node_id, RemoteServer.server_id == server_id)
@@ -196,6 +283,7 @@ async def maybe_proxy_remote_server(request: Request):
             return _forbidden(request, 404, "Remote server is not in the linked inventory")
         if not has_permission(user, "servers.view_all") and remote_server not in user.remote_servers:
             return _forbidden(request, 403, "You do not have access to this server")
+        node_version = node.app_version
         if not _permitted(user, required, request.url.path):
             return _forbidden(request, 403, "Permission required for this server action")
 
@@ -246,17 +334,48 @@ async def maybe_proxy_remote_server(request: Request):
         response = await client.send(outgoing, stream=True)
     except httpx.TimeoutException:
         await client.aclose()
-        return _forbidden(request, 504, "The linked Craftarr did not respond in time")
+        from .remote_nodes import record_remote_node_offline
+
+        record_remote_node_offline(node_id, "The Node did not respond before the timeout")
+        return _node_offline_response(request, node_id, server_id)
     except httpx.HTTPError:
         await client.aclose()
-        return _forbidden(request, 502, "Could not connect to the linked Craftarr")
+        from .remote_nodes import record_remote_node_offline
+
+        record_remote_node_offline(node_id, "Could not connect to the Node")
+        return _node_offline_response(request, node_id, server_id)
+
+    from .remote_nodes import record_remote_node_online
+
+    record_remote_node_online(node_id)
 
     if response.status_code == 401:
         await response.aclose()
         await client.aclose()
         return JSONResponse(
-            {"error": "The linked Craftarr rejected its saved token. Update the token in App settings."},
+            {"error": "The linked Node rejected its saved token. Update the token in App settings."},
             status_code=502,
+        )
+
+    if response.status_code in {404, 501}:
+        try:
+            body = await response.aread()
+        finally:
+            await response.aclose()
+            await client.aclose()
+        try:
+            payload = json.loads(body)
+        except (TypeError, ValueError):
+            payload = {}
+        default_missing_route = response.status_code == 404 and isinstance(payload, dict) and payload.get("detail") == "Not Found"
+        declared_unavailable = response.status_code == 501
+        if default_missing_route or declared_unavailable:
+            return _function_unavailable_response(request, node_id, server_id, node_version)
+        return Response(
+            body,
+            status_code=response.status_code,
+            media_type=response.headers.get("content-type", "application/json"),
+            headers={"Cache-Control": "no-store"},
         )
 
     response_headers = {
@@ -275,6 +394,7 @@ async def maybe_proxy_remote_server(request: Request):
             await response.aclose()
             await client.aclose()
         body = _rewrite_remote_html(body, node_id)
+        body = _inject_remote_version_notice(body, node_version, request)
         response_headers["content-length"] = str(len(body))
         response_headers.pop("content-encoding", None)
         return Response(

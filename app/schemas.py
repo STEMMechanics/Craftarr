@@ -36,7 +36,7 @@ class NodeServerOut(BaseModel):
 
 class NodeIdentityOut(BaseModel):
     node_id: UUID
-    app_version: str
+    app_version: str | None = None
 
 
 class UserCreate(BaseModel):

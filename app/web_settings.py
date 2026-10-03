@@ -259,7 +259,7 @@ def _proxy_linked_offsite_settings(db: Session, node_id: str, path: str, *, meth
 
     node = db.query(RemoteNode).filter(RemoteNode.node_id == node_id).first()
     if not node:
-        raise RemoteNodeError("Linked console not found")
+        raise RemoteNodeError("Linked Node not found")
     token = decrypt_remote_token(node.token_ciphertext)
     return _request(node.base_url, token, path, method=method, payload=payload, timeout=timeout)
 

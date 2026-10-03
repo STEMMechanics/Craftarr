@@ -216,6 +216,13 @@ def get_properties_view(server) -> dict:
                 10,
             ),
 
+        "pause_when_empty_seconds":
+            int_value(
+                props,
+                "pause-when-empty-seconds",
+                -1,
+            ),
+
         "spawn_protection":
             int_value(
                 props,
@@ -482,6 +489,9 @@ def save_properties(
                 )
             ),
     }
+
+    if "pause_when_empty_seconds" in data:
+        updates["pause-when-empty-seconds"] = str(int(data["pause_when_empty_seconds"]))
 
     write_properties(
         server,

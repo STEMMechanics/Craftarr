@@ -13,7 +13,7 @@
     </section>
 
     <section class="overview-card settings-section">
-        <div class="card-header"><i class="fa-solid fa-user-gear" aria-hidden="true"></i> Account details</div>
+        <div class="card-header"><i class="fa-solid fa-user-gear" aria-hidden="true"></i><span>Account details</span></div>
         <form class="settings-content user-edit-form" method="post" action="/users/{{ edit_user.id }}/save">
             <label class="property-field">
                 <span>Username</span>
@@ -43,7 +43,7 @@
 
     {% if not edit_user.can("servers.view_all") %}
     <section class="overview-card settings-section">
-        <div class="card-header"><i class="fa-solid fa-cubes" aria-hidden="true"></i> Servers this user can use</div>
+        <div class="card-header"><i class="fa-solid fa-cubes" aria-hidden="true"></i><span>Servers this user can use</span></div>
         <form class="settings-content" method="post" action="/users/{{ edit_user.id }}/servers">
             <div class="server-access-list">
                 {% for server in servers %}
@@ -64,7 +64,7 @@
 
     {% if edit_user.id != user.id %}
     <section class="overview-card settings-section danger-panel">
-        <div class="card-header"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> Remove account</div>
+        <div class="card-header"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><span>Remove account</span></div>
         <div class="settings-content">
             <p>This removes the account and stops this user from signing in.</p>
             <form method="post" action="/users/{{ edit_user.id }}/delete">

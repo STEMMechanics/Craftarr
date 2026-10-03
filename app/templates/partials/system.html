@@ -1,4 +1,8 @@
-<div class="system-page" data-page-title="Hardware">
+<div class="system-page" data-page-title="Hardware" data-local-node-id="{{ local_node_id|default(hardware_node_id) }}" data-selected-node-id="{{ hardware_node_id|default('') }}" data-app-version="{{ app_version }}">
+  <section class="system-node-selector">
+    <label for="hardware-node-select"><span>Hardware on Node</span><select id="hardware-node-select" aria-label="Select a Node for hardware details"><option value="">Loading Nodes...</option></select></label>
+    <div id="hardware-node-version-warning" class="node-version-warning" role="status" hidden></div>
+  </section>
   <div class="stats-grid">
     <div class="stat-card"><div class="stat-heading"><span>CPU</span><strong id="cpu-value">0%</strong></div><div class="progress"><div id="cpu-bar" class="progress-bar"></div></div><div id="cpu-detail" class="stat-detail">Loading...</div></div>
     <div class="stat-card"><div class="stat-heading"><span>Memory</span><strong id="memory-value">0%</strong></div><div class="progress"><div id="memory-bar" class="progress-bar"></div></div><div id="memory-detail" class="stat-detail">Loading...</div></div>

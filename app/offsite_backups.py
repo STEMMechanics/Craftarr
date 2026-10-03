@@ -35,7 +35,7 @@ def managed_config_path() -> Path:
 def _rclone_command(*args: str) -> list[str]:
     executable = shutil.which("rclone")
     if not executable:
-        raise OffsiteBackupError("rclone is not installed on the console server")
+        raise OffsiteBackupError("rclone is not installed on this Node")
     command = [executable, *args]
     command.extend(["--config", str(managed_config_path())])
     return command

@@ -1,4 +1,4 @@
-{% set topbar_server = active_server if active_server and request.url.path.startswith('/servers/' ~ active_server.id) else none %}
+{% set topbar_server = active_server if active_server else none %}
 <div class="topbar" data-server-id="{{ topbar_server.id if topbar_server else '' }}">
   <div class="topbar-actions">
     <div class="notification-center" data-user-id="{{ user.id or user.username }}">
@@ -26,6 +26,14 @@
         </div>
       </div>
     </div>
+
+    {% if user.can('servers.control') %}
+    <div class="topbar-server-controls" role="group" aria-label="Selected server controls" {% if not topbar_server %}hidden{% endif %}>
+      <button id="topbar-server-start" class="topbar-server-control start" type="button" onclick="serverAction('start')" aria-label="Start selected server" title="Start server" disabled><i class="fa-solid fa-play" aria-hidden="true"></i></button>
+      <button id="topbar-server-stop" class="topbar-server-control stop" type="button" onclick="serverAction('stop')" aria-label="Stop selected server" title="Stop server" disabled><i class="fa-solid fa-stop" aria-hidden="true"></i></button>
+      <button id="topbar-server-restart" class="topbar-server-control restart" type="button" onclick="serverAction('restart')" aria-label="Restart selected server" title="Restart server" disabled><i class="fa-solid fa-rotate-right" aria-hidden="true"></i></button>
+    </div>
+    {% endif %}
 
     <div class="account-menu">
       <button id="account-menu-toggle" class="account-menu-toggle" type="button"

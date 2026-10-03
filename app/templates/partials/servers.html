@@ -19,10 +19,10 @@
                 <span class="server-card-badge">Paper server</span>
             </div>
             <h2>{{ server.name }}</h2>
-            {% if server.node_name is defined %}<div class="server-node-label">{{ server.node_name }}</div>{% endif %}
-            <div class="server-card-status is-unknown" data-server-id="{{ server.id }}" role="status" aria-live="polite">
-                <span class="server-status-dot" data-server-id="{{ server.id }}" aria-hidden="true"></span>
-                <span class="server-card-status-text" data-server-id="{{ server.id }}">Checking…</span>
+            <div class="friendly-server-info"><span><i class="fa-solid fa-diagram-project" aria-hidden="true"></i> Node</span><strong>{{ server.node_name if server.node_name is defined else "This Node" }}</strong></div>
+            <div class="server-card-status {% if server.node is defined and server.node.outage_started_at %}is-node-offline{% else %}is-unknown{% endif %}" data-server-id="{{ server.id }}" role="status" aria-live="polite">
+                <span class="server-status-dot {% if server.node is defined and server.node.outage_started_at %}is-node-offline{% endif %}" data-server-id="{{ server.id }}" aria-hidden="true"></span>
+                <span class="server-card-status-text" data-server-id="{{ server.id }}">{% if server.node is defined and server.node.outage_started_at %}Node offline{% else %}Checking…{% endif %}</span>
             </div>
             <div class="friendly-server-info"><span><i class="fa-solid fa-cubes" aria-hidden="true"></i> Game</span><strong>{{ server.minecraft_version or "Not set" }}</strong></div>
             <div class="friendly-server-info"><span><i class="fa-solid fa-memory" aria-hidden="true"></i> Memory</span><strong>{{ server.memory }}</strong></div>

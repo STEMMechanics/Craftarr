@@ -418,6 +418,12 @@
 
                 </label>
 
+                <label id="property-pause-when-empty-field" class="property-field full-width" hidden>
+                    <span>Pause the server when empty</span>
+                    <input id="property-pause-when-empty-seconds" type="number" min="-1" max="86400" step="1" value="-1">
+                    <small>Pause world and entity ticking after this many empty seconds. Use -1 to disable it. Some plugins may not work correctly while the server is paused.</small>
+                </label>
+
 
                 <label class="property-toggle">
 

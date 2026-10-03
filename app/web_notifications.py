@@ -105,18 +105,24 @@ def notifications(request: Request, db: Session = Depends(get_db)):
             if not server or not job.finished_at:
                 continue
             status = job.status
+            offsite_failed = (
+                status == "complete"
+                and "off-site copy failed" in (job.message or "").casefold()
+            )
+            notification_status = "warning" if offsite_failed else status
             label = job.label or job.filename or "Backup"
             title = {
                 "complete": "Backup completed",
                 "failed": "Backup failed",
                 "cancelled": "Backup cancelled",
-            }[status]
+                "warning": "Backup needs attention",
+            }[notification_status]
             message = f"{server.name} · {label}"
-            if status != "complete" and job.message:
+            if (status != "complete" or offsite_failed) and job.message:
                 message += f" · {job.message}"
             backup_events.append({
-                "id": f"backup:{job.id}:{status}",
-                "kind": f"backup-{status}",
+                "id": f"backup:{job.id}:{notification_status}",
+                "kind": f"backup-{notification_status}",
                 "server": server.name,
                 "title": title,
                 "message": message,
@@ -150,7 +156,7 @@ def notifications(request: Request, db: Session = Depends(get_db)):
                 items.append({
                     "id": f"system-alert:local:{resource}:{last_sent}",
                     "kind": "system-alert",
-                    "title": f"This console: {resource} usage is high",
+                    "title": f"This Node: {resource} usage is high",
                     "message": f"{resource.title()} usage is {percent:.1f}% (threshold {thresholds[resource]}%).",
                     "url": "/settings",
                     "checked_at": datetime.utcnow().isoformat() + "Z",
@@ -206,7 +212,7 @@ def notifications(request: Request, db: Session = Depends(get_db)):
                 "id": f"remote-offline:{node.node_id}",
                 "kind": "remote-offline",
                 "title": f"{node.name} is unreachable",
-                "message": "The hub cannot contact this console. Its server list may be out of date.",
+                "message": "The hub cannot contact this Node. Its server list may be out of date.",
                 "url": "/servers",
                 "checked_at": node.last_connected_at.isoformat() + "Z" if node.last_connected_at else None,
             })

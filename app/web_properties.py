@@ -62,6 +62,7 @@ from .server_archives import (
     server_settings_document,
     validate_portable_settings,
 )
+from .paper import inspect_paper_jar
 
 
 router = APIRouter()
@@ -71,6 +72,16 @@ def _record_plugin_session_start(db, server, pid) -> None:
     server.plugins_dirty = False
     server.plugin_session_pid = pid
     db.commit()
+
+
+def _paper_pause_option_available(server) -> bool:
+    try:
+        version = inspect_paper_jar(Path(server.directory) / server.jar_name)["version"]
+        parts = tuple(int(part) for part in re.findall(r"\d+", str(version))[:3])
+        parts = parts + (0,) * (3 - len(parts))
+        return parts >= (1, 21, 3)
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
 
 
 def server_name_slug(name: str) -> str:
@@ -256,6 +267,7 @@ def properties_data(
     return {
         "properties":
             get_properties_view(server),
+        "paper_pause_supported": _paper_pause_option_available(server),
         "startup": {
             "min_memory": server.min_memory,
             "max_memory": server.memory,
@@ -596,6 +608,22 @@ async def save_properties_api(
         )
 
     data = await request.json()
+    if "pause_when_empty_seconds" in data:
+        if not _paper_pause_option_available(server):
+            return JSONResponse(
+                {"error": "The pause-when-empty setting is only available for Paper 1.21.3 and newer."},
+                status_code=400,
+            )
+        try:
+            pause_when_empty_seconds = int(data["pause_when_empty_seconds"])
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "Enter a whole number of seconds.", "field": "pause_when_empty_seconds"}, status_code=400)
+        if isinstance(data["pause_when_empty_seconds"], bool) or not -1 <= pause_when_empty_seconds <= 86400:
+            return JSONResponse({
+                "error": "Enter -1 to disable pausing, or a value from 0 to 86400 seconds.",
+                "field": "pause_when_empty_seconds",
+            }, status_code=400)
+        data["pause_when_empty_seconds"] = pause_when_empty_seconds
     changed_setting_names = sorted(
         key for key in data
         if key not in {"restart_if_running", "enabled_at_boot"}

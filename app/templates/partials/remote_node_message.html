@@ -1,0 +1,13 @@
+<section class="remote-node-message{% if function_unavailable %} function-unavailable{% else %} node-offline-page{% endif %}" data-server-id="{{ server.id }}" data-page-title="{{ page_title }}" role="status" aria-live="polite">
+  <div class="remote-node-message-icon" aria-hidden="true"><i class="fa-solid {% if function_unavailable %}fa-circle-question{% else %}fa-cloud-bolt{% endif %}"></i></div>
+  <div>
+    <p class="page-kicker">{{ node.name }}</p>
+    <h1>{{ server.name }}</h1>
+    {% if function_unavailable %}
+    <p>This function is not available on the selected Node. Some functions may require a newer Craftarr version.</p>
+    <p class="remote-node-version">Node version: {{ node.app_version or "not reported" }}</p>
+    {% else %}
+    <p>Node offline, try again later</p>
+    {% endif %}
+  </div>
+</section>
