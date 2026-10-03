@@ -46,7 +46,7 @@ def normalize_remote_url(value: str, *, allow_insecure_http: bool = False) -> st
             is_loopback = host == "localhost"
         if not is_loopback and not allow_insecure_http:
             raise RemoteNodeError(
-                "HTTP connections are unencrypted. Confirm that this link uses a trusted private network."
+                "HTTPS is recommended. HTTP connections are unencrypted; confirm that this link uses a trusted private network."
             )
 
     host = parsed.hostname.lower()
