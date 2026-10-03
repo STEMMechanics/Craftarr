@@ -329,6 +329,11 @@ def _automation_loop() -> None:
             run_scheduled_check()
         except Exception:
             logger.warning("Scheduled update monitoring failed")
+        try:
+            from .remote_nodes import run_linked_plugin_settings_sync
+            run_linked_plugin_settings_sync()
+        except Exception:
+            logger.exception("Linked plugin settings synchronization failed")
         now = datetime.now().timestamp()
         if now - last_metrics >= METRIC_SECONDS:
             try:

@@ -1,22 +1,31 @@
 """Remote Craftarr link validation, inventory, and HTTP client helpers."""
 
 import ipaddress
+import hashlib
+import json
 from datetime import datetime, timezone
+import logging
+import time
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from sqlalchemy.orm import Session
 
-from .models import RemoteNode, RemoteServer
+from .models import RemoteNode, RemoteServer, User
 from .node_security import decrypt_remote_token
 from .schemas import NodeIdentityOut, NodeServerOut
+
+
+logger = logging.getLogger(__name__)
+_last_plugin_settings_sync = 0.0
+_plugin_settings_sync_interval = 60.0
 
 
 class RemoteNodeError(ValueError):
     pass
 
 
-def normalize_remote_url(value: str) -> str:
+def normalize_remote_url(value: str, *, allow_insecure_http: bool = False) -> str:
     try:
         parsed = urlsplit(value.strip())
         port = parsed.port
@@ -35,8 +44,10 @@ def normalize_remote_url(value: str) -> str:
             is_loopback = ipaddress.ip_address(host).is_loopback
         except ValueError:
             is_loopback = host == "localhost"
-        if not is_loopback:
-            raise RemoteNodeError("Remote Craftarr connections must use HTTPS")
+        if not is_loopback and not allow_insecure_http:
+            raise RemoteNodeError(
+                "HTTP connections are unencrypted. Confirm that this link uses a trusted private network."
+            )
 
     host = parsed.hostname.lower()
     if ":" in host and not host.startswith("["):
@@ -49,12 +60,14 @@ def normalize_remote_url(value: str) -> str:
     return normalized
 
 
-def _request(base_url: str, token: str, path: str) -> dict | list:
+def _request(base_url: str, token: str, path: str, *, method="GET", payload=None, timeout=8.0) -> dict | list:
     try:
-        with httpx.Client(timeout=httpx.Timeout(8.0, connect=4.0), follow_redirects=False) as client:
-            response = client.get(
+        with httpx.Client(timeout=httpx.Timeout(timeout, connect=min(4.0, timeout)), follow_redirects=False) as client:
+            response = client.request(
+                method,
                 f"{base_url.rstrip('/')}{path}",
                 headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                json=payload,
             )
     except httpx.TimeoutException as error:
         raise RemoteNodeError("The remote Craftarr did not respond before the timeout") from error
@@ -64,7 +77,15 @@ def _request(base_url: str, token: str, path: str) -> dict | list:
     if response.status_code == 401:
         raise RemoteNodeError("The remote Craftarr rejected this token")
     if response.status_code != 200:
-        raise RemoteNodeError(f"The remote Craftarr returned HTTP {response.status_code}")
+        detail = None
+        try:
+            body = response.json()
+            if isinstance(body, dict):
+                detail = body.get("error") or body.get("detail")
+        except ValueError:
+            pass
+        suffix = f": {str(detail)[:300]}" if detail else ""
+        raise RemoteNodeError(f"The remote Craftarr returned HTTP {response.status_code}{suffix}")
     try:
         return response.json()
     except ValueError as error:
@@ -125,6 +146,8 @@ def sync_node_servers(
 
 
 def refresh_remote_node(db: Session, node: RemoteNode) -> list[RemoteServer]:
+    previously_unavailable = bool(node.last_error)
+    had_connection = node.last_connected_at is not None
     try:
         token = decrypt_remote_token(node.token_ciphertext)
         identity, inventory = fetch_remote_inventory(node.base_url, token)
@@ -134,10 +157,338 @@ def refresh_remote_node(db: Session, node: RemoteNode) -> list[RemoteServer]:
             )
         servers = sync_node_servers(db, node, inventory)
         db.commit()
+        if previously_unavailable and had_connection:
+            _email_remote_connection_alert(db, node, "restored", None)
         return servers
     except ValueError as error:
         node.last_error = str(error)[:255]
         db.commit()
+        if not previously_unavailable and had_connection:
+            _email_remote_connection_alert(db, node, "unavailable", node.last_error)
         if isinstance(error, RemoteNodeError):
             raise
         raise RemoteNodeError(str(error)) from error
+
+
+def _remote_notification_key(node_id: str) -> str:
+    return f"remote_notifications:{node_id}"
+
+
+def _save_remote_notification_snapshot(db: Session, node: RemoteNode, notifications: list[dict]) -> None:
+    from .settings_manager import set_setting
+
+    alerts = [item for item in notifications if isinstance(item, dict) and item.get("kind") == "system-alert"]
+    other_items = [item for item in notifications if isinstance(item, dict) and item.get("kind") != "system-alert"]
+    safe_items = alerts[:2] + other_items[:98]
+    set_setting(db, _remote_notification_key(node.node_id), json.dumps(safe_items, separators=(",", ":")))
+
+
+def _email_remote_connection_alert(db: Session, node: RemoteNode, state: str, detail: str | None) -> None:
+    from .emailer import send_email
+    from .settings_manager import get_smtp_settings
+    from .system_alerts import _admin_addresses
+
+    recipients = _admin_addresses(db)
+    if not recipients or not get_smtp_settings(db).get("smtp_host", "").strip():
+        return
+    if state == "unavailable":
+        subject = f"Craftarr alert: linked console {node.name} is unavailable"
+        body = (
+            f"The hub could not reach linked console {node.name}.\n"
+            f"Last error: {detail or 'Connection failed'}\n"
+            "The hub will retry automatically."
+        )
+    else:
+        subject = f"Craftarr: linked console {node.name} is back online"
+        body = f"The hub can reach linked console {node.name} again."
+    try:
+        for address in recipients:
+            send_email(db, address, subject, body)
+    except Exception as error:
+        logger.warning("Unable to send linked-console alert (%s)", type(error).__name__)
+
+
+def _email_remote_update_notifications(db: Session, node: RemoteNode, notifications: list[dict]) -> None:
+    from .emailer import send_email
+    from .permissions import has_permission
+    from .settings_manager import get_setting, get_smtp_settings, set_setting
+    from .system_alerts import _admin_addresses
+
+    recipients = set(_admin_addresses(db))
+    if not recipients or not get_smtp_settings(db).get("smtp_host", "").strip():
+        return
+    users = db.query(User).filter(User.enabled.is_(True)).all()
+    for user in users:
+        if not user.email or user.email.strip() not in recipients or not has_permission(user, "servers.view"):
+            continue
+        address = user.email.strip()
+        pending = []
+        dedupe_keys = []
+        assigned = {server.server_id for server in user.remote_servers if server.node_id == node.node_id}
+        for item in notifications:
+            if item.get("kind") not in {"plugin-update", "paper-update"}:
+                continue
+            try:
+                server_id = int(item.get("server_id"))
+            except (TypeError, ValueError):
+                continue
+            if not has_permission(user, "servers.view_all") and server_id not in assigned:
+                continue
+            if item.get("kind") == "plugin-update" and not has_permission(user, "plugins.view"):
+                continue
+            event_id = str(item.get("id") or "")
+            if not event_id:
+                continue
+            digest = hashlib.sha256(f"{node.node_id}|{event_id}|{address}".encode("utf-8")).hexdigest()
+            key = f"remote_update_sent_{digest}"
+            if get_setting(db, key):
+                continue
+            pending.append(item)
+            dedupe_keys.append(key)
+        if not pending:
+            continue
+        lines = ["Updates are available. No updates have been installed automatically.", ""]
+        for item in pending:
+            lines.extend([
+                f"{node.name} · {item.get('server', 'Server')}: {item.get('title', 'Update available')}",
+                str(item.get("message") or ""),
+                "",
+            ])
+        try:
+            send_email(db, address, "Craftarr: Plugin updates available", "\n".join(lines))
+        except Exception as error:
+            logger.warning("Remote update notification delivery failed (%s)", type(error).__name__)
+            continue
+        for key in dedupe_keys:
+            set_setting(db, key, datetime.now(timezone.utc).isoformat())
+        db.commit()
+
+
+def _merge_remote_system_alerts(db: Session, node: RemoteNode, alerts: list[dict]) -> list[dict]:
+    from .settings_manager import get_setting, set_setting
+
+    active = {}
+    for item in alerts:
+        if not isinstance(item, dict) or item.get("resource") not in {"memory", "storage"}:
+            continue
+        try:
+            percent = float(item.get("percent"))
+            threshold = int(item.get("threshold"))
+        except (TypeError, ValueError):
+            continue
+        active[item["resource"]] = (percent, threshold)
+
+    notifications = []
+    now = datetime.now(timezone.utc).isoformat()
+    for resource in ("memory", "storage"):
+        key = f"remote_system_alert_since:{node.node_id}:{resource}"
+        since = get_setting(db, key)
+        if resource not in active:
+            if since:
+                set_setting(db, key, "")
+            continue
+        if not since:
+            since = now
+            set_setting(db, key, since)
+        percent, threshold = active[resource]
+        notifications.append({
+            "id": f"system-alert:{node.node_id}:{resource}:{since}",
+            "kind": "system-alert",
+            "resource": resource,
+            "title": f"{node.name}: {resource} usage is high",
+            "message": f"{resource.title()} usage is {percent:.1f}% (threshold {threshold}%).",
+            "checked_at": now,
+        })
+    return notifications
+
+
+def _email_remote_system_alerts(db: Session, node: RemoteNode, notifications: list[dict]) -> None:
+    from .emailer import send_email
+    from .settings_manager import get_setting, get_smtp_settings, set_setting
+    from .system_alerts import _admin_addresses
+
+    recipients = _admin_addresses(db)
+    if not recipients or not get_smtp_settings(db).get("smtp_host", "").strip():
+        return
+    for item in notifications:
+        if item.get("kind") != "system-alert":
+            continue
+        event_id = str(item.get("id") or "")
+        if not event_id:
+            continue
+        for address in recipients:
+            digest = hashlib.sha256(f"{event_id}|{address}".encode("utf-8")).hexdigest()
+            key = f"remote_system_alert_sent_{digest}"
+            if get_setting(db, key):
+                continue
+            try:
+                send_email(db, address, f"Craftarr alert: {item.get('title', node.name)}", item.get("message", ""))
+            except Exception as error:
+                logger.warning("Remote system alert delivery failed (%s)", type(error).__name__)
+                continue
+            set_setting(db, key, datetime.now(timezone.utc).isoformat())
+            db.commit()
+
+
+def synchronize_plugin_monitoring_repositories(db: Session) -> dict:
+    """Converge linked consoles on the repository with the newest file revision."""
+    from .monitoring_defaults import read_repository_snapshot, save_repository_text, validate_repository_text
+
+    local = read_repository_snapshot()
+    validate_repository_text(local["content"])
+    nodes = db.query(RemoteNode).order_by(RemoteNode.name).all()
+    connected = []
+    failed = []
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    recoveries = []
+
+    for node in nodes:
+        previously_unavailable = bool(node.last_error)
+        had_connection = node.last_connected_at is not None
+        try:
+            token = decrypt_remote_token(node.token_ciphertext)
+            identity, inventory = fetch_remote_inventory(node.base_url, token)
+            if str(identity.node_id) != node.node_id:
+                raise RemoteNodeError(
+                    "The Craftarr at this URL has a different node ID. Remove and link it again to avoid mixing server access."
+                )
+            sync_node_servers(db, node, inventory)
+            remote = _request(node.base_url, token, "/api/node/plugin-monitoring-settings")
+            if not isinstance(remote, dict):
+                raise RemoteNodeError("The remote Craftarr returned invalid plugin settings")
+            content = remote.get("content")
+            modified_at_ns = remote.get("modified_at_ns")
+            if not isinstance(content, str) or type(modified_at_ns) is not int or modified_at_ns < 0:
+                raise RemoteNodeError("The remote Craftarr returned invalid plugin settings")
+            validate_repository_text(content)
+            remote = {"content": content, "modified_at_ns": modified_at_ns}
+            remote["hash"] = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            alerts = _request(node.base_url, token, "/api/node/notifications")
+            if not isinstance(alerts, dict) or not isinstance(alerts.get("notifications"), list):
+                raise RemoteNodeError("The remote Craftarr returned invalid notifications")
+            remote["notifications"] = alerts["notifications"]
+            from .settings_manager import get_smtp_settings, get_system_alert_settings
+            from .system_alerts import _admin_addresses
+
+            system_alert_settings = get_system_alert_settings(db)
+            system_alert_settings["managed_by_hub"] = bool(
+                get_smtp_settings(db).get("smtp_host", "").strip() and _admin_addresses(db)
+            )
+            system_status = _request(
+                node.base_url,
+                token,
+                "/api/node/system-alerts",
+                method="POST",
+                payload=system_alert_settings,
+            )
+            if not isinstance(system_status, dict) or not isinstance(system_status.get("alerts"), list):
+                raise RemoteNodeError("The remote Craftarr returned invalid system alert status")
+            system_alerts = _merge_remote_system_alerts(db, node, system_status["alerts"])
+            remote["notifications"].extend(system_alerts)
+            connected.append((node, token, remote))
+            node.last_connected_at = now
+            node.last_error = None
+            _save_remote_notification_snapshot(db, node, remote["notifications"])
+            _email_remote_update_notifications(db, node, remote["notifications"])
+            _email_remote_system_alerts(db, node, system_alerts)
+            if previously_unavailable and had_connection:
+                recoveries.append(node)
+        except (RemoteNodeError, ValueError) as error:
+            node.last_error = str(error)[:255]
+            failed.append(node.name)
+            if not previously_unavailable and had_connection:
+                _email_remote_connection_alert(db, node, "unavailable", node.last_error)
+        except Exception as error:
+            logger.warning("Linked plugin settings sync failed for %s (%s)", node.name, type(error).__name__)
+            node.last_error = "Unable to synchronize shared plugin settings"
+            failed.append(node.name)
+            if not previously_unavailable and had_connection:
+                _email_remote_connection_alert(db, node, "unavailable", node.last_error)
+
+    local_hash = hashlib.sha256(local["content"].encode("utf-8")).hexdigest()
+    selected = {**local, "hash": local_hash}
+    for _node, _token, remote in connected:
+        if remote["modified_at_ns"] > selected["modified_at_ns"]:
+            selected = remote
+
+    local_changed = selected["hash"] != local_hash or selected["modified_at_ns"] != local["modified_at_ns"]
+    if local_changed:
+        try:
+            save_repository_text(selected["content"], modified_at_ns=selected["modified_at_ns"])
+        except (TypeError, ValueError) as error:
+            logger.warning("Unable to apply synchronized plugin settings (%s)", type(error).__name__)
+            db.commit()
+            return {"updated": False, "linked_nodes": len(nodes), "failed_nodes": failed, "error": str(error)}
+
+    for node, token, remote in connected:
+        if remote["hash"] == selected["hash"] and remote["modified_at_ns"] == selected["modified_at_ns"]:
+            continue
+        try:
+            result = _request(
+                node.base_url,
+                token,
+                "/api/node/plugin-monitoring-settings",
+                method="PUT",
+                payload={"content": selected["content"], "modified_at_ns": selected["modified_at_ns"]},
+            )
+            if not isinstance(result, dict) or result.get("success") is not True:
+                raise RemoteNodeError("The remote Craftarr did not save the shared plugin settings")
+            node.last_connected_at = now
+            node.last_error = None
+        except (RemoteNodeError, ValueError) as error:
+            if "HTTP 409" in str(error):
+                logger.info("Plugin monitoring settings sync deferred for %s while its monitor is busy", node.name)
+                continue
+            node.last_error = str(error)[:255]
+            if node.name not in failed:
+                failed.append(node.name)
+        except Exception as error:
+            logger.warning("Unable to send shared plugin settings to %s (%s)", node.name, type(error).__name__)
+            node.last_error = "Unable to synchronize shared plugin settings"
+            if node.name not in failed:
+                failed.append(node.name)
+
+    for node in recoveries:
+        if node.last_error is None:
+            _email_remote_connection_alert(db, node, "restored", None)
+
+    db.commit()
+    return {
+        "updated": local_changed or any(
+            remote["hash"] != selected["hash"] or remote["modified_at_ns"] != selected["modified_at_ns"]
+            for _node, _token, remote in connected
+        ),
+        "linked_nodes": len(nodes),
+        "failed_nodes": failed,
+    }
+
+
+def run_linked_plugin_settings_sync(force=False) -> dict:
+    """Periodically reconcile shared plugin defaults across linked consoles."""
+    global _last_plugin_settings_sync
+    now = time.monotonic()
+    if not force and now - _last_plugin_settings_sync < _plugin_settings_sync_interval:
+        return {"skipped": True}
+    _last_plugin_settings_sync = now
+
+    from .database import SessionLocal
+    from .update_monitor import CheckInProgress, acquire_lease
+    from .models import UpdateMonitorLease
+
+    db = SessionLocal()
+    try:
+        try:
+            acquire_lease(db, datetime.utcnow())
+        except CheckInProgress:
+            return {"skipped": True}
+        try:
+            return synchronize_plugin_monitoring_repositories(db)
+        except Exception as error:
+            logger.exception("Linked plugin settings synchronization failed")
+            return {"updated": False, "error": str(error)}
+        finally:
+            db.rollback()
+            db.query(UpdateMonitorLease).filter_by(id=1).update({"expires_at": datetime.min})
+            db.commit()
+    finally:
+        db.close()

@@ -757,6 +757,8 @@ let notificationReadIds = new Set();
 let notificationEvents = [];
 let updateNotifications = [];
 let previousUpdateNotificationIds = null;
+let notificationReadSyncAt = 0;
+let notificationReadSyncPromise = null;
 
 try {
   notificationReadIds = new Set(JSON.parse(localStorage.getItem(notificationReadKey) || "[]"));
@@ -783,6 +785,49 @@ function saveNotificationReadIds() {
   } catch {
     // Notifications remain usable for this page even when storage is unavailable.
   }
+}
+
+async function syncNotificationReadState() {
+  if (!notificationCenter || Date.now() - notificationReadSyncAt < 10000) return;
+  if (notificationReadSyncPromise) return notificationReadSyncPromise;
+  notificationReadSyncPromise = (async () => {
+    try {
+      const response = await fetch("/api/web/notifications/read", { cache: "no-store" });
+      if (!response.ok) return;
+      const data = await response.json();
+      const ids = Array.isArray(data.read_ids) ? data.read_ids.filter((id) => typeof id === "string") : [];
+      const serverIds = new Set(ids);
+      const shouldSave = [...notificationReadIds].some((id) => !serverIds.has(id));
+      ids.forEach((id) => notificationReadIds.add(id));
+      saveNotificationReadIds();
+      if (shouldSave) {
+        const saveResponse = await fetch("/api/web/notifications/read", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ read_ids: [...notificationReadIds].slice(-200) }),
+        });
+        if (!saveResponse.ok) return;
+      }
+      notificationReadSyncAt = Date.now();
+      updateNotificationBadge();
+    } catch {
+      // Keep the local read state if the server cannot be reached.
+    }
+  })();
+  try {
+    await notificationReadSyncPromise;
+  } finally {
+    notificationReadSyncPromise = null;
+  }
+}
+
+function persistNotificationReadState() {
+  if (!notificationCenter) return;
+  fetch("/api/web/notifications/read", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ read_ids: [...notificationReadIds].slice(-200) }),
+  }).catch(() => {});
 }
 
 function updateNotificationBadge() {
@@ -813,11 +858,15 @@ function renderNotifications() {
     const unreadClass = notificationReadIds.has(item.id) ? "" : " is-unread";
     const icon = item.kind === "server-state"
       ? "fa-server"
-      : String(item.kind).startsWith("paper-")
-        ? "fa-cubes-stacked"
-        : String(item.kind).startsWith("backup-")
-          ? "fa-box-archive"
-          : "fa-puzzle-piece";
+      : item.kind === "remote-offline"
+        ? "fa-plug-circle-xmark"
+        : item.kind === "system-alert"
+          ? "fa-triangle-exclamation"
+          : String(item.kind).startsWith("paper-")
+            ? "fa-cubes-stacked"
+            : String(item.kind).startsWith("backup-")
+              ? "fa-box-archive"
+              : "fa-puzzle-piece";
     const time = item.checked_at && !Number.isNaN(Date.parse(item.checked_at))
       ? new Date(item.checked_at).toLocaleString()
       : "";
@@ -834,6 +883,7 @@ function markNotificationRead(id) {
   if (!id) return;
   notificationReadIds.add(id);
   saveNotificationReadIds();
+  persistNotificationReadState();
   document.querySelectorAll("[data-notification-id]").forEach((item) => {
     if (item.dataset.notificationId === id) item.classList.remove("is-unread");
   });
@@ -843,6 +893,7 @@ function markNotificationRead(id) {
 function markAllNotificationsRead() {
   allNotifications().forEach((item) => notificationReadIds.add(item.id));
   saveNotificationReadIds();
+  persistNotificationReadState();
   renderNotifications();
 }
 
@@ -861,6 +912,7 @@ function recordInAppNotification(item) {
 async function refreshNotifications(announceNew = true) {
   if (!document.getElementById("notification-list")) return;
   try {
+    await syncNotificationReadState();
     const response = await fetch("/api/web/notifications", { cache: "no-store" });
     if (!response.ok) return;
     const data = await response.json();
@@ -870,6 +922,8 @@ async function refreshNotifications(announceNew = true) {
       const added = next.filter((item) => !previousUpdateNotificationIds.has(item.id) && !notificationReadIds.has(item.id));
       const updates = added.filter((item) => ["plugin-update", "paper-update"].includes(item.kind));
       const backups = added.filter((item) => String(item.kind).startsWith("backup-"));
+      const systemAlerts = added.filter((item) => item.kind === "system-alert");
+      const offlineNodes = added.filter((item) => item.kind === "remote-offline");
       if (updates.length) {
         showToast(updates.length === 1 ? updates[0].title : `${updates.length} new updates are available.`, "info", 6500);
       }
@@ -880,6 +934,12 @@ async function refreshNotifications(announceNew = true) {
           interrupted ? "warning" : "success",
           6500,
         );
+      }
+      if (offlineNodes.length) {
+        showToast(offlineNodes.length === 1 ? offlineNodes[0].title : `${offlineNodes.length} linked consoles are unreachable.`, "warning", 7000);
+      }
+      if (systemAlerts.length) {
+        showToast(systemAlerts.length === 1 ? systemAlerts[0].title : `${systemAlerts.length} linked hosts have high resource usage.`, "warning", 7000);
       }
     }
     previousUpdateNotificationIds = currentIds;
@@ -2730,7 +2790,8 @@ async function updateConsolePage() {
     );
 
     if (!response.ok) {
-      throw new Error();
+      const problem = await response.json().catch(() => null);
+      throw new Error(problem?.error || problem?.detail || `Console request failed (HTTP ${response.status})`);
     }
 
     const data = await response.json();
@@ -2796,10 +2857,12 @@ async function updateConsolePage() {
     ) {
       scrollConsoleToBottom();
     }
-  } catch {
+  } catch (error) {
     consoleLines = [];
 
-    output.textContent = "Unable to load console.";
+    output.textContent = error.message
+      ? `Unable to load console: ${error.message}`
+      : "Unable to load console.";
 
     input.disabled = true;
     send.disabled = true;
@@ -6752,9 +6815,10 @@ async function loadRemoteNodes() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Linked consoles could not be loaded.");
     remoteNodeState = data.nodes || [];
+    updateOffsiteConsoleOptions();
     list.innerHTML = remoteNodeState.length ? remoteNodeState.map((node) => `
       <div class="settings-user-row remote-node-row">
-        <div><strong>${escapeHtml(node.name)}</strong><small>${escapeHtml(node.base_url)} · ${Number(node.server_count)} server${Number(node.server_count) === 1 ? "" : "s"}${node.last_error ? ` · <span class="remote-node-error">${escapeHtml(node.last_error)}</span>` : ""}</small></div>
+        <div><strong>${escapeHtml(node.name)}</strong><small>${escapeHtml(node.base_url)} · ${Number(node.server_count)} server${Number(node.server_count) === 1 ? "" : "s"}${node.last_connected_at ? ` · Last contact ${escapeHtml(new Date(node.last_connected_at).toLocaleString())}` : ""}${node.last_error ? ` · <span class="remote-node-error">${escapeHtml(node.last_error)}</span>` : ""}</small></div>
         <div class="remote-node-actions">
           <button class="icon-button" type="button" aria-label="Refresh ${escapeHtml(node.name)}" title="Refresh server list" onclick="refreshRemoteNode('${escapeJsString(node.node_id)}')"><i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i></button>
           <button class="button" type="button" onclick="openRemoteNodeModal('${escapeJsString(node.node_id)}')">Edit</button>
@@ -6764,6 +6828,24 @@ async function loadRemoteNodes() {
   } catch (error) {
     list.innerHTML = `<div class="empty-message">${escapeHtml(error.message || "Linked consoles could not be loaded.")}</div>`;
   }
+}
+
+function updateOffsiteConsoleOptions() {
+  const select = document.getElementById("offsite-node-select");
+  if (!select) return;
+  const selected = select.value;
+  select.innerHTML = '<option value="">This console</option>' + remoteNodeState.map((node) =>
+    `<option value="${escapeHtml(node.node_id)}">${escapeHtml(node.name)}</option>`,
+  ).join("");
+  if (remoteNodeState.some((node) => node.node_id === selected)) select.value = selected;
+}
+
+function offsiteBackupApiPath(suffix = "") {
+  const nodeId = document.getElementById("offsite-node-select")?.value || "";
+  const root = nodeId
+    ? `/api/web/settings/nodes/${encodeURIComponent(nodeId)}/offsite-backups`
+    : "/api/web/settings/offsite-backups";
+  return `${root}${suffix}`;
 }
 
 function openRemoteNodeModal(nodeId = "") {
@@ -6788,10 +6870,16 @@ function closeRemoteNodeModal() {
 async function saveRemoteNode() {
   const nodeId = document.getElementById("remote-node-id").value;
   const status = document.getElementById("remote-node-save-status");
+  const baseUrl = document.getElementById("remote-node-url").value.trim();
+  const allowInsecureHttp = /^http:\/\//i.test(baseUrl);
+  if (allowInsecureHttp && !confirm(
+    "This link uses unencrypted HTTP. The full-access node token and server traffic can be read by anyone able to monitor the network. Continue only over a trusted private network such as Tailscale or a VPN. Continue?",
+  )) return;
   const payload = {
     name: document.getElementById("remote-node-name").value.trim(),
-    base_url: document.getElementById("remote-node-url").value.trim(),
+    base_url: baseUrl,
     token: document.getElementById("remote-node-token").value.trim(),
+    allow_insecure_http: allowInsecureHttp,
   };
   status.textContent = "Checking connection and loading servers…";
   try {
@@ -6838,14 +6926,16 @@ async function loadOffsiteBackupSettings() {
   const list = document.getElementById("offsite-remote-list");
   if (!status) return;
   try {
-    const response = await fetch("/api/web/settings/offsite-backups");
+    const response = await fetch(offsiteBackupApiPath());
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Off-site backups could not be checked.");
+    const selectedNode = remoteNodeState.find((node) => node.node_id === document.getElementById("offsite-node-select")?.value);
+    const consoleLabel = selectedNode ? `${selectedNode.name}: ` : "This console: ";
     status.textContent = data.available
-      ? `${data.remotes.length} destination${data.remotes.length === 1 ? "" : "s"} configured`
+      ? `${consoleLabel}${data.remotes.length} destination${data.remotes.length === 1 ? "" : "s"} configured`
       : data.reason === "not_installed"
-        ? "rclone is not installed. Install it to enable off-site backups."
-        : `Off-site backups are unavailable: ${data.error}`;
+        ? `${consoleLabel}rclone is not installed. Install it to enable off-site backups.`
+        : `${consoleLabel}off-site backups are unavailable: ${data.error}`;
     const options = document.getElementById("offsite-test-remote");
     const selectedRemote = options.value;
     options.innerHTML = '<option value="">Choose a destination</option>' + (data.remotes || []).map((remote) => `<option value="${escapeHtml(remote)}">${escapeHtml(remote)}</option>`).join("");
@@ -6857,7 +6947,7 @@ async function loadOffsiteBackupSettings() {
         <div class="offsite-remote-actions">${["b2", "storj", "sftp"].includes(remote.backend) ? `<button class="button" type="button" onclick="openOffsiteRemoteModal('${escapeJsString(remote.name)}')">Edit</button>` : ""}<button class="button danger" type="button" onclick="deleteOffsiteRemote('${escapeJsString(remote.name)}')">Remove</button></div>
       </div>`).join("") : `<div class="empty-message">${data.reason === "not_installed" ? "Install rclone, then add your first destination here." : "No off-site destinations configured yet."}</div>`;
   } catch (error) {
-    status.textContent = "Off-site backups could not be checked. Try refreshing after restarting the panel.";
+    status.textContent = error.message || "Off-site backups could not be checked. Try refreshing after restarting the panel.";
     if (list) list.innerHTML = '<div class="empty-message">No destination information is available.</div>';
   }
 }
@@ -6893,7 +6983,7 @@ async function savePluginMonitoringRepository() {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Unable to save shared plugin settings.");
-    status.textContent = `${data.plugins} shared plugin setting${data.plugins === 1 ? "" : "s"} saved.`;
+    status.textContent = `${data.plugins} shared plugin setting${data.plugins === 1 ? "" : "s"} saved.${pluginRepositorySyncMessage(data)}`;
   } catch (error) {
     status.textContent = error.message || "Unable to save shared plugin settings.";
   }
@@ -6921,10 +7011,17 @@ async function uploadPluginMonitoringRepository(input) {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Unable to upload shared plugin settings.");
     editor.value = content;
-    status.textContent = `${data.plugins} shared plugin setting${data.plugins === 1 ? "" : "s"} uploaded.`;
+    status.textContent = `${data.plugins} shared plugin setting${data.plugins === 1 ? "" : "s"} uploaded.${pluginRepositorySyncMessage(data)}`;
   } catch (error) {
     status.textContent = error.message || "Unable to upload shared plugin settings.";
   }
+}
+
+function pluginRepositorySyncMessage(data) {
+  const errors = Array.isArray(data.sync_errors) ? data.sync_errors : [];
+  if (errors.length) return ` Sync is pending for: ${errors.join(", ")}.`;
+  const count = Number(data.linked_nodes) || 0;
+  return count ? ` Synchronized with ${count} linked console${count === 1 ? "" : "s"}.` : "";
 }
 
 function offsiteProviderName(backend) {
@@ -6974,7 +7071,7 @@ async function saveOffsiteRemote() {
   if (backend === "sftp") Object.assign(payload, { host: document.getElementById("offsite-sftp-host").value.trim(), port: document.getElementById("offsite-sftp-port").value, user: document.getElementById("offsite-sftp-user").value.trim(), secret: document.getElementById("offsite-sftp-secret").value });
   const status = document.getElementById("offsite-remote-save-status");
   status.textContent = "Saving...";
-  const response = await fetch("/api/web/settings/offsite-backups/remotes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  const response = await fetch(offsiteBackupApiPath("/remotes"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   const data = await response.json();
   if (!response.ok) return status.textContent = data.error || "Unable to save destination.";
   closeOffsiteRemoteModal();
@@ -6983,7 +7080,7 @@ async function saveOffsiteRemote() {
 
 async function deleteOffsiteRemote(name) {
   if (!confirm(`Remove the ${name} destination? Existing remote files will not be deleted.`)) return;
-  const response = await fetch(`/api/web/settings/offsite-backups/remotes/${encodeURIComponent(name)}`, { method: "DELETE" });
+  const response = await fetch(offsiteBackupApiPath(`/remotes/${encodeURIComponent(name)}`), { method: "DELETE" });
   const data = await response.json();
   if (!response.ok) return alert(data.error || "Unable to remove destination.");
   loadOffsiteBackupSettings();
@@ -7013,7 +7110,7 @@ async function testOffsiteBackupDestination() {
   }
   setOffsiteTestStatus("Testing connection...");
   try {
-    const response = await fetch("/api/web/settings/offsite-backups/test", {
+    const response = await fetch(offsiteBackupApiPath("/test"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ remote, path }),

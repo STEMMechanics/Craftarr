@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from .auth import hash_password
 from .database import get_db
-from .models import AccessRole, Server, User
+from .models import AccessRole, RemoteNode, Server, User
 from .permissions import PERMISSION_GROUPS, has_permission
 from .web_context import build_web_context
 from .web_render import render_page
@@ -136,7 +136,12 @@ async def _save_plugin_monitoring_repository(request: Request, db: Session):
     except CheckInProgress as error:
         return JSONResponse({'error': str(error)}, status_code=409)
     try:
-        return save_repository_text(content)
+        result = save_repository_text(content)
+        from .remote_nodes import synchronize_plugin_monitoring_repositories
+        sync_result = synchronize_plugin_monitoring_repositories(db)
+        result["linked_nodes"] = sync_result["linked_nodes"]
+        result["sync_errors"] = sync_result["failed_nodes"]
+        return result
     except (ValueError, TypeError) as error:
         return JSONResponse({'error': str(error)}, status_code=400)
     finally:
@@ -246,6 +251,88 @@ def remove_offsite_remote(name: str, request: Request, db: Session = Depends(get
     except OffsiteBackupError as error:
         return JSONResponse({"error": str(error)}, status_code=404)
     return {"success": True}
+
+
+def _proxy_linked_offsite_settings(db: Session, node_id: str, path: str, *, method="GET", payload=None, timeout=8.0):
+    from .node_security import decrypt_remote_token
+    from .remote_nodes import RemoteNodeError, _request
+
+    node = db.query(RemoteNode).filter(RemoteNode.node_id == node_id).first()
+    if not node:
+        raise RemoteNodeError("Linked console not found")
+    token = decrypt_remote_token(node.token_ciphertext)
+    return _request(node.base_url, token, path, method=method, payload=payload, timeout=timeout)
+
+
+@router.get("/api/web/settings/nodes/{node_id}/offsite-backups")
+def linked_offsite_backup_settings(node_id: str, request: Request, db: Session = Depends(get_db)):
+    admin = current_web_user(request, db)
+    if not admin:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not has_permission(admin, "settings.manage"):
+        return JSONResponse({"error": "Admin required"}, status_code=403)
+    try:
+        return _proxy_linked_offsite_settings(db, node_id, "/api/node/offsite-backups")
+    except ValueError as error:
+        return JSONResponse({"error": str(error)}, status_code=502)
+
+
+@router.post("/api/web/settings/nodes/{node_id}/offsite-backups/test")
+async def test_linked_offsite_backup(node_id: str, request: Request, db: Session = Depends(get_db)):
+    admin = current_web_user(request, db)
+    if not admin:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not has_permission(admin, "settings.manage"):
+        return JSONResponse({"error": "Admin required"}, status_code=403)
+    try:
+        payload = await request.json()
+    except ValueError:
+        return JSONResponse({"error": "Enter a valid destination"}, status_code=400)
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": "Enter a valid destination"}, status_code=400)
+    try:
+        return _proxy_linked_offsite_settings(
+            db, node_id, "/api/node/offsite-backups/test", method="POST", payload=payload, timeout=30.0,
+        )
+    except ValueError as error:
+        return JSONResponse({"error": str(error)}, status_code=502)
+
+
+@router.post("/api/web/settings/nodes/{node_id}/offsite-backups/remotes")
+async def save_linked_offsite_remote(node_id: str, request: Request, db: Session = Depends(get_db)):
+    admin = current_web_user(request, db)
+    if not admin:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not has_permission(admin, "settings.manage"):
+        return JSONResponse({"error": "Admin required"}, status_code=403)
+    try:
+        payload = await request.json()
+    except ValueError:
+        return JSONResponse({"error": "Enter valid destination settings"}, status_code=400)
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": "Enter valid destination settings"}, status_code=400)
+    try:
+        return _proxy_linked_offsite_settings(
+            db, node_id, "/api/node/offsite-backups/remotes", method="POST", payload=payload,
+        )
+    except ValueError as error:
+        return JSONResponse({"error": str(error)}, status_code=502)
+
+
+@router.delete("/api/web/settings/nodes/{node_id}/offsite-backups/remotes/{name}")
+def delete_linked_offsite_remote(node_id: str, name: str, request: Request, db: Session = Depends(get_db)):
+    admin = current_web_user(request, db)
+    if not admin:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not has_permission(admin, "settings.manage"):
+        return JSONResponse({"error": "Admin required"}, status_code=403)
+    from urllib.parse import quote
+    try:
+        return _proxy_linked_offsite_settings(
+            db, node_id, f"/api/node/offsite-backups/remotes/{quote(name, safe='')}", method="DELETE",
+        )
+    except ValueError as error:
+        return JSONResponse({"error": str(error)}, status_code=502)
 
 
 @router.get(

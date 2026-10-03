@@ -129,7 +129,7 @@
             <button class="settings-header-button" type="button" onclick="openRemoteNodeModal()"><i class="fa-solid fa-plus" aria-hidden="true"></i> Link console</button>
         </div>
         <div class="settings-content">
-            <p class="modal-note full-width">Add a remote console using its HTTPS URL and node token. This console applies user roles and server assignments before forwarding management requests.</p>
+            <p class="modal-note full-width">Add a remote console using its URL and node token. HTTPS is recommended; HTTP is supported after a warning for trusted private networks such as Tailscale or a VPN. This console applies user roles and server assignments before forwarding management requests.</p>
             <div id="remote-node-list" class="settings-user-list full-width"><div class="empty-message">Loading linked consoles...</div></div>
         </div>
     </section>
@@ -140,6 +140,7 @@
             <input id="remote-node-id" type="hidden">
             <label class="property-field full-width"><span>Display name</span><input id="remote-node-name" maxlength="100" placeholder="Survival network"></label>
             <label class="property-field full-width"><span>Craftarr URL</span><input id="remote-node-url" type="url" inputmode="url" placeholder="https://craftarr.example.com" autocomplete="url"></label>
+            <p class="modal-note full-width">HTTPS is recommended. HTTP can be used over a trusted private network; Craftarr will ask you to acknowledge the risk before connecting.</p>
             <label class="property-field full-width"><span>Node token</span><input id="remote-node-token" type="password" autocomplete="new-password" placeholder="Paste the token from the remote console"></label>
             <p id="remote-node-save-status" class="modal-note" role="status"></p>
             <div class="modal-actions"><button class="button" type="button" onclick="closeRemoteNodeModal()">Cancel</button><button class="button success" type="button" onclick="saveRemoteNode()">Connect</button></div>
@@ -152,7 +153,7 @@
             <a class="settings-header-button" href="/api/web/settings/plugin-monitoring-repository/download"><i class="fa-solid fa-download" aria-hidden="true"></i> Download</a>
         </div>
         <div class="settings-content plugin-monitoring-repository-content">
-            <p class="modal-note full-width">These settings are available to every server. Plugin settings can use this shared source or keep a server-specific source. Uploading replaces the shared repository. Use version 1 YAML, up to 256 KiB.</p>
+            <p class="modal-note full-width">These settings are available to every server and synchronize across linked consoles. Plugin settings can use this shared source or keep a server-specific source. Uploading replaces the shared repository. Use version 1 YAML, up to 256 KiB.</p>
             <label class="property-field full-width" for="plugin-monitoring-repository-editor">
                 <span>Repository file (YAML)</span>
                 <textarea id="plugin-monitoring-repository-editor" rows="20" spellcheck="false" autocapitalize="off"></textarea>
@@ -177,6 +178,7 @@
             </div>
         </div>
         <div class="settings-content">
+            <label class="property-field full-width"><span>Configure for console</span><select id="offsite-node-select" onchange="loadOffsiteBackupSettings()"><option value="">This console</option></select><small>Each console keeps its own off-site credentials and rclone configuration.</small></label>
             <div id="offsite-remote-list" class="offsite-remote-list full-width"><div class="empty-message">Loading destinations...</div></div>
             <div class="offsite-test-content full-width">
                 <label class="offsite-test-content-header">Test Connection</label>
@@ -221,7 +223,7 @@
     <div id="offsite-remote-modal" class="modal-backdrop" hidden>
         <div class="modal-card offsite-remote-modal" role="dialog" aria-modal="true" aria-labelledby="offsite-remote-title">
             <h2 id="offsite-remote-title">Add off-site destination</h2>
-            <p>Credentials are written to the panel's private rclone configuration and are never returned to the browser.</p>
+            <p>Credentials are written to the selected console's private rclone configuration and are never returned to the browser.</p>
             <div class="offsite-remote-form">
                 <label class="property-field"><span>Name</span><input id="offsite-remote-name" maxlength="50" placeholder="family-backups"></label>
                 <label class="property-field"><span>Storage provider</span><select id="offsite-remote-backend" onchange="updateOffsiteRemoteFields()"><option value="b2">Backblaze B2</option><option value="storj">Storj</option><option value="sftp">SFTP server</option></select></label>
@@ -371,7 +373,7 @@
                 <span>Cooldown (minutes)</span>
                 <input id="system-alert-cooldown" type="number" min="1" max="10080" value="60">
             </label>
-            <p class="modal-note full-width">Alerts are sent to enabled administrators with an email address. SMTP must be configured above.</p>
+            <p class="modal-note full-width">The same thresholds apply to linked consoles. Resource alerts appear in the hub for settings administrators and are emailed through the hub's SMTP settings.</p>
             <div class="settings-save-row">
                 <span id="system-alert-save-status" class="muted-small"></span>
                 <button class="button" type="button" onclick="saveSystemAlertSettings()">Save Alerts</button>

@@ -66,6 +66,17 @@ def read_repository_text():
         raise ValueError('The shared plugin settings file must be UTF-8 text') from None
 
 
+def read_repository_snapshot():
+    """Read the shared settings plus its filesystem revision timestamp."""
+    path = _source_path()
+    content = read_repository_text()
+    try:
+        modified_at_ns = path.stat().st_mtime_ns
+    except OSError:
+        modified_at_ns = 0
+    return {"content": content, "modified_at_ns": modified_at_ns}
+
+
 def validate_repository_text(content):
     if not isinstance(content, str):
         raise ValueError('Plugin settings must be text')
@@ -115,7 +126,7 @@ def validate_repository_text(content):
     return data
 
 
-def _write_repository_text(content):
+def _write_repository_text(content, modified_at_ns=None):
     validate_repository_text(content)
     path = repository_path()
     temporary = None
@@ -128,6 +139,8 @@ def _write_repository_text(content):
                 target.flush()
                 os.fsync(target.fileno())
             os.replace(temporary, path)
+            if modified_at_ns is not None:
+                os.utime(path, ns=(modified_at_ns, modified_at_ns))
             temporary = None
             _load.cache_clear()
     except OSError:
@@ -140,10 +153,14 @@ def _write_repository_text(content):
                 pass
 
 
-def save_repository_text(content):
+def save_repository_text(content, modified_at_ns=None):
     data = validate_repository_text(content)
-    _write_repository_text(content)
-    return {'success': True, 'plugins': len(data['plugins'])}
+    _write_repository_text(content, modified_at_ns=modified_at_ns)
+    return {
+        'success': True,
+        'plugins': len(data['plugins']),
+        'modified_at_ns': read_repository_snapshot()['modified_at_ns'],
+    }
 
 
 def add_repository_entry(name, settings):

@@ -18,6 +18,7 @@ from .remote_nodes import (
     fetch_remote_inventory,
     normalize_remote_url,
     refresh_remote_node,
+    run_linked_plugin_settings_sync,
     sync_node_servers,
 )
 from .web_users import current_web_user
@@ -95,7 +96,10 @@ async def add_remote_node(request: Request, db: Session = Depends(get_db)):
     if len(token) < 20 or len(token) > 200:
         return JSONResponse({"error": "Enter a valid node token"}, status_code=400)
     try:
-        base_url = normalize_remote_url(str(data.get("base_url", "")))
+        base_url = normalize_remote_url(
+            str(data.get("base_url", "")),
+            allow_insecure_http=data.get("allow_insecure_http") is True,
+        )
         identity, inventory = fetch_remote_inventory(base_url, token)
     except RemoteNodeError as error:
         return JSONResponse({"error": str(error)}, status_code=400)
@@ -121,6 +125,8 @@ async def add_remote_node(request: Request, db: Session = Depends(get_db)):
         return JSONResponse({"error": "A node with this name, URL, or identity is already linked"}, status_code=409)
 
     db.refresh(node)
+    run_linked_plugin_settings_sync(force=True)
+    db.refresh(node)
     return {"success": True, "node": _node_summary(node)}
 
 
@@ -144,7 +150,10 @@ async def update_remote_node(node_id: str, request: Request, db: Session = Depen
         return JSONResponse({"error": "Name must be 2 to 100 characters"}, status_code=400)
     token = str(data.get("token", "")).strip()
     try:
-        base_url = normalize_remote_url(str(data.get("base_url", node.base_url)))
+        base_url = normalize_remote_url(
+            str(data.get("base_url", node.base_url)),
+            allow_insecure_http=data.get("allow_insecure_http") is True,
+        )
         secret = token if token else decrypt_remote_token(node.token_ciphertext)
         if token and not 20 <= len(token) <= 200:
             return JSONResponse({"error": "Enter a valid node token"}, status_code=400)
@@ -167,6 +176,8 @@ async def update_remote_node(node_id: str, request: Request, db: Session = Depen
     except IntegrityError:
         db.rollback()
         return JSONResponse({"error": "A node with this name or URL is already linked"}, status_code=409)
+    db.refresh(node)
+    run_linked_plugin_settings_sync(force=True)
     db.refresh(node)
     return {"success": True, "node": _node_summary(node)}
 
@@ -194,6 +205,13 @@ def delete_remote_node(node_id: str, request: Request, db: Session = Depends(get
     node = db.query(RemoteNode).filter(RemoteNode.node_id == node_id).first()
     if not node:
         return JSONResponse({"error": "Remote node not found"}, status_code=404)
+    try:
+        from .remote_nodes import _request
+
+        token = decrypt_remote_token(node.token_ciphertext)
+        _request(node.base_url, token, "/api/node/system-alerts/unlink", method="POST", payload={})
+    except (RemoteNodeError, ValueError):
+        pass
     db.delete(node)
     db.commit()
     return {"success": True}

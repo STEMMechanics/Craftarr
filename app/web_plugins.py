@@ -890,6 +890,10 @@ async def promote_plugin_monitoring(server_id: int, request: Request, db: Sessio
             'asset_pattern': data.get('asset_pattern', ''),
         })
         save_monitoring_config(db, server.id, plugin['name'], 'global')
+        from .remote_nodes import synchronize_plugin_monitoring_repositories
+        sync_result = synchronize_plugin_monitoring_repositories(db)
+        repository_result["linked_nodes"] = sync_result["linked_nodes"]
+        repository_result["sync_errors"] = sync_result["failed_nodes"]
         return repository_result
     except (TypeError, ValueError) as error:
         return JSONResponse({'error': str(error)}, status_code=400)

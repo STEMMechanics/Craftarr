@@ -20,6 +20,18 @@ def _admin_addresses(db) -> list[str]:
     })
 
 
+def hub_manages_alerts(db, now: datetime | None = None) -> bool:
+    now = now or datetime.utcnow()
+    if get_setting(db, "notifications_managed_by_hub").lower() != "true":
+        return False
+    raw_seen = get_setting(db, "notifications_hub_seen_at")
+    try:
+        seen_at = datetime.fromisoformat(raw_seen) if raw_seen else None
+    except ValueError:
+        seen_at = None
+    return bool(seen_at and now - seen_at <= timedelta(minutes=3))
+
+
 def check_system_alerts(db, now: datetime | None = None) -> list[str]:
     now = now or datetime.utcnow()
     settings = get_system_alert_settings(db)
@@ -35,6 +47,7 @@ def check_system_alerts(db, now: datetime | None = None) -> list[str]:
         "storage": settings["storage_percent"],
     }
     recipients = _admin_addresses(db)
+    hub_managed = hub_manages_alerts(db, now)
     sent = []
     for resource, percent in readings.items():
         if percent < thresholds[resource] or not recipients:
@@ -46,6 +59,13 @@ def check_system_alerts(db, now: datetime | None = None) -> list[str]:
         except ValueError:
             last = None
         if last and now - last < timedelta(minutes=settings["cooldown_minutes"]):
+            continue
+        if hub_managed:
+            # The linked hub reports this alert to its own users and SMTP.
+            # Keep this host's cooldown state without mailing remote accounts.
+            set_setting(db, key, now.isoformat())
+            db.commit()
+            sent.append(resource)
             continue
         subject = f"Craftarr alert: {resource} usage is {percent:.1f}%"
         body = (
