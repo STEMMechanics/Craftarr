@@ -57,7 +57,7 @@ def _required_permissions(path: str, method: str) -> set[str] | None:
         return {"servers.control"}
     if first == "delete":
         return {"servers.delete"}
-    if first in {"console", "logs"}:
+    if first in {"console", "console-data", "logs"}:
         return {"console.view"}
     if first == "command":
         return {"console.command"}

@@ -14,7 +14,7 @@ from .plugin_monitoring import monitoring_config
 from .update_providers.http_source import SourceError
 from .paper import inspect_paper_jar
 from .emailer import send_email
-from .system_alerts import _admin_addresses
+from .system_alerts import _admin_addresses, hub_manages_alerts
 
 logger = logging.getLogger(__name__)
 CACHE_TTL = timedelta(hours=6)
@@ -211,6 +211,8 @@ def paper_result(db, server, *, fetch=False, force=False, now=None, seen=None):
 
 
 def notify_updates(db, grouped, now):
+    if hub_manages_alerts(db, now):
+        return
     # Use the same recipient policy as system alerts, further scoped to the
     # content each administrator is allowed to see.
     addresses = set(_admin_addresses(db))
