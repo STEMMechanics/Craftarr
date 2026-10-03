@@ -16,6 +16,7 @@ from .auth import (
 
 from .database import get_db
 from .audit import record_audit_event
+from .instance_identity import get_node_id, server_reference
 
 from .models import (
     Server,
@@ -42,6 +43,17 @@ router = APIRouter(
 )
 
 
+def _server_out(server: Server, node_id: str) -> dict:
+    data = {
+        field: getattr(server, field)
+        for field in ServerOut.model_fields
+        if field not in {"node_id", "server_ref"}
+    }
+    data["node_id"] = node_id
+    data["server_ref"] = server_reference(node_id, server.id)
+    return ServerOut.model_validate(data).model_dump()
+
+
 @router.get(
     "",
     response_model=list[ServerOut],
@@ -56,18 +68,20 @@ def list_servers(
         raise HTTPException(status_code=403, detail="Server view permission required")
 
     if has_permission(user, "servers.view_all"):
-
-        return (
+        servers = (
             db.query(Server)
             .order_by(Server.name)
             .all()
         )
+    else:
+        servers = sorted(
+            user.servers,
+            key=lambda server:
+                server.name.lower(),
+        )
 
-    return sorted(
-        user.servers,
-        key=lambda server:
-            server.name.lower(),
-    )
+    node_id = get_node_id(db)
+    return [_server_out(server, node_id) for server in servers]
 
 
 @router.get(
@@ -84,11 +98,12 @@ def get_server(
     if not has_permission(user, "servers.view"):
         raise HTTPException(status_code=403, detail="Server view permission required")
 
-    return get_server_for_user(
+    server = get_server_for_user(
         db,
         server_id,
         user,
     )
+    return _server_out(server, get_node_id(db))
 
 
 @router.post(
@@ -142,7 +157,7 @@ def create_server(
         action="Server created",
     )
 
-    return server
+    return _server_out(server, get_node_id(db))
 
 
 @router.patch(
@@ -224,7 +239,7 @@ def update_server(
             details="Changed fields: " + ", ".join(changed_fields),
         )
 
-    return server
+    return _server_out(server, get_node_id(db))
 
 
 @router.delete(

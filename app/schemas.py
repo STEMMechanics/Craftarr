@@ -1,4 +1,5 @@
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -16,6 +17,26 @@ class LoginRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class InstanceOut(BaseModel):
+    node_id: str
+
+
+class NodeServerOut(BaseModel):
+    server_id: int = Field(gt=0)
+    name: str = Field(min_length=1, max_length=100)
+    minecraft_version: str | None = Field(default=None, max_length=40)
+    paper_build: str | None = Field(default=None, max_length=40)
+    memory: str = Field(max_length=20)
+    min_memory: str = Field(max_length=20)
+    port: int = Field(ge=1, le=65535)
+    enabled: bool
+
+
+class NodeIdentityOut(BaseModel):
+    node_id: UUID
+    app_version: str
 
 
 class UserCreate(BaseModel):
@@ -131,6 +152,8 @@ class ServerOut(BaseModel):
     )
 
     id: int
+    node_id: str
+    server_ref: str
     name: str
     directory: str
     service_name: str

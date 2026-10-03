@@ -1129,6 +1129,8 @@ document.body.addEventListener(
     loadAdvancedProperties();
     updateSMTPSettings();
     loadOffsiteBackupSettings();
+    loadNodeAccessTokenStatus();
+    loadRemoteNodes();
     updateTFASettings();
     updateBackupJobs();
     updateServerProcessStats();
@@ -5467,10 +5469,18 @@ function checkServerPortWarning(port, excludeServerId = null) {
       return;
     }
     const params = new URLSearchParams({ port: String(numericPort) });
-    if (excludeServerId) params.set("exclude_server_id", String(excludeServerId));
+    const serverRef = String(excludeServerId || "");
+    let endpoint;
+    if (serverRef.includes(":")) {
+      endpoint = `/api/web/servers/${serverRef}/port-warning?${params}`;
+    } else {
+      if (excludeServerId) params.set("exclude_server_id", serverRef);
+      endpoint = `/api/web/servers/port-warning?${params}`;
+    }
     try {
-      const response = await fetch(`/api/web/servers/port-warning?${params}`);
+      const response = await fetch(endpoint);
       const data = await response.json();
+      if (!response.ok) throw new Error("Port check failed");
       notice.textContent = data.warning || "";
       notice.hidden = !data.warning;
     } catch {
@@ -6282,9 +6292,7 @@ function selectedSettingsServers() {
     )
     .map(
       (checkbox) =>
-        Number(
-          checkbox.value,
-        ),
+        checkbox.value,
     );
 }
 
@@ -6636,6 +6644,154 @@ updateSMTPSettings();
 
 let offsiteRemoteState = [];
 
+let nodeAccessTokenActive = false;
+let remoteNodeState = [];
+
+async function loadNodeAccessTokenStatus() {
+  const status = document.getElementById("node-access-token-status");
+  const field = document.getElementById("node-access-token");
+  const copyButton = document.getElementById("copy-node-token");
+  if (!status || !field || !copyButton) return;
+  field.value = "";
+  copyButton.disabled = true;
+  try {
+    const response = await fetch("/api/web/settings/node-token");
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Token status could not be loaded.");
+    nodeAccessTokenActive = Boolean(data.active);
+    status.textContent = nodeAccessTokenActive
+      ? "A token is active. Regenerate it to issue a new token; the current value is not shown again."
+      : "No token exists yet. Generate one to link this console to a hub.";
+  } catch (error) {
+    status.textContent = error.message || "Token status could not be loaded.";
+  }
+}
+
+async function regenerateNodeAccessToken() {
+  const field = document.getElementById("node-access-token");
+  const status = document.getElementById("node-access-token-status");
+  const copyButton = document.getElementById("copy-node-token");
+  if (!field || !status || !copyButton) return;
+  if (nodeAccessTokenActive && !confirm("Regenerate this token? Existing links will stop working until each hub is updated with the new token.")) return;
+  status.textContent = "Generating a new token…";
+  try {
+    const response = await fetch("/api/web/settings/node-token/regenerate", { method: "POST" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Token could not be generated.");
+    field.type = "text";
+    field.value = data.token;
+    copyButton.disabled = false;
+    nodeAccessTokenActive = true;
+    status.textContent = "New token active. Copy it and update each linked hub now; previous tokens are invalid.";
+  } catch (error) {
+    status.textContent = error.message || "Token could not be generated.";
+  }
+}
+
+async function copyNodeAccessToken() {
+  const field = document.getElementById("node-access-token");
+  const status = document.getElementById("node-access-token-status");
+  if (!field?.value || !status) return;
+  try {
+    await navigator.clipboard.writeText(field.value);
+  } catch {
+    field.type = "text";
+    field.focus();
+    field.select();
+    document.execCommand("copy");
+  }
+  status.textContent = "Node token copied.";
+}
+
+async function loadRemoteNodes() {
+  const list = document.getElementById("remote-node-list");
+  if (!list) return;
+  try {
+    const response = await fetch("/api/web/settings/nodes");
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Linked consoles could not be loaded.");
+    remoteNodeState = data.nodes || [];
+    list.innerHTML = remoteNodeState.length ? remoteNodeState.map((node) => `
+      <div class="settings-user-row remote-node-row">
+        <div><strong>${escapeHtml(node.name)}</strong><small>${escapeHtml(node.base_url)} · ${Number(node.server_count)} server${Number(node.server_count) === 1 ? "" : "s"}${node.last_error ? ` · <span class="remote-node-error">${escapeHtml(node.last_error)}</span>` : ""}</small></div>
+        <div class="remote-node-actions">
+          <button class="icon-button" type="button" aria-label="Refresh ${escapeHtml(node.name)}" title="Refresh server list" onclick="refreshRemoteNode('${escapeJsString(node.node_id)}')"><i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i></button>
+          <button class="button" type="button" onclick="openRemoteNodeModal('${escapeJsString(node.node_id)}')">Edit</button>
+          <button class="button danger" type="button" onclick="deleteRemoteNode('${escapeJsString(node.node_id)}', '${escapeJsString(node.name)}')">Remove</button>
+        </div>
+      </div>`).join("") : '<div class="empty-message">No linked Craftarr consoles yet.</div>';
+  } catch (error) {
+    list.innerHTML = `<div class="empty-message">${escapeHtml(error.message || "Linked consoles could not be loaded.")}</div>`;
+  }
+}
+
+function openRemoteNodeModal(nodeId = "") {
+  const node = remoteNodeState.find((item) => item.node_id === nodeId);
+  document.getElementById("remote-node-id").value = node?.node_id || "";
+  document.getElementById("remote-node-name").value = node?.name || "";
+  document.getElementById("remote-node-url").value = node?.base_url || "";
+  const token = document.getElementById("remote-node-token");
+  token.value = "";
+  token.placeholder = node ? "Leave blank to keep the saved token" : "Paste the token from the remote console";
+  document.getElementById("remote-node-modal-title").textContent = node ? "Edit linked console" : "Link Craftarr console";
+  document.getElementById("remote-node-save-status").textContent = node
+    ? "Changing the token does not change the node ID or server assignments."
+    : "The connection is checked before it is saved.";
+  document.getElementById("remote-node-modal").hidden = false;
+}
+
+function closeRemoteNodeModal() {
+  document.getElementById("remote-node-modal").hidden = true;
+}
+
+async function saveRemoteNode() {
+  const nodeId = document.getElementById("remote-node-id").value;
+  const status = document.getElementById("remote-node-save-status");
+  const payload = {
+    name: document.getElementById("remote-node-name").value.trim(),
+    base_url: document.getElementById("remote-node-url").value.trim(),
+    token: document.getElementById("remote-node-token").value.trim(),
+  };
+  status.textContent = "Checking connection and loading servers…";
+  try {
+    const response = await fetch(nodeId
+      ? `/api/web/settings/nodes/${encodeURIComponent(nodeId)}`
+      : "/api/web/settings/nodes", {
+      method: nodeId ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Console could not be linked.");
+    closeRemoteNodeModal();
+    await loadRemoteNodes();
+    window.location.reload();
+  } catch (error) {
+    status.textContent = error.message || "Console could not be linked.";
+  }
+}
+
+async function refreshRemoteNode(nodeId) {
+  try {
+    const response = await fetch(`/api/web/settings/nodes/${encodeURIComponent(nodeId)}/refresh`, { method: "POST" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Server list could not be refreshed.");
+    await loadRemoteNodes();
+    window.location.reload();
+  } catch (error) {
+    alert(error.message || "Server list could not be refreshed.");
+  }
+}
+
+async function deleteRemoteNode(nodeId, name) {
+  if (!confirm(`Unlink ${name}? Its server assignments will be removed from this console.`)) return;
+  const response = await fetch(`/api/web/settings/nodes/${encodeURIComponent(nodeId)}`, { method: "DELETE" });
+  const data = await response.json();
+  if (!response.ok) return alert(data.error || "Console could not be unlinked.");
+  await loadRemoteNodes();
+  window.location.reload();
+}
+
 async function loadOffsiteBackupSettings() {
   const status = document.getElementById("offsite-settings-status");
   const list = document.getElementById("offsite-remote-list");
@@ -6833,6 +6989,8 @@ async function testOffsiteBackupDestination() {
 
 loadOffsiteBackupSettings();
 loadPluginMonitoringRepository();
+loadNodeAccessTokenStatus();
+loadRemoteNodes();
 
 async function updateTFASettings() {
   const disabled = document.getElementById(

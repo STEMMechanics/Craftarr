@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 
-from .models import Server, User
+from .models import RemoteServer, Server, User
 
 from .version import APP_VERSION
 from .permissions import has_permission
@@ -14,15 +14,25 @@ def get_available_servers(
         return []
 
     if has_permission(user, "servers.view_all"):
-        return (
+        local_servers = (
             db.query(Server)
             .order_by(Server.name)
             .all()
         )
+        remote_servers = db.query(RemoteServer).order_by(RemoteServer.name).all()
+    else:
+        local_servers = list(user.servers)
+        remote_servers = list(getattr(user, "remote_servers", []))
+    hub_servers = list(getattr(user, "hub_servers", []))
+
+    servers_by_id = {
+        str(server.id): server
+        for server in [*local_servers, *remote_servers, *hub_servers]
+    }
 
     return sorted(
-        user.servers,
-        key=lambda server: server.name.lower(),
+        servers_by_id.values(),
+        key=lambda server: (server.name.casefold(), str(getattr(server, "node_name", "Local")).casefold()),
     )
 
 

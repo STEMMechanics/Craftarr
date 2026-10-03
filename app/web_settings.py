@@ -56,6 +56,7 @@ from .models import (
     Server,
     User,
 )
+from .server_access import apply_server_assignments, list_server_choices
 
 from .update_manager import (
     get_latest_release,
@@ -325,11 +326,7 @@ def settings_page(
             .all()
         )
 
-        context["servers"] = (
-            db.query(Server)
-            .order_by(Server.name)
-            .all()
-        )
+        context["servers"] = list_server_choices(db)
 
     if has_permission(user, "roles.manage"):
         context["permission_groups"] = PERMISSION_GROUPS
@@ -549,8 +546,8 @@ def get_user_settings(
             user.must_change_password,
 
         "servers": [
-            server.id
-            for server in user.servers
+            *[server.id for server in user.servers],
+            *[server.server_ref for server in user.remote_servers],
         ],
     }
 
@@ -658,24 +655,15 @@ async def create_user_settings(
     db.add(user)
     db.flush()
 
-    if not any(permission.key == "servers.view_all" for permission in access_role.permissions):
-
-        server_ids = data.get(
-            "servers",
-            [],
-        )
-
-        for server_id in server_ids:
-
-            server = db.get(
-                Server,
-                int(server_id),
-            )
-
-            if server:
-                user.servers.append(
-                    server
-                )
+    if any(permission.key == "servers.view_all" for permission in access_role.permissions):
+        user.servers.clear()
+        user.remote_servers.clear()
+    else:
+        try:
+            apply_server_assignments(db, user, data.get("servers", []))
+        except ValueError as error:
+            db.rollback()
+            return JSONResponse({"error": str(error)}, status_code=400)
 
     db.commit()
 
@@ -813,33 +801,14 @@ async def update_user_settings(
         )
 
     if any(permission.key == "servers.view_all" for permission in access_role.permissions):
-
         user.servers.clear()
-
+        user.remote_servers.clear()
     else:
-
-        server_ids = {
-            int(server_id)
-            for server_id
-            in data.get(
-                "servers",
-                [],
-            )
-        }
-
-        user.servers.clear()
-
-        for server_id in server_ids:
-
-            server = db.get(
-                Server,
-                server_id,
-            )
-
-            if server:
-                user.servers.append(
-                    server
-                )
+        try:
+            apply_server_assignments(db, user, data.get("servers", []))
+        except ValueError as error:
+            db.rollback()
+            return JSONResponse({"error": str(error)}, status_code=400)
 
     db.commit()
 

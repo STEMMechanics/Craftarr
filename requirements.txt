@@ -3,6 +3,7 @@ uvicorn[standard]
 sqlalchemy
 pydantic
 python-jose[cryptography]
+cryptography
 pwdlib[argon2]
 python-multipart
 jinja2

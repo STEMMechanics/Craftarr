@@ -111,6 +111,42 @@
     </section>
 
     <section class="overview-card settings-section">
+        <div class="card-header">Linked console access token</div>
+        <div class="settings-content">
+            <p class="modal-note full-width">Generate a token on the console you want to manage remotely, then add that console in the hub's linked consoles below. Regenerating immediately invalidates the old token; update every hub using it.</p>
+            <div class="node-token-row full-width">
+                <input id="node-access-token" type="password" readonly autocomplete="off" placeholder="No token generated">
+                <button id="copy-node-token" class="icon-button" type="button" aria-label="Copy node token" title="Copy token" onclick="copyNodeAccessToken()" disabled><i class="fa-solid fa-copy" aria-hidden="true"></i></button>
+                <button id="regenerate-node-token" class="icon-button" type="button" aria-label="Generate or regenerate node token" title="Generate or regenerate token" onclick="regenerateNodeAccessToken()"><i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i></button>
+            </div>
+            <small id="node-access-token-status" class="muted-small full-width" role="status"></small>
+        </div>
+    </section>
+
+    <section class="overview-card settings-section">
+        <div class="card-header">
+            <span>Linked Craftarr consoles</span>
+            <button class="settings-header-button" type="button" onclick="openRemoteNodeModal()"><i class="fa-solid fa-plus" aria-hidden="true"></i> Link console</button>
+        </div>
+        <div class="settings-content">
+            <p class="modal-note full-width">Add a remote console using its HTTPS URL and node token. This console applies user roles and server assignments before forwarding management requests.</p>
+            <div id="remote-node-list" class="settings-user-list full-width"><div class="empty-message">Loading linked consoles...</div></div>
+        </div>
+    </section>
+
+    <div id="remote-node-modal" class="modal-backdrop" hidden>
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="remote-node-modal-title">
+            <h2 id="remote-node-modal-title">Link Craftarr console</h2>
+            <input id="remote-node-id" type="hidden">
+            <label class="property-field full-width"><span>Display name</span><input id="remote-node-name" maxlength="100" placeholder="Survival network"></label>
+            <label class="property-field full-width"><span>Craftarr URL</span><input id="remote-node-url" type="url" inputmode="url" placeholder="https://craftarr.example.com" autocomplete="url"></label>
+            <label class="property-field full-width"><span>Node token</span><input id="remote-node-token" type="password" autocomplete="new-password" placeholder="Paste the token from the remote console"></label>
+            <p id="remote-node-save-status" class="modal-note" role="status"></p>
+            <div class="modal-actions"><button class="button" type="button" onclick="closeRemoteNodeModal()">Cancel</button><button class="button success" type="button" onclick="saveRemoteNode()">Connect</button></div>
+        </div>
+    </div>
+
+    <section class="overview-card settings-section">
         <div class="card-header">
             <span>Shared plugin update settings</span>
             <a class="settings-header-button" href="/api/web/settings/plugin-monitoring-repository/download"><i class="fa-solid fa-download" aria-hidden="true"></i> Download</a>
@@ -612,7 +648,7 @@
                 <input type="checkbox" value="{{ server.id }}" class="settings-server-checkbox">
 
                 <span>
-                    {{ server.name }}
+                    {{ server.name }}{% if server.node_name is defined %}<small>{{ server.node_name }}</small>{% endif %}
                 </span>
 
             </label>

@@ -1,3 +1,9 @@
+import base64
+import json
+import re
+import uuid
+from dataclasses import dataclass
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -17,7 +23,9 @@ from .auth import hash_password
 from .audit import record_audit_event
 from .database import get_db
 from .models import AccessRole, Server, User
+from .node_security import verify_node_token
 from .permissions import has_permission
+from .server_access import apply_server_assignments, assigned_server_keys, list_server_choices
 from .web_context import build_web_context
 
 
@@ -27,11 +35,130 @@ templates = Jinja2Templates(
     directory="app/templates"
 )
 
+_NODE_SERVER_PATH = re.compile(r"^/(?:api/web/servers|servers)/\d+(?:/|$)")
+
+
+@dataclass(frozen=True)
+class HubServerChoice:
+    """A namespaced server entry from the authenticated hub's menu."""
+
+    id: str
+    name: str
+    node_name: str
+    minecraft_version: str | None
+    memory: str
+
+
+class GatewayUser:
+    """Request-scoped user asserted by an authenticated Craftarr hub."""
+
+    id = None
+    role = "user"
+    role_id = None
+    access_role = None
+    enabled = True
+
+    def __init__(
+        self,
+        username: str,
+        permissions: set[str],
+        servers: list[Server],
+        hub_servers: list[HubServerChoice],
+    ):
+        self.username = username[:64]
+        self.permissions = permissions
+        self.servers = servers
+        self.hub_servers = hub_servers
+
+    def can(self, permission: str) -> bool:
+        return permission in self.permissions
+
+    @property
+    def role_name(self) -> str:
+        return "Linked console user"
+
+
+def _gateway_user(request: Request, db: Session):
+    path = request.url.path
+    if not _NODE_SERVER_PATH.match(path):
+        return None
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not verify_node_token(db, token):
+        return None
+
+    encoded = request.headers.get("x-craftarr-user", "")
+    if not encoded or len(encoded) > 8192:
+        return None
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(encoded.encode("ascii")))
+        if not isinstance(payload, dict):
+            return None
+        username = str(payload.get("username", "")).strip()
+        permissions = {str(item) for item in payload.get("permissions", [])}
+        server_ids = {int(item) for item in payload.get("servers", [])}
+        raw_hub_servers = payload.get("hub_servers", [])
+    except (ValueError, TypeError, UnicodeError, json.JSONDecodeError):
+        return None
+    if (
+        not username
+        or len(username) > 64
+        or len(permissions) > 64
+        or len(server_ids) > 10000
+        or any(server_id <= 0 for server_id in server_ids)
+        or not isinstance(raw_hub_servers, list)
+        or len(raw_hub_servers) > 1000
+    ):
+        return None
+
+    hub_servers = []
+    try:
+        for item in raw_hub_servers:
+            if not isinstance(item, dict):
+                return None
+            server_ref = str(item.get("id", ""))
+            node_part, server_part = server_ref.rsplit(":", 1)
+            uuid.UUID(node_part)
+            if int(server_part) <= 0:
+                return None
+            name = str(item.get("name", "")).strip()
+            node_name = str(item.get("node_name", "Remote")).strip()
+            if not name or len(name) > 100 or len(node_name) > 100:
+                return None
+            minecraft_version = (
+                str(item["minecraft_version"])
+                if item.get("minecraft_version")
+                else None
+            )
+            if minecraft_version and len(minecraft_version) > 40:
+                return None
+            hub_servers.append(HubServerChoice(
+                id=server_ref,
+                name=name,
+                node_name=node_name or "Remote",
+                minecraft_version=minecraft_version,
+                memory=str(item.get("memory", "2G"))[:20],
+            ))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+    servers = (
+        db.query(Server).filter(Server.id.in_(server_ids)).all()
+        if server_ids else []
+    )
+    gateway_user = GatewayUser(username, permissions, servers, hub_servers)
+    request.state.craftarr_gateway_user = gateway_user
+    request.state.craftarr_actor_username = gateway_user.username
+    return gateway_user
+
 
 def current_web_user(
     request: Request,
     db: Session,
 ):
+    gateway_user = _gateway_user(request, db)
+    if gateway_user is not None:
+        return gateway_user
+
     user_id = request.session.get(
         "user_id"
     )
@@ -199,17 +326,8 @@ def edit_user_page(
             detail="User not found",
         )
 
-    servers = (
-        db.query(Server)
-        .order_by(Server.name)
-        .all()
-    )
-
-    assigned_ids = {
-        server.id
-        for server
-        in edit_user.servers
-    }
+    servers = list_server_choices(db)
+    assigned_ids = assigned_server_keys(edit_user)
 
     context = build_web_context(db, admin)
     context.update({
@@ -344,28 +462,13 @@ async def save_server_access(
 
     form = await request.form()
 
-    selected_ids = {
-        int(value)
-        for value
-        in form.getlist("servers")
-    }
-
-    servers = (
-        db.query(Server)
-        .filter(
-            Server.id.in_(
-                selected_ids
-            )
-        )
-        .all()
-        if selected_ids
-        else []
-    )
-
     previous_servers = {server.id: server for server in edit_user.servers}
-    selected_servers = {server.id: server for server in servers}
+    try:
+        apply_server_assignments(db, edit_user, form.getlist("servers"))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
-    edit_user.servers = servers
+    selected_servers = {server.id: server for server in edit_user.servers}
 
     db.commit()
 

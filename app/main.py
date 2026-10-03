@@ -30,6 +30,9 @@ from .routers_auth import (
     router as auth_router,
 )
 
+from .routers_instance import router as instance_router
+from .routers_node_api import router as node_api_router
+
 from .routers_servers import (
     router as servers_router,
 )
@@ -81,6 +84,7 @@ from .web_settings import (
 from .web_roles import router as web_roles_router
 from .web_automation import router as web_automation_router
 from .web_notifications import router as web_notifications_router
+from .web_nodes import router as nodes_router
 from .automation import start_automation, stop_automation
 from .backup_jobs import fail_abandoned_backup_jobs
 
@@ -90,6 +94,8 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from .system_operation import current_operation
 
 from .web import router as web_router
+from .node_gateway import maybe_proxy_remote_server
+from .node_security import verify_node_token
 
 app = FastAPI(
     title="Craftarr Server Console",
@@ -98,7 +104,9 @@ app = FastAPI(
 
 @app.middleware("http")
 async def security_headers(request, call_next):
-    response = await call_next(request)
+    response = await maybe_proxy_remote_server(request)
+    if response is None:
+        response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "same-origin")
@@ -168,23 +176,35 @@ async def record_server_audit_events(request, call_next):
         return await call_next(request)
 
     actor_id = request.session.get("user_id")
-    if not actor_id:
-        return await call_next(request)
+    forwarded_actor = request.headers.get("x-craftarr-actor", "").strip()
+    authorization_scheme, _, authorization_token = request.headers.get("authorization", "").partition(" ")
+    trusted_forwarded_actor = bool(
+        forwarded_actor
+        and authorization_scheme.lower() == "bearer"
+    )
 
     server_name = f"Server {server_id}"
     actor_username = None
     db = SessionLocal()
     try:
+        if trusted_forwarded_actor:
+            trusted_forwarded_actor = verify_node_token(db, authorization_token)
         server = db.get(Server, server_id)
         if server:
             server_name = server.name
-        actor = db.get(User, actor_id)
-        if actor and actor.enabled:
-            actor_username = actor.username
+        if actor_id:
+            actor = db.get(User, actor_id)
+            if actor and actor.enabled:
+                actor_username = actor.username
+        elif trusted_forwarded_actor:
+            actor_username = forwarded_actor[:64]
     except Exception:
         pass
     finally:
         db.close()
+
+    if not actor_username:
+        return await call_next(request)
 
     response = await call_next(request)
     if getattr(request.state, "skip_audit", False):
@@ -237,6 +257,9 @@ app.include_router(web_router)
 app.include_router(
     auth_router
 )
+
+app.include_router(instance_router)
+app.include_router(node_api_router)
 
 app.include_router(
     users_router
@@ -293,6 +316,7 @@ app.include_router(web_roles_router)
 app.include_router(web_automation_router)
 
 app.include_router(web_notifications_router)
+app.include_router(nodes_router)
 
 @app.on_event("startup")
 def startup():
