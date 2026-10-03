@@ -615,6 +615,16 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .server-card-icon { display: grid; width: 46px; height: 46px; place-items: center; border-radius: 14px; background: #e2f2ff; color: var(--sm-blue-dark); font-size: 19px; }
 .server-card-badge { padding: 5px 9px; border-radius: var(--sm-radius-pill); background: #eaf4ff; color: #285f98; font-size: 10px; font-weight: 700; }
 .friendly-server-card h2 { margin: 13px 0 7px; overflow-wrap: anywhere; font-size: 19px; }
+.server-node-label { margin: -3px 0 9px; color: var(--sm-muted); font-size: 12px; font-weight: 600; }
+.node-token-row { display: flex; align-items: center; gap: 8px; }
+.node-token-row input { min-width: 0; flex: 1; }
+.node-token-row .icon-button { flex: 0 0 auto; width: 40px; height: 40px; }
+.remote-node-row { gap: 14px; }
+.remote-node-row > div:first-child { min-width: 0; }
+.remote-node-row small { overflow-wrap: anywhere; }
+.remote-node-actions { display: flex; align-items: center; gap: 7px; }
+.remote-node-actions .icon-button { flex: 0 0 auto; width: 38px; height: 38px; }
+.remote-node-error { color: var(--danger, #b42318); }
 .server-card-status { display: inline-flex; min-height: 27px; align-self: flex-start; align-items: center; gap: 7px; margin: 0 0 8px; padding: 4px 10px; border: 1px solid #d8e5f0; border-radius: var(--sm-radius-pill); background: #f5f9fd; color: #526a80; font-size: 11px; font-weight: 700; }
 .server-card-status .server-status-dot { width: 8px; height: 8px; flex-basis: 8px; }
 .server-card-status.is-online { border-color: #a8dfbd; background: #ecf9f0; color: #17613a; }

@@ -1,7 +1,7 @@
 {% set topbar_server = active_server if active_server and request.url.path.startswith('/servers/' ~ active_server.id) else none %}
 <div class="topbar" data-server-id="{{ topbar_server.id if topbar_server else '' }}">
   <div class="topbar-actions">
-    <div class="notification-center" data-user-id="{{ user.id }}">
+    <div class="notification-center" data-user-id="{{ user.id or user.username }}">
       <button id="notifications-toggle" class="icon-button topbar-icon-button" type="button"
               onclick="toggleNotifications()" aria-label="Notifications" aria-expanded="false"
               aria-controls="notifications-panel" title="Notifications">

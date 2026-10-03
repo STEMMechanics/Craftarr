@@ -1,7 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     ForeignKey,
@@ -9,6 +10,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -40,6 +42,14 @@ role_permissions = Table(
     Base.metadata,
     Column("role_id", Integer, ForeignKey("access_roles.id", ondelete="CASCADE"), primary_key=True),
     Column("permission_id", Integer, ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True),
+)
+
+
+user_remote_server_access = Table(
+    "user_remote_server_access",
+    Base.metadata,
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("remote_server_id", Integer, ForeignKey("remote_servers.id", ondelete="CASCADE"), primary_key=True),
 )
 
 
@@ -139,6 +149,11 @@ class User(Base):
     servers = relationship(
         "Server",
         secondary=user_server_access,
+        back_populates="users",
+    )
+    remote_servers = relationship(
+        "RemoteServer",
+        secondary=user_remote_server_access,
         back_populates="users",
     )
 
@@ -253,6 +268,93 @@ class AppSetting(Base):
         Text,
         nullable=True,
     )
+
+
+class CraftarrInstance(Base):
+    """Persistent identity for this Craftarr installation."""
+
+    __tablename__ = "craftarr_instance"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_craftarr_instance_singleton"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    node_id = Column(String(36), unique=True, nullable=False)
+
+
+class NodeAccessToken(Base):
+    """The one active secret accepted from a trusted management console."""
+
+    __tablename__ = "node_access_tokens"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_node_access_tokens_singleton"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    token_hash = Column(String(64), unique=True, nullable=False)
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+
+
+class RemoteNode(Base):
+    """A Craftarr instance managed through this console."""
+
+    __tablename__ = "remote_nodes"
+
+    id = Column(Integer, primary_key=True)
+    node_id = Column(String(36), unique=True, nullable=False, index=True)
+    name = Column(String(100), nullable=False, unique=True)
+    base_url = Column(String(1000), nullable=False, unique=True)
+    token_ciphertext = Column(Text, nullable=False)
+    last_connected_at = Column(DateTime, nullable=True)
+    last_error = Column(String(255), nullable=True)
+    servers = relationship(
+        "RemoteServer",
+        back_populates="node",
+        cascade="all, delete-orphan",
+    )
+
+
+class RemoteServer(Base):
+    """Cached inventory for a server hosted by a linked Craftarr node."""
+
+    __tablename__ = "remote_servers"
+    __table_args__ = (
+        UniqueConstraint("node_id", "server_id", name="uq_remote_servers_node_server"),
+    )
+
+    record_id = Column("id", Integer, primary_key=True)
+    node_id = Column(String(36), ForeignKey("remote_nodes.node_id", ondelete="CASCADE"), nullable=False, index=True)
+    server_id = Column(Integer, nullable=False)
+    name = Column(String(100), nullable=False)
+    minecraft_version = Column(String(40), nullable=True)
+    paper_build = Column(String(40), nullable=True)
+    memory = Column(String(20), nullable=False, default="2G")
+    min_memory = Column(String(20), nullable=False, default="2G")
+    port = Column(Integer, nullable=False, default=25565)
+    enabled = Column(Boolean, nullable=False, default=True)
+
+    node = relationship("RemoteNode", back_populates="servers")
+    users = relationship(
+        "User",
+        secondary=user_remote_server_access,
+        back_populates="remote_servers",
+    )
+
+    @property
+    def id(self) -> str:
+        return f"{self.node_id}:{self.server_id}"
+
+    @property
+    def server_ref(self) -> str:
+        return self.id
+
+    @property
+    def node_name(self) -> str:
+        return self.node.name if self.node else "Remote"
 
 
 class PasswordResetToken(Base):

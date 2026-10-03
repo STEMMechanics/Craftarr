@@ -396,7 +396,7 @@ def web_system_stats(
 def system_page(
     request: Request,
     db: Session = Depends(get_db),
-    active_server_id: int | None = None,
+    active_server_id: str | None = None,
 ):
     user_id = request.session.get(
         "user_id"
@@ -427,7 +427,7 @@ def system_page(
     context["active_server"] = next(
         (
             server for server in context["available_servers"]
-            if server.id == active_server_id
+            if str(server.id) == str(active_server_id)
         ),
         context["active_server"],
     )

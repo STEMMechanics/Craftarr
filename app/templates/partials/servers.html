@@ -19,6 +19,7 @@
                 <span class="server-card-badge">Paper server</span>
             </div>
             <h2>{{ server.name }}</h2>
+            {% if server.node_name is defined %}<div class="server-node-label">{{ server.node_name }}</div>{% endif %}
             <div class="server-card-status is-unknown" data-server-id="{{ server.id }}" role="status" aria-live="polite">
                 <span class="server-status-dot" data-server-id="{{ server.id }}" aria-hidden="true"></span>
                 <span class="server-card-status-text" data-server-id="{{ server.id }}">Checking…</span>

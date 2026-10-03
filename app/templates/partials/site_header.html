@@ -37,7 +37,7 @@
                 <a class="server-choice" role="menuitem" href="/servers/{{ item.id }}"
                    {% if sidebar_same_server and item.id == selected_id %}hx-get="/servers/{{ item.id }}" hx-target="#page-content" hx-push-url="true"{% endif %}>
                     <span class="server-status-dot" data-server-id="{{ item.id }}" aria-hidden="true"></span>
-                    <span><strong>{{ item.name }}</strong><small>{{ item.minecraft_version or 'Minecraft server' }}</small></span>
+                    <span><strong>{{ item.name }}</strong><small>{% if item.node_name is defined %}{{ item.node_name }} · {% endif %}{{ item.minecraft_version or 'Minecraft server' }}</small></span>
                     <span class="server-status-text" data-server-id="{{ item.id }}">Checking</span>
                 </a>
                 {% else %}

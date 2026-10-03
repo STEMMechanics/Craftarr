@@ -79,6 +79,7 @@ from .permissions import has_permission
 
 from .web_context import (
     build_web_context,
+    get_available_servers,
 )
 
 from .web_render import (
@@ -250,6 +251,29 @@ def server_port_warning(
     }
 
 
+@router.get("/api/web/servers/{server_id}/port-warning")
+def assigned_server_port_warning(
+    server_id: int,
+    port: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not server:
+        return JSONResponse({"error": "Server not found or access denied"}, status_code=404)
+    if not has_permission(user, "servers.properties"):
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+    conflict = port_assignment_conflict(db, port, server.id)
+    return {
+        "warning": (
+            f'{conflict.name} is also assigned port {port}. Only one of these servers can run at a time.'
+            if conflict else None
+        )
+    }
+
+
 # -------------------------------------------------------------------
 # Server list
 # -------------------------------------------------------------------
@@ -261,7 +285,7 @@ def server_port_warning(
 def servers_page(
     request: Request,
     db: Session = Depends(get_db),
-    active_server_id: int | None = None,
+    active_server_id: str | int | None = None,
 ):
     user = current_web_user(
         request,
@@ -273,21 +297,11 @@ def servers_page(
             "/login"
         )
 
-    if has_permission(user, "servers.view_all"):
-
-        servers = (
-            db.query(Server)
-            .order_by(Server.name)
-            .all()
-        )
-
-    else:
-
-        servers = user.servers
+    servers = get_available_servers(db, user)
 
     context = build_web_context(db, user)
     active_server = next(
-        (server for server in servers if server.id == active_server_id),
+        (server for server in servers if str(server.id) == str(active_server_id)),
         context["active_server"],
     )
     context.update({

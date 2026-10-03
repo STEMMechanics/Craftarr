@@ -215,7 +215,7 @@
                         type="number"
                         min="1"
                         max="65535"
-                        oninput="checkServerPortWarning(this.value, {{ server.id }})"
+                        oninput="checkServerPortWarning(this.value, '{{ server.id }}')"
                     >
 
                     <small id="server-port-warning" class="port-conflict-warning" hidden></small>

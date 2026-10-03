@@ -66,6 +66,8 @@ def has_permission(user: User | None, permission: str) -> bool:
         return False
     if user.role == "admin" and user.access_role is None:
         return True
+    if permission == "servers.view" and user.can("servers.view_all"):
+        return True
     return user.can(permission)
 
 

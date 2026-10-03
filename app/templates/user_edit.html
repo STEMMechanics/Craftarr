@@ -48,8 +48,8 @@
             <div class="server-access-list">
                 {% for server in servers %}
                 <label class="server-access-row">
-                    <input type="checkbox" name="servers" value="{{ server.id }}" {% if server.id in assigned_ids %}checked{% endif %}>
-                    <div><strong>{{ server.name }}</strong><span>{% if server.minecraft_version %}Minecraft {{ server.minecraft_version }}{% else %}Not set up{% endif %}</span></div>
+                    <input type="checkbox" name="servers" value="{{ server.id }}" {% if server.id|string in assigned_ids %}checked{% endif %}>
+                    <div><strong>{{ server.name }}</strong><span>{% if server.node_name is defined %}{{ server.node_name }} · {% endif %}{% if server.minecraft_version %}Minecraft {{ server.minecraft_version }}{% else %}Not set up{% endif %}</span></div>
                 </label>
                 {% else %}
                 <p>No servers yet. Make a server first.</p>

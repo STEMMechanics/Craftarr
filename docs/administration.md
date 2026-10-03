@@ -90,6 +90,42 @@ settings. Roles without global server access can receive access to specific
 servers. Keep console and file permissions limited to people who need them:
 they can issue Minecraft commands and change server data.
 
+Each Craftarr installation has a persistent UUID node ID. Authenticated API
+clients can retrieve it from `GET /api/instance`; server records returned by
+`/api/servers` also include `node_id` and a `server_ref` in the form
+`<node-id>:<local-server-id>`. The existing integer server ID remains local to
+that Craftarr installation. The node ID is an identifier, not a credential.
+
+## Linking Craftarr consoles
+
+Run the same Craftarr release on each console. The hub must be able to reach
+the managed console over HTTPS. On the managed console, open **Settings →
+Linked console access token** and generate a token. Copy it, then on the hub
+open **Settings → Linked Craftarr consoles → Link console**, enter the managed
+console's URL and token, and connect. The hub checks the token and imports the
+server list before saving the link. Use the hub's **Users** settings to assign
+each user the specific local and linked servers they can open.
+
+The token is a full server-management credential for a trusted hub. The hub
+stores it encrypted and uses its own signed-in user's role and server
+assignments to authorize each proxied request. User accounts on the managed
+console continue to govern direct sign-ins to that console. Keep the token
+private, and give it only to a hub you administer. Use a stable
+`CRAFTARR_CONSOLE_SECRET` on the hub so it can decrypt the saved remote token
+after restarts.
+
+To rotate a token, generate a replacement on the managed console, then edit
+the saved link on every hub and paste the new value. Rotation invalidates the
+previous token immediately. The hub keeps the remote node ID, cached server
+IDs, and user assignments when you update the saved token, so access resumes
+with the same server assignments after the new token is saved. Use **Refresh**
+on the linked console row to import server additions, changes, and removals.
+
+The managed console accepts the token for its node inventory API and
+server-scoped management requests. User and global console settings remain
+managed on that console. Keep both consoles updated to a release that includes
+the node API required for linking.
+
 ## Accounts and security
 
 Craftarr requires authenticated accounts and supports role assignments, fine-

@@ -54,3 +54,17 @@ def test_administrator_role_implicitly_has_every_permission():
     assert has_permission(user, "servers.delete") is True
     assert has_permission(user, "roles.manage") is True
     assert has_permission(user, "a.future.permission") is True
+
+
+def test_view_all_servers_also_grants_server_view():
+    view_all = Permission(key="servers.view_all", label="View every server")
+    role = AccessRole(name="Global viewer", permissions=[view_all])
+    user = User(
+        username="global-viewer",
+        password_hash="hash",
+        role="user",
+        enabled=True,
+        access_role=role,
+    )
+
+    assert has_permission(user, "servers.view") is True
