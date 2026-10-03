@@ -74,11 +74,16 @@ also run them before restarting:
 alembic upgrade head
 ```
 
-The System Settings page can check for an application release, install or roll
-back an update, and restart Craftarr. A maintenance lock prevents connected
-users from making changes during these operations. See the
-[installation guide](installation.md) for command-line upgrade and rollback
-procedures.
+The System Settings page can check for an application release. In-panel install,
+rollback and restart are available when Craftarr runs as a systemd service. A
+maintenance lock prevents connected users from making changes during these
+operations. See the [installation guide](installation.md) for command-line
+upgrade and rollback procedures.
+
+Docker deployments must be updated through their container manager. In TrueNAS,
+pull the new Craftarr image and redeploy or restart the app. The application
+files are managed by the image, so in-container updates cannot replace them
+reliably or restart the container safely.
 
 ## Roles and permissions
 

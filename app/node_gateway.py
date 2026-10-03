@@ -161,7 +161,7 @@ async def maybe_proxy_remote_server(request: Request):
     try:
         if node_id == get_node_id(local_db):
             rewritten_path = (
-                request.url.path[:match.start("server_id")]
+                request.url.path[:match.start("node")]
                 + match.group("server_id")
                 + request.url.path[match.end("server_id"):]
             )
@@ -204,7 +204,11 @@ async def maybe_proxy_remote_server(request: Request):
         except ValueError as error:
             return _forbidden(request, 502, str(error))
         base_url = node.base_url.rstrip("/")
-        target_path = request.url.path[:match.start("server_id")] + str(server_id) + request.url.path[match.end("server_id"):]
+        target_path = (
+            request.url.path[:match.start("node")]
+            + str(server_id)
+            + request.url.path[match.end("server_id"):]
+        )
         target_url = f"{base_url}{target_path}"
         if request.url.query:
             target_url += f"?{request.url.query}"

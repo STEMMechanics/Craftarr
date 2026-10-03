@@ -5,6 +5,7 @@ from .models import RemoteServer, Server, User
 from .version import APP_VERSION
 from .permissions import has_permission
 from .processes import systemd_available
+from .service_restart import console_restart_available, is_containerized
 
 def get_available_servers(
     db: Session,
@@ -58,4 +59,6 @@ def build_web_context(
         "active_server": active_server,
         "app_version": APP_VERSION,
         "systemd_available": systemd_available(),
+        "console_restart_available": console_restart_available(),
+        "is_containerized": is_containerized(),
     }

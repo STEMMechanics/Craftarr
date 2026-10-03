@@ -27,6 +27,12 @@ def test_normalize_version_rejects_non_numeric_release():
 
 
 def test_latest_release_check_uses_github_redirect_without_rest_api(monkeypatch):
+    current_version = update_manager.normalize_version(update_manager.APP_VERSION)
+    latest_version = ".".join(
+        str(part)
+        for part in (*current_version[:-1], current_version[-1] + 1)
+    )
+
     class RedirectResponse:
         def __enter__(self):
             return self
@@ -35,7 +41,7 @@ def test_latest_release_check_uses_github_redirect_without_rest_api(monkeypatch)
             return False
 
         def geturl(self):
-            return "https://github.com/STEMMechanics/Craftarr/releases/tag/0.4.16"
+            return f"https://github.com/STEMMechanics/Craftarr/releases/tag/{latest_version}"
 
     requests = []
 
@@ -49,8 +55,8 @@ def test_latest_release_check_uses_github_redirect_without_rest_api(monkeypatch)
     result = update_manager.get_latest_release()
 
     assert requests == [(update_manager.GITHUB_LATEST_RELEASE, 10)]
-    assert result["tag"] == "0.4.16"
-    assert result["latest_version"] == "0.4.16"
+    assert result["tag"] == latest_version
+    assert result["latest_version"] == latest_version
     assert result["update_available"] is True
 
 
