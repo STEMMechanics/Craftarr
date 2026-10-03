@@ -100,8 +100,9 @@ that Craftarr installation. The node ID is an identifier, not a credential.
 
 Run the same Craftarr release on each console. The hub must be able to reach
 the managed console over HTTPS. On the managed console, open **Settings →
-Linked console access token** and generate a token. Copy it, then on the hub
-open **Settings → Linked Craftarr consoles → Link console**, enter the managed
+Linked console access token**. The active token remains visible there and can
+be copied whenever a hub needs to be linked or reconnected. On the hub, open
+**Settings → Linked Craftarr consoles → Link console**, enter the managed
 console's URL and token, and connect. The hub checks the token and imports the
 server list before saving the link. Use the hub's **Users** settings to assign
 each user the specific local and linked servers they can open.
@@ -111,8 +112,8 @@ stores it encrypted and uses its own signed-in user's role and server
 assignments to authorize each proxied request. User accounts on the managed
 console continue to govern direct sign-ins to that console. Keep the token
 private, and give it only to a hub you administer. Use a stable
-`CRAFTARR_CONSOLE_SECRET` on the hub so it can decrypt the saved remote token
-after restarts.
+`CRAFTARR_CONSOLE_SECRET` on each console so saved node tokens remain
+decryptable and visible after restarts.
 
 To rotate a token, generate a replacement on the managed console, then edit
 the saved link on every hub and paste the new value. Rotation invalidates the
@@ -120,6 +121,10 @@ previous token immediately. The hub keeps the remote node ID, cached server
 IDs, and user assignments when you update the saved token, so access resumes
 with the same server assignments after the new token is saved. Use **Refresh**
 on the linked console row to import server additions, changes, and removals.
+
+Tokens created before persistent token display was added are stored only as
+hashes and cannot be recovered. Regenerate such a token once and update every
+hub using it; the replacement remains visible for future use.
 
 The managed console accepts the token for its node inventory API and
 server-scoped management requests. User and global console settings remain

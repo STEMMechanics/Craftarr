@@ -40,7 +40,10 @@ def get_node_token_status(request: Request, db: Session = Depends(get_db)):
     _user, error = _settings_admin(request, db)
     if error:
         return error
-    return node_token_status(db)
+    return JSONResponse(
+        node_token_status(db),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.post("/api/web/settings/node-token/regenerate")
