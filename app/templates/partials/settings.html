@@ -113,9 +113,9 @@
     <section class="overview-card settings-section">
         <div class="card-header">Linked console access token</div>
         <div class="settings-content">
-            <p class="modal-note full-width">Generate a token on the console you want to manage remotely, then add that console in the hub's linked consoles below. Regenerating immediately invalidates the old token; update every hub using it.</p>
+            <p class="modal-note full-width">The active full-access token stays visible here so you can copy it whenever needed. Add this console in the hub's linked consoles below. Regenerating immediately invalidates the old token; update every hub using it.</p>
             <div class="node-token-row full-width">
-                <input id="node-access-token" type="password" readonly autocomplete="off" placeholder="No token generated">
+                <input id="node-access-token" type="text" readonly autocomplete="off" placeholder="No token generated" spellcheck="false">
                 <button id="copy-node-token" class="icon-button" type="button" aria-label="Copy node token" title="Copy token" onclick="copyNodeAccessToken()" disabled><i class="fa-solid fa-copy" aria-hidden="true"></i></button>
                 <button id="regenerate-node-token" class="icon-button" type="button" aria-label="Generate or regenerate node token" title="Generate or regenerate token" onclick="regenerateNodeAccessToken()"><i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i></button>
             </div>

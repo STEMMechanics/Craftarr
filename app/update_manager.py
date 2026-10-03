@@ -1,4 +1,3 @@
-import json
 import hashlib
 import io
 import os
@@ -7,6 +6,8 @@ import tarfile
 import tempfile
 import subprocess
 import sys
+import threading
+import time
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -18,35 +19,10 @@ from .version import APP_VERSION
 
 
 GITHUB_REPO = "STEMMechanics/Craftarr"
-
-GITHUB_API = (
-    "https://api.github.com/repos/"
-    f"{GITHUB_REPO}"
-)
-
-
-def github_request(
-    url: str,
-):
-    request = urllib.request.Request(
-        url,
-        headers={
-            "Accept":
-                "application/vnd.github+json",
-
-            "User-Agent":
-                f"Craftarr-Console/{APP_VERSION}",
-        },
-    )
-
-    with urllib.request.urlopen(
-        request,
-        timeout=10,
-    ) as response:
-
-        return json.load(
-            response
-        )
+GITHUB_LATEST_RELEASE = f"https://github.com/{GITHUB_REPO}/releases/latest"
+RELEASE_CHECK_CACHE_SECONDS = 15 * 60
+_release_check_lock = threading.Lock()
+_release_check_cache: tuple[float, dict] | None = None
 
 
 def normalize_version(
@@ -72,84 +48,70 @@ def normalize_version(
         return (0,)
 
 
-def get_latest_release():
+def _no_published_release() -> dict:
+    return {
+        "current_version": APP_VERSION,
+        "latest_version": APP_VERSION,
+        "tag": None,
+        "name": None,
+        "url": None,
+        "published_at": None,
+        "update_available": False,
+        "release_available": False,
+    }
 
+
+def _fetch_latest_release() -> dict:
+    request = urllib.request.Request(
+        GITHUB_LATEST_RELEASE,
+        headers={
+            "Accept": "text/html",
+            "User-Agent": f"Craftarr-Console/{APP_VERSION}",
+        },
+    )
     try:
-
-        data = github_request(
-            f"{GITHUB_API}/releases/latest"
-        )
-
+        with urllib.request.urlopen(request, timeout=10) as response:
+            release_url = response.geturl()
     except urllib.error.HTTPError as error:
-
         if error.code == 404:
-
-            return {
-                "current_version":
-                    APP_VERSION,
-
-                "latest_version":
-                    APP_VERSION,
-
-                "tag":
-                    None,
-
-                "name":
-                    None,
-
-                "url":
-                    None,
-
-                "published_at":
-                    None,
-
-                "update_available":
-                    False,
-
-                "release_available":
-                    False,
-            }
-
+            return _no_published_release()
         raise
 
+    parsed = urllib.parse.urlsplit(release_url)
+    expected_prefix = f"/{GITHUB_REPO}/releases/tag/"
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "github.com"
+        or not parsed.path.startswith(expected_prefix)
+    ):
+        raise ValueError("GitHub did not redirect to a valid Craftarr release")
 
-    tag = data.get(
-        "tag_name",
-        ""
-    )
+    tag = urllib.parse.unquote(parsed.path[len(expected_prefix):])
+    if not tag or not RELEASE_TAG_PATTERN.fullmatch(tag):
+        raise ValueError("GitHub returned an invalid Craftarr release tag")
 
     return {
-        "current_version":
-            APP_VERSION,
-
-        "latest_version":
-            tag.removeprefix("v"),
-
-        "tag":
-            tag,
-
-        "name":
-            data.get("name")
-            or tag,
-
-        "url":
-            data.get("html_url"),
-
-        "published_at":
-            data.get("published_at"),
-
-        "update_available":
-            (
-                normalize_version(tag)
-                >
-                normalize_version(
-                    APP_VERSION
-                )
-            ),
-
-        "release_available":
-            True,
+        "current_version": APP_VERSION,
+        "latest_version": tag.removeprefix("v"),
+        "tag": tag,
+        "name": tag,
+        "url": release_url,
+        "published_at": None,
+        "update_available": normalize_version(tag) > normalize_version(APP_VERSION),
+        "release_available": True,
     }
+
+
+def get_latest_release() -> dict:
+    """Check GitHub's latest-release redirect, cached to avoid repeated lookups."""
+    global _release_check_cache
+    with _release_check_lock:
+        now = time.monotonic()
+        if _release_check_cache and now < _release_check_cache[0]:
+            return dict(_release_check_cache[1])
+        result = _fetch_latest_release()
+        _release_check_cache = (now + RELEASE_CHECK_CACHE_SECONDS, result)
+        return dict(result)
 
 
 MONITORING_DEFAULTS_FILE = "plugin-monitoring.yml"
@@ -174,6 +136,21 @@ def _restore_items(root: Path, backup: Path) -> None:
             shutil.copytree(saved, target)
         else:
             shutil.copy2(saved, target)
+
+
+def release_asset_urls(tag: str) -> tuple[str, str]:
+    """Build the archive and checksum URLs produced by the release workflow."""
+    if not tag or len(tag) > 64 or not RELEASE_TAG_PATTERN.fullmatch(tag):
+        raise ValueError("Invalid release tag")
+    version = tag.removeprefix("v")
+    encoded_tag = urllib.parse.quote(tag, safe="")
+    archive_name = f"craftarr-console-{version}.tar.gz"
+    encoded_archive = urllib.parse.quote(archive_name, safe="")
+    base = (
+        f"https://github.com/{GITHUB_REPO}/releases/download/"
+        f"{encoded_tag}/{encoded_archive}"
+    )
+    return base, f"{base}.sha256"
 
 
 def rollback_release(rollback_id: str, project_root: Path | None = None) -> dict:
@@ -227,20 +204,9 @@ def _safe_extract(archive_data: bytes, destination: Path) -> Path:
 def install_release(tag: str, project_root: Path | None = None) -> dict:
     if not tag or len(tag) > 64 or not RELEASE_TAG_PATTERN.fullmatch(tag):
         raise ValueError("Invalid release tag")
-    release = github_request(f"{GITHUB_API}/releases/tags/{urllib.parse.quote(tag, safe='')}")
-    if release.get("tag_name") != tag:
-        raise ValueError("Release tag does not match the requested version")
-    assets = release.get("assets", [])
-    archives = [asset for asset in assets if str(asset.get("name", "")).endswith(".tar.gz")]
-    if len(archives) != 1:
-        raise ValueError("Release must contain exactly one .tar.gz application asset")
-    archive_asset = archives[0]
-    checksum_name = archive_asset["name"] + ".sha256"
-    checksum_asset = next((asset for asset in assets if asset.get("name") == checksum_name), None)
-    if not checksum_asset:
-        raise ValueError(f"Release is missing {checksum_name}")
-    archive_data = _download(archive_asset["browser_download_url"])
-    checksum_data = _download(checksum_asset["browser_download_url"], 4096).decode("ascii", "strict")
+    archive_url, checksum_url = release_asset_urls(tag)
+    archive_data = _download(archive_url)
+    checksum_data = _download(checksum_url, 4096).decode("ascii", "strict")
     expected = checksum_data.strip().split()[0].lower()
     actual = hashlib.sha256(archive_data).hexdigest()
     if not re.fullmatch(r"[0-9a-f]{64}", expected) or actual != expected:

@@ -292,6 +292,7 @@ class NodeAccessToken(Base):
 
     id = Column(Integer, primary_key=True)
     token_hash = Column(String(64), unique=True, nullable=False)
+    token_ciphertext = Column(Text, nullable=True)
     created_at = Column(
         DateTime,
         nullable=False,

@@ -4,7 +4,13 @@ import tarfile
 import pytest
 
 from app import update_manager
-from app.update_manager import _safe_extract, install_release, normalize_version, rollback_release
+from app.update_manager import (
+    _safe_extract,
+    install_release,
+    normalize_version,
+    release_asset_urls,
+    rollback_release,
+)
 
 
 def test_normalize_version_handles_release_prefix():
@@ -18,6 +24,44 @@ def test_release_tags_support_existing_and_prefixed_conventions(tag):
 
 def test_normalize_version_rejects_non_numeric_release():
     assert normalize_version("not-a-version") == (0,)
+
+
+def test_latest_release_check_uses_github_redirect_without_rest_api(monkeypatch):
+    class RedirectResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def geturl(self):
+            return "https://github.com/STEMMechanics/Craftarr/releases/tag/0.4.16"
+
+    requests = []
+
+    def fake_urlopen(request, timeout):
+        requests.append((request.full_url, timeout))
+        return RedirectResponse()
+
+    monkeypatch.setattr(update_manager, "_release_check_cache", None)
+    monkeypatch.setattr(update_manager.urllib.request, "urlopen", fake_urlopen)
+
+    result = update_manager.get_latest_release()
+
+    assert requests == [(update_manager.GITHUB_LATEST_RELEASE, 10)]
+    assert result["tag"] == "0.4.16"
+    assert result["latest_version"] == "0.4.16"
+    assert result["update_available"] is True
+
+
+def test_release_asset_urls_match_release_workflow_names():
+    archive, checksum = release_asset_urls("v0.4.14")
+
+    assert archive == (
+        "https://github.com/STEMMechanics/Craftarr/releases/download/"
+        "v0.4.14/craftarr-console-0.4.14.tar.gz"
+    )
+    assert checksum == archive + ".sha256"
 
 
 @pytest.mark.parametrize("tag", ["v1", "v../latest", "latest", "v1/2.0", "v1.2.3;id"])

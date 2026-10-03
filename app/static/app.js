@@ -6655,13 +6655,23 @@ async function loadNodeAccessTokenStatus() {
   field.value = "";
   copyButton.disabled = true;
   try {
-    const response = await fetch("/api/web/settings/node-token");
+    const response = await fetch("/api/web/settings/node-token", { cache: "no-store" });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Token status could not be loaded.");
     nodeAccessTokenActive = Boolean(data.active);
-    status.textContent = nodeAccessTokenActive
-      ? "A token is active. Regenerate it to issue a new token; the current value is not shown again."
-      : "No token exists yet. Generate one to link this console to a hub.";
+    if (!nodeAccessTokenActive) {
+      status.textContent = "No token exists yet. Generate one to link this console to a hub.";
+      return;
+    }
+    if (data.token_available && data.token) {
+      field.value = data.token;
+      copyButton.disabled = false;
+      status.textContent = "Current token is shown. Copy it to link or reconnect a hub.";
+      return;
+    }
+    status.textContent = data.token_issue === "legacy"
+      ? "This token predates persistent display and cannot be recovered. Regenerate it once, then update every linked hub."
+      : "The token cannot be decrypted. Check that CRAFTARR_CONSOLE_SECRET is unchanged, or regenerate it and update every linked hub.";
   } catch (error) {
     status.textContent = error.message || "Token status could not be loaded.";
   }
