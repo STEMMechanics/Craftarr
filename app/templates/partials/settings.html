@@ -463,19 +463,28 @@
                     </div>
 
                     <div class="settings-version-info-buttons">
-                        {% if user.can("system.manage") %}<button id="console-update-button" class="button" onclick="upgradeConsole()" hidden>
+                        {% if user.can("system.manage") %}<button id="console-update-button" class="button" onclick="upgradeConsole()" hidden {% if not console_restart_available %}disabled aria-describedby="console-runtime-update-note" title="{% if is_containerized %}Update the container image through TrueNAS or your container manager.{% else %}In-panel updates require a systemd service.{% endif %}"{% endif %}>
                             Upgrade
                         </button>
 
-                        <button id="console-rollback-button" class="button" onclick="rollbackConsoleUpdate()" hidden>
+                        <button id="console-rollback-button" class="button" onclick="rollbackConsoleUpdate()" hidden {% if not console_restart_available %}disabled aria-describedby="console-runtime-update-note" title="Rollback is available only for systemd service installations."{% endif %}>
                             Roll back
                         </button>
 
-                        <button id="console-restart-button" class="button" onclick="restartConsoleService()">
+                        <button id="console-restart-button" class="button" onclick="restartConsoleService()" {% if not console_restart_available %}disabled aria-describedby="console-runtime-update-note" title="{% if is_containerized %}Restart the container from TrueNAS or your container manager.{% else %}Console restart requires a systemd service.{% endif %}"{% endif %}>
                             Restart Console
                         </button>
                         {% endif %}
                     </div>
+                    {% if user.can("system.manage") and not console_restart_available %}
+                    <small id="console-runtime-update-note" class="muted-small">
+                        {% if is_containerized %}
+                        This console runs in a Docker container. Update or restart its image through TrueNAS or your container manager.
+                        {% else %}
+                        In-panel updates and restarts require Craftarr to run as a systemd service.
+                        {% endif %}
+                    </small>
+                    {% endif %}
 
                 </div>
 

@@ -63,7 +63,7 @@ from .update_manager import (
     install_release,
     rollback_release,
 )
-from .service_restart import schedule_console_restart
+from .service_restart import console_restart_unavailable_reason, schedule_console_restart
 from .system_operation import (
     begin_operation,
     clear_operation,
@@ -1329,6 +1329,9 @@ async def install_update(request: Request, db: Session = Depends(get_db)):
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     if not has_permission(user, "system.manage"):
         return JSONResponse({"error": "Admin required"}, status_code=403)
+    unavailable_reason = console_restart_unavailable_reason()
+    if unavailable_reason:
+        return JSONResponse({"error": unavailable_reason}, status_code=409)
     data = await request.json()
     rollback = data.get("action") == "rollback"
     operation = begin_operation(
@@ -1367,6 +1370,9 @@ def restart_console(request: Request, db: Session = Depends(get_db)):
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     if not has_permission(user, "system.manage"):
         return JSONResponse({"error": "Admin required"}, status_code=403)
+    unavailable_reason = console_restart_unavailable_reason()
+    if unavailable_reason:
+        return JSONResponse({"error": unavailable_reason}, status_code=409)
     operation = begin_operation(
         "restart",
         "Restarting Craftarr",

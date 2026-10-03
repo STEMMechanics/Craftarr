@@ -1286,7 +1286,38 @@ async function updateServerDots() {
       const response = await fetch(
         `/api/web/servers/${serverId}/status`,
       );
-      if (!response.ok) continue;
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        const reason = payload?.error || payload?.detail || `HTTP ${response.status}`;
+        const classes = ["is-online", "is-offline", "is-starting", "is-stopping", "is-unknown"];
+        const message = `Status unavailable: ${reason}`;
+
+        dots
+          .filter((dot) => dot.dataset.serverId === serverId)
+          .forEach((dot) => {
+            dot.classList.remove(...classes, "running");
+            dot.classList.add("is-unknown");
+            dot.title = message;
+          });
+
+        document.querySelectorAll(".server-card-status")
+          .forEach((status) => {
+            if (status.dataset.serverId !== serverId) return;
+            status.classList.remove(...classes);
+            status.classList.add("is-unknown");
+            status.title = message;
+            const label = status.querySelector(".server-card-status-text");
+            if (label) label.textContent = "Unavailable";
+          });
+
+        document.querySelectorAll(".server-status-text")
+          .forEach((label) => {
+            if (label.dataset.serverId !== serverId) return;
+            label.textContent = "Unavailable";
+            label.title = message;
+          });
+        continue;
+      }
       const data = await response.json();
       const state = normalizeServerState(data);
       if (state === "unknown") continue;
