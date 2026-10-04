@@ -8,7 +8,7 @@ import json
 import os
 import sys
 from collections import Counter
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -44,18 +44,19 @@ THEMES = {
 
 
 def fetch_stargazers(repository: str) -> list[date]:
+    """Fetch star dates from GitHub's weekly star-history endpoint."""
     dates: list[date] = []
     page = 1
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     while True:
         url = (
-            f"https://api.github.com/repos/{repository}/stargazers"
+            f"https://api.github.com/repos/{repository}/stargazers/history"
             f"?per_page=100&page={page}"
         )
         headers = {
-            "Accept": "application/vnd.github.star+json",
+            "Accept": "application/vnd.github+json",
             "User-Agent": "Craftarr-star-history",
-            "X-GitHub-Api-Version": "2022-11-28",
+            "X-GitHub-Api-Version": "2026-03-10",
         }
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -68,12 +69,19 @@ def fetch_stargazers(repository: str) -> list[date]:
         if not isinstance(records, list):
             raise RuntimeError("GitHub returned an unexpected stargazer response")
         for record in records:
-            timestamp = record.get("starred_at") if isinstance(record, dict) else None
-            if timestamp:
-                try:
-                    dates.append(datetime.fromisoformat(timestamp.replace("Z", "+00:00")).date())
-                except ValueError:
-                    continue
+            if not isinstance(record, dict):
+                continue
+            week = record.get("week")
+            daily_counts = record.get("days")
+            if not isinstance(week, int) or not isinstance(daily_counts, list):
+                continue
+            try:
+                week_start = datetime.fromtimestamp(week, tz=timezone.utc).date()
+            except (OverflowError, OSError, ValueError):
+                continue
+            for offset, count in enumerate(daily_counts[:7]):
+                if isinstance(count, int) and count > 0:
+                    dates.extend([week_start + timedelta(days=offset)] * count)
         if len(records) < 100:
             break
         page += 1
