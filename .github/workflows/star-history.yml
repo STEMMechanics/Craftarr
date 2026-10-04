@@ -6,14 +6,32 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: star-history
+  cancel-in-progress: false
 
 jobs:
   update:
+    if: github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-latest
     steps:
+      - name: Create repository automation token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.STEMMECHANICS_REPO_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.STEMMECHANICS_REPO_AUTOMATION_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -26,14 +44,24 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: python scripts/update_star_history.py
 
-      - name: Commit changed charts
+      - name: Commit and push changed charts
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add assets/star-history/light.svg assets/star-history/dark.svg
+
           if git diff --cached --quiet; then
             echo "Star history charts have not changed."
             exit 0
           fi
+
+          unexpected="$(git diff --cached --name-only | grep -Ev '^assets/star-history/(light|dark)\.svg$' || true)"
+          if [[ -n "$unexpected" ]]; then
+            echo "::error::Refusing to push unexpected changed files:"
+            echo "$unexpected"
+            exit 1
+          fi
+
           git commit -m "docs: update star history charts"
-          git push
+          git push origin "HEAD:${{ github.event.repository.default_branch }}"
