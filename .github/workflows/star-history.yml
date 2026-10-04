@@ -23,8 +23,8 @@ jobs:
         with:
           app-id: ${{ secrets.STEMMECHANICS_REPO_AUTOMATION_APP_ID }}
           private-key: ${{ secrets.STEMMECHANICS_REPO_AUTOMATION_PRIVATE_KEY }}
-          owner: STEMMechanics
-          repositories: Craftarr
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
           permission-contents: write
 
       - name: Check out repository
