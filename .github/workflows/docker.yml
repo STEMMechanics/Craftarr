@@ -4,8 +4,13 @@ on:
   push:
     branches:
       - main
-    paths-ignore:
-      - "assets/star-history/**"
+    paths:
+      - ".dockerignore"
+      - "Dockerfile"
+      - "alembic.ini"
+      - "requirements.txt"
+      - "app/**"
+      - "migrations/**"
     tags:
       - "[0-9]*.[0-9]*.[0-9]*"
       - "v[0-9]*.[0-9]*.[0-9]*"
