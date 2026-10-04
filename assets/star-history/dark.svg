@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="390" viewBox="0 0 1000 390" role="img" aria-labelledby="title desc">
   <title id="title">Craftarr star history</title>
-  <desc id="desc">Cumulative current stargazers by month. Current total: 0.</desc>
+  <desc id="desc">Cumulative current stargazers by month. Current total: 1.</desc>
   <rect width="100%" height="100%" rx="16" fill="#0d1117"/>
   <text x="82" y="28" font-family="system-ui, sans-serif" font-size="16" font-weight="650" fill="#e6edf3">Stars over time</text>
-  <text x="966" y="28" text-anchor="end" font-family="system-ui, sans-serif" font-size="13" fill="#9aa7b2">0 current stars</text>
+  <text x="966" y="28" text-anchor="end" font-family="system-ui, sans-serif" font-size="13" fill="#9aa7b2">1 current stars</text>
   <line x1="82" y1="328.0" x2="966" y2="328.0" stroke="#303b45" stroke-width="1"/><text x="68" y="333.0" text-anchor="end" font-size="13" fill="#9aa7b2">0</text><line x1="82" y1="44.0" x2="966" y2="44.0" stroke="#303b45" stroke-width="1"/><text x="68" y="49.0" text-anchor="end" font-size="13" fill="#9aa7b2">1</text>
-  <path d="M82.0,328.0 L 82.0,328.0 L 82.0,328.0 Z" fill="#4fce83" opacity=".12"/>
-  <path d="M82.0,328.0" fill="none" stroke="#4fce83" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="82.0" y="366" text-anchor="middle" font-size="13" fill="#9aa7b2">Sep 2026</text>
-  <text x="500" y="194.0" text-anchor="middle" font-size="18" fill="#9aa7b2">No stargazers yet</text>
+  <path d="M82.0,44.0 L966.0,44.0 L 966.0,328.0 L 82.0,328.0 Z" fill="#4fce83" opacity=".12"/>
+  <path d="M82.0,44.0 L966.0,44.0" fill="none" stroke="#4fce83" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="82.0" y="366" text-anchor="middle" font-size="13" fill="#9aa7b2">Sep 2026</text><text x="966.0" y="366" text-anchor="middle" font-size="13" fill="#9aa7b2">Oct 2026</text>
+  
 </svg>
