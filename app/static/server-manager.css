@@ -619,10 +619,11 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .node-token-row { display: flex; align-items: center; gap: 8px; }
 .node-token-row input { min-width: 0; flex: 1; }
 .node-token-row .icon-button { flex: 0 0 auto; width: 40px; height: 40px; }
-.remote-node-row { gap: 14px; }
-.remote-node-row > div:first-child { min-width: 0; }
+.remote-node-row { gap: 14px; flex-wrap: wrap; }
+.remote-node-row > div:first-child { min-width: 0; flex: 1 1 320px; }
 .remote-node-row small { overflow-wrap: anywhere; }
-.remote-node-actions { display: flex; align-items: center; gap: 7px; }
+.remote-node-row > .remote-node-actions { display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; gap: 7px; margin-left: auto; }
+.remote-node-actions > .button { flex: 0 0 auto; white-space: nowrap; }
 .remote-node-actions .icon-button { flex: 0 0 auto; width: 38px; height: 38px; }
 .remote-node-error { color: var(--danger, #b42318); }
 .remote-node-version-warning { color: #6d4db0; }
