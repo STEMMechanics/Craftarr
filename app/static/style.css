@@ -5231,13 +5231,19 @@ input[type="checkbox"] {
 }
 
 .settings-version-info {
+  min-width: 0;
+  flex: 1 1 auto;
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
   gap: 0.5rem;
 }
 
 .settings-version-info-field {
+  min-width: 0;
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
   flex-wrap: wrap;
   gap: 0.5rem;
@@ -5246,6 +5252,7 @@ input[type="checkbox"] {
 
 .settings-version-info-buttons {
   display: flex;
+  flex: 0 0 auto;
   gap: 0.5rem;
   justify-content: end;
 }
