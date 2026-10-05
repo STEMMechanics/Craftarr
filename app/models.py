@@ -506,6 +506,20 @@ class ScheduledTask(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class PendingIdleRestart(Base):
+    """A durable restart request that waits for the server to become empty."""
+
+    __tablename__ = "pending_idle_restarts"
+
+    server_id = Column(Integer, ForeignKey("servers.id", ondelete="CASCADE"), primary_key=True)
+    requested_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    requested_by_username = Column(String(64), nullable=False)
+    reason = Column(String(255), nullable=False, default="Plugin update")
+    requested_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    empty_since = Column(DateTime, nullable=True)
+    last_error = Column(String(255), nullable=True)
+
+
 class TaskRun(Base):
     __tablename__ = "task_runs"
 

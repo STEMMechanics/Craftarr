@@ -68,9 +68,9 @@ def cached_releases(db, provider, now, force=False, fetch=True, seen=None):
 
 def base_result(name, installed, provider=None):
     return dict(plugin=name, installed_version=installed, latest_version=None,
-        update_available=False, release_url=None, download_url=None, release_date=None, minecraft_versions=None,
+        update_available=False, release_url=None, download_url=None, release_date=None,
         provider=provider.name if provider else None, checked_at=None, error=None,
-        compatibility='Unknown', status='Not checked' if provider else 'Unsupported/unmonitored')
+        status='Not checked' if provider else 'Unsupported/unmonitored')
 
 
 def compare_release(name, installed, provider, cache, minecraft_version, filename=None):
@@ -85,8 +85,7 @@ def compare_release(name, installed, provider, cache, minecraft_version, filenam
         release = providers.select_release([providers.Release(**r) for r in json.loads(cache.payload)], minecraft_version)
         compatible = ('Unknown' if not release.minecraft_versions or not minecraft_version else
                       'Compatible' if minecraft_version in release.minecraft_versions else 'Incompatible')
-        result.update(latest_version=release.version, release_url=release.url, download_url=release.download_url, release_date=release.date,
-                      minecraft_versions=release.minecraft_versions, compatibility=compatible)
+        result.update(latest_version=release.version, release_url=release.url, download_url=release.download_url, release_date=release.date)
         comparison_details = None
         if hasattr(provider, 'installed_details'):
             comparison_details = {
@@ -111,10 +110,10 @@ def compare_release(name, installed, provider, cache, minecraft_version, filenam
             result.update(status='Check failed', error='Installed version/build cannot be reliably compared')
         elif compatible == 'Incompatible':
             result.pop('comparison_details', None)
-            result['status'] = 'Incompatible'
+            result['status'] = 'Update not available'
         elif comparison > 0:
             result.pop('comparison_details', None)
-            result.update(update_available=True, status='Compatibility unknown' if compatible == 'Unknown' else 'Update available')
+            result.update(update_available=True, status='Update available')
         else:
             if comparison_details:
                 suggested_filename = filename_for_plugin_build(
@@ -232,13 +231,20 @@ def notify_updates(db, grouped, now):
                     pending[key] = (server, result)
         if not pending:
             continue
-        lines = ['Updates are available. No updates have been installed automatically.', '']
+        email_updates = []
         for server, result in pending.values():
-            lines.extend([f'{server.name}: {result["plugin"]}', f'Installed: {result["installed_version"]}',
-                f'Available: {result["latest_version"]}', f'Compatibility: {result["compatibility"]}',
-                result['release_url'] or '', result.get('download_url') or '', ''])
+            is_paper = result.get('component') == '@paper'
+            email_updates.append({
+                'server': server.name,
+                'name': 'Paper' if is_paper else result['plugin'],
+                'installed': result.get('installed_version'),
+                'available': result.get('latest_version'),
+                'path': f'/servers/{server.id}' if is_paper else f'/servers/{server.id}/plugins',
+            })
         try:
-            send_email(db, address, 'Craftarr: Plugin updates available', '\n'.join(lines))
+            from .update_email import render_update_email
+            subject, body, html_body = render_update_email(db, email_updates)
+            send_email(db, address, subject, body, html_body=html_body)
         except Exception as exc:
             logger.warning('Update notification delivery failed (%s)', type(exc).__name__)
             continue

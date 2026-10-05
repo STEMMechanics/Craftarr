@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timedelta, timezone
 import logging
 import time
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 from sqlalchemy.orm import Session
@@ -331,15 +331,23 @@ def _email_remote_update_notifications(db: Session, node: RemoteNode, notificati
             dedupe_keys.append(key)
         if not pending:
             continue
-        lines = ["Updates are available. No updates have been installed automatically.", ""]
+        email_updates = []
         for item in pending:
-            lines.extend([
-                f"{node.name} · {item.get('server', 'Server')}: {item.get('title', 'Update available')}",
-                str(item.get("message") or ""),
-                "",
-            ])
+            server_id = int(item["server_id"])
+            is_paper = item.get("kind") == "paper-update"
+            server_ref = quote(f"{node.node_id}:{server_id}", safe=":")
+            email_updates.append({
+                "node": node.name,
+                "server": item.get("server", "Server"),
+                "name": "Paper" if is_paper else str(item.get("title") or "Update available").removesuffix(" update available"),
+                "installed": item.get("installed_version"),
+                "available": item.get("latest_version"),
+                "path": f"/servers/{server_ref}" if is_paper else f"/servers/{server_ref}/plugins",
+            })
         try:
-            send_email(db, address, "Craftarr: Plugin updates available", "\n".join(lines))
+            from .update_email import render_update_email
+            subject, body, html_body = render_update_email(db, email_updates)
+            send_email(db, address, subject, body, html_body=html_body)
         except Exception as error:
             logger.warning("Remote update notification delivery failed (%s)", type(error).__name__)
             continue

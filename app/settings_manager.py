@@ -1,5 +1,9 @@
+import socket
+from urllib.parse import urlsplit, urlunsplit
+
 from sqlalchemy.orm import Session
 
+from .env import getenv
 from .models import AppSetting
 
 
@@ -23,6 +27,54 @@ SYSTEM_ALERT_DEFAULTS = {
 
 LOGIN_MESSAGE_KEY = "login_message"
 DEFAULT_LOGIN_MESSAGE = "Sign in to manage your Minecraft servers."
+
+
+def get_instance_settings(db: Session) -> dict:
+    name_default = getenv("CRAFTARR_INSTANCE_NAME", "").strip() or socket.gethostname() or "Craftarr"
+    url_default = getenv("CRAFTARR_PUBLIC_URL", "").strip()
+    raw_url = get_setting(db, "public_url", url_default).strip()
+    try:
+        public_url = validate_public_url(raw_url)
+    except ValueError:
+        public_url = ""
+    return {
+        "instance_name": get_setting(db, "instance_name", name_default).strip() or name_default,
+        "public_url": public_url,
+    }
+
+
+def validate_public_url(value: str) -> str:
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if len(value) > 2048 or any(ord(char) <= 32 for char in value) or "\\" in value:
+        raise ValueError("Enter a valid console URL")
+    try:
+        parts = urlsplit(value)
+        if (
+            parts.scheme not in {"http", "https"}
+            or not parts.hostname
+            or parts.username
+            or parts.password
+            or parts.query
+            or parts.fragment
+        ):
+            raise ValueError()
+        _ = parts.port
+    except ValueError:
+        raise ValueError("Use an HTTP or HTTPS URL without credentials, query strings or fragments") from None
+    return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
+
+
+def save_instance_settings(db: Session, data: dict) -> dict:
+    name = str(data.get("instance_name", "")).strip()
+    if not name or len(name) > 100:
+        raise ValueError("Enter an instance name of 1 to 100 characters")
+    public_url = validate_public_url(str(data.get("public_url", "")))
+    set_setting(db, "instance_name", name)
+    set_setting(db, "public_url", public_url)
+    db.commit()
+    return get_instance_settings(db)
 
 
 def get_login_message(db: Session) -> str:

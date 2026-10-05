@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .database import get_db
-from .models import BackupJob, ScheduledTask, ServerMetric, TaskRun
+from .models import BackupJob, PendingIdleRestart, ScheduledTask, ServerMetric, TaskRun
+from .player_manager import get_online_players
 from .web_servers import get_accessible_server
 from .permissions import has_permission
 from .automation import manual_backup_starting, next_task_run, start_task_now, validate_cron_expression
@@ -89,10 +90,12 @@ def _schedule_values(data: dict) -> dict:
         raise ValueError("Choose a day of the week")
     if frequency == "custom":
         validate_cron_expression(cron_expression or "")
-    if task_type not in {"backup", "command"} or not name or interval < 1 or interval > 525600:
+    if task_type not in {"backup", "command", "restart"} or not name or interval < 1 or interval > 525600:
         raise ValueError("Type, name and a positive interval are required")
     if task_type == "command" and not command:
         raise ValueError("Command required")
+    if task_type != "command":
+        command = None
     if task_type == "backup" and retention is not None and not 1 <= retention <= 10000:
         raise ValueError("Retention must be between 1 and 10000")
     if command and (len(command) > 500 or "\n" in command or "\r" in command):
@@ -121,14 +124,16 @@ def automation_page(server_id: int, request: Request, db: Session = Depends(get_
     if not server or not (
         has_permission(user, "automation.manage")
         or has_permission(user, "backups.view")
+        or has_permission(user, "servers.control")
     ):
         raise HTTPException(status_code=403, detail="Access denied")
     context = build_web_context(db, user, active_server=server)
     context.update({
         "server": server,
-        "page_title": "Scheduling",
+        "page_title": "Scheduled",
         "active_page": "scheduling",
         "schedule_timezone": SCHEDULE_TIMEZONE_NAME,
+        "can_control_server": has_permission(user, "servers.control"),
     })
     return render_page(request, "server_automation.html", "partials/server_automation.html", context)
 
@@ -176,6 +181,23 @@ def schedules(server_id: int, request: Request, runs_page: int = 1, runs_per_pag
             "id": None, "status": "queued", "progress": 0,
             "message": "Starting scheduled backup", "label": "Scheduled backup",
         })
+    pending_idle_restart = db.get(PendingIdleRestart, server.id)
+    idle_restart = None
+    if pending_idle_restart:
+        player_count = len(get_online_players(server.id))
+        empty_seconds = None
+        remaining_seconds = None
+        if player_count == 0 and pending_idle_restart.empty_since:
+            empty_seconds = max(0, int((datetime.utcnow() - pending_idle_restart.empty_since).total_seconds()))
+            remaining_seconds = max(0, 30 - empty_seconds)
+        idle_restart = {
+            "requested_by": pending_idle_restart.requested_by_username,
+            "requested_at": _utc_iso(pending_idle_restart.requested_at),
+            "players_online": player_count,
+            "empty_seconds": empty_seconds,
+            "remaining_seconds": remaining_seconds,
+            "last_error": pending_idle_restart.last_error,
+        }
     return {
         "tasks": [_task_json(task) for task in tasks],
         "runs": [{
@@ -188,6 +210,7 @@ def schedules(server_id: int, request: Request, runs_page: int = 1, runs_per_pag
         "offsite_remotes": remotes,
         "offsite_error": remote_error,
         "backup_jobs": backup_jobs,
+        "idle_restart": idle_restart,
     }
 
 
@@ -202,6 +225,8 @@ async def create_schedule(server_id: int, request: Request, db: Session = Depend
         values = _schedule_values(await request.json())
     except (OffsiteBackupError, ValueError) as error:
         return JSONResponse({"error": str(error)}, status_code=400)
+    if values["task_type"] == "restart" and not has_permission(user, "servers.control"):
+        return JSONResponse({"error": "Server control access is required to schedule restarts"}, status_code=403)
     task = ScheduledTask(server_id=server.id, enabled=True, next_run_at=datetime.utcnow(), **values)
     task.next_run_at = next_task_run(task, datetime.utcnow())
     db.add(task)
@@ -228,6 +253,8 @@ async def update_schedule(server_id: int, task_id: int, request: Request, db: Se
         return JSONResponse({"error": str(error)}, status_code=400)
     if values["task_type"] != task.task_type:
         return JSONResponse({"error": "Schedule type cannot be changed"}, status_code=400)
+    if task.task_type == "restart" and not has_permission(user, "servers.control"):
+        return JSONResponse({"error": "Server control access is required to manage restarts"}, status_code=403)
     for key, value in values.items():
         setattr(task, key, value)
     task.next_run_at = next_task_run(task, datetime.utcnow())
@@ -275,6 +302,60 @@ def delete_schedule(server_id: int, task_id: int, request: Request, db: Session 
     db.commit()
     request.state.audit_action = "Scheduled task disabled"
     request.state.audit_details = task.name
+    return {"success": True}
+
+
+@router.post("/api/web/servers/{server_id}/idle-restart")
+def schedule_idle_restart(server_id: int, request: Request, db: Session = Depends(get_db)):
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not server or not has_permission(user, "servers.control"):
+        return JSONResponse({"error": "Server control access is required"}, status_code=403)
+    from .processes import server_status
+    if not server_status(server.id).get("running"):
+        return JSONResponse({"error": "The server is stopped, so a player-free restart was not queued"}, status_code=409)
+    pending = db.get(PendingIdleRestart, server.id)
+    if pending is None:
+        pending = PendingIdleRestart(
+            server_id=server.id,
+            requested_by_user_id=user.id,
+            requested_by_username=user.username,
+            reason="Plugin update",
+        )
+        db.add(pending)
+    else:
+        pending.requested_by_user_id = user.id
+        pending.requested_by_username = user.username
+        pending.reason = "Plugin update"
+        pending.requested_at = datetime.utcnow()
+        pending.empty_since = None
+        pending.last_error = None
+    db.commit()
+    from .automation import wake_idle_restart_monitor
+    wake_idle_restart_monitor()
+    request.state.audit_action = "Player-free restart scheduled"
+    request.state.audit_details = "Plugin update"
+    return {"success": True, "restart_when_empty_scheduled": True}
+
+
+@router.delete("/api/web/servers/{server_id}/idle-restart")
+def cancel_idle_restart(server_id: int, request: Request, db: Session = Depends(get_db)):
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not server or not has_permission(user, "servers.control"):
+        return JSONResponse({"error": "Server control access is required"}, status_code=403)
+    pending = db.get(PendingIdleRestart, server.id)
+    if not pending:
+        return JSONResponse({"error": "No player-free restart is scheduled"}, status_code=404)
+    reason = pending.reason
+    db.delete(pending)
+    db.commit()
+    from .automation import wake_idle_restart_monitor
+    wake_idle_restart_monitor()
+    request.state.audit_action = "Player-free restart cancelled"
+    request.state.audit_details = reason
     return {"success": True}
 
 

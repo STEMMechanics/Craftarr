@@ -1,4 +1,4 @@
-<div class="automation-page" data-server-id="{{ server.id }}" data-timezone="{{ schedule_timezone }}" data-can-manage="{{ 'true' if user.can('automation.manage') else 'false' }}" data-page-title="Tasks">
+<div class="automation-page" data-server-id="{{ server.id }}" data-timezone="{{ schedule_timezone }}" data-can-manage="{{ 'true' if user.can('automation.manage') else 'false' }}" data-can-control="{{ 'true' if can_control_server else 'false' }}" data-page-title="Scheduled">
   <div class="automation-panels">
     <section class="overview-card automation-card">
       <div class="card-header"><span><i class="fa-solid fa-terminal"></i> Commands</span>{% if user.can("automation.manage") %}<button class="panel-header-button" type="button" onclick="openServerScheduleModal('command')"><i class="fa-solid fa-plus"></i> Add command</button>{% endif %}</div>
@@ -10,7 +10,18 @@
       <div id="scheduled-backup-progress" class="scheduled-backup-progress"></div>
       <div id="backup-schedule-list" class="schedule-list"><div class="empty-message">Loading backups...</div></div>
     </section>
+
+    <section class="overview-card automation-card">
+      <div class="card-header"><span><i class="fa-solid fa-power-off"></i> Restarts</span>{% if user.can("automation.manage") and user.can("servers.control") %}<button class="panel-header-button" type="button" onclick="openServerScheduleModal('restart')"><i class="fa-solid fa-plus"></i> Add restart</button>{% endif %}</div>
+      <div id="restart-schedule-list" class="schedule-list"><div class="empty-message">Loading restarts...</div></div>
+    </section>
   </div>
+
+  <section id="idle-restart-status" class="overview-card idle-restart-status" hidden aria-live="polite">
+    <div class="card-header"><span><i class="fa-solid fa-hourglass-half" aria-hidden="true"></i> Restart after players leave</span><button class="button" type="button" onclick="cancelIdleRestart()" {% if not can_control_server %}hidden{% endif %}>Cancel restart</button></div>
+    <p id="idle-restart-status-message"></p>
+    <small id="idle-restart-status-detail"></small>
+  </section>
 
   <section class="overview-card automation-card">
     <div class="card-header"><span>Recent activity</span></div>
@@ -24,15 +35,17 @@
 </div>
 
 {% if user.can("automation.manage") %}
-{% for task_type, title in [('command', 'command'), ('backup', 'backup')] %}
+{% for task_type, title in [('command', 'command'), ('backup', 'backup'), ('restart', 'restart')] %}
+{% if task_type != 'restart' or user.can('servers.control') %}
 <div id="{{ task_type }}-schedule-modal" class="modal-backdrop" hidden onclick="closeServerScheduleModal(event)">
   <div class="modal-card schedule-editor-modal" role="dialog" aria-modal="true" aria-labelledby="{{ task_type }}-schedule-title">
     <h2 id="{{ task_type }}-schedule-title">Add {{ title }}</h2>
     <form class="friendly-schedule-form" onsubmit="createServerSchedule(event)">
       <input type="hidden" name="task_type" value="{{ task_type }}">
       <input type="hidden" name="schedule_id" value="">
-      <label><span>Name this job</span><input name="name" maxlength="100" placeholder="{{ 'Morning message' if task_type == 'command' else 'Daily backup' }}" required></label>
+      <label><span>Name this job</span><input name="name" maxlength="100" placeholder="{{ 'Morning message' if task_type == 'command' else 'Daily backup' if task_type == 'backup' else 'Daily restart' }}" required></label>
       {% if task_type == 'command' %}<label><span>Command to run</span><input name="command" maxlength="500" placeholder="say Good morning!" required></label>{% endif %}
+      {% if task_type == 'restart' %}<p class="modal-note">Craftarr will send the configured stop commands, stop the server cleanly, and start it again at the scheduled time.</p>{% endif %}
       {% include "partials/schedule_when_fields.html" %}
       {% if task_type == 'backup' %}
       <label><span>How many backups should we keep?</span><input name="retention_count" type="number" min="1" max="10000" value="7" required></label>
@@ -47,6 +60,7 @@
     </form>
   </div>
 </div>
+{% endif %}
 {% endfor %}
 {% endif %}
 

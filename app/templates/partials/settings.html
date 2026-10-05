@@ -1,4 +1,32 @@
 <div class="settings-page" data-page-title="Settings" data-app-version="{{ app_version }}">
+    {% if user.can("settings.manage") %}
+    <section class="overview-card settings-section">
+
+        <div class="card-header">
+            Console identity
+        </div>
+
+        <div class="settings-content">
+            <p class="muted-small full-width">These details identify this Craftarr console in update emails. Set its public URL to add a direct link to the matching server page.</p>
+
+            <label class="property-field">
+                <span>Console name</span>
+                <input id="instance-name" maxlength="100" placeholder="Craftarr production">
+            </label>
+
+            <label class="property-field full-width">
+                <span>Public URL</span>
+                <input id="instance-public-url" type="url" placeholder="https://console.example.com">
+            </label>
+
+            <div class="settings-save-row">
+                <span id="instance-save-status" class="muted-small"></span>
+                <button class="button" type="button" onclick="saveInstanceSettings()">Save console identity</button>
+            </div>
+        </div>
+    </section>
+
+    {% endif %}
     {% if user.can("roles.manage") %}
     <section class="overview-card settings-section">
         <div class="card-header">
@@ -576,10 +604,10 @@
 
             <span>Password</span>
 
-            <input id="settings-user-password" type="password">
+            <input id="settings-user-password" type="password" autocomplete="new-password" minlength="8">
 
             <small id="settings-password-help">
-                Minimum 8 characters
+                Minimum 8 characters. When editing a user, leave blank to keep their current password.
             </small>
 
         </label>

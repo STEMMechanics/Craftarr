@@ -135,9 +135,9 @@ def test_modrinth_platform_stability_and_compatibility(monkeypatch):
 
 @pytest.mark.parametrize('mc,versions,installed,status,available', [
     ('1.21.8', ['1.21.8'], '1', 'Update available', True),
-    ('1.21.8', ['1.21.7'], '1', 'Incompatible', False),
-    ('1.21.8', None, '1', 'Compatibility unknown', True),
-    (None, ['1.21.8'], '1', 'Compatibility unknown', True),
+    ('1.21.8', ['1.21.7'], '1', 'Update not available', False),
+    ('1.21.8', None, '1', 'Update available', True),
+    (None, ['1.21.8'], '1', 'Update available', True),
     ('1.21.8', ['1.21.8'], '2', 'Current', False),
     ('1.21.8', None, '2', 'Current', False),
     ('1.21.8', None, 'unknown', 'Check failed', False),
@@ -184,7 +184,7 @@ def test_paper_uses_actual_jar_checksum_not_recorded_build(db, tmp_path, monkeyp
     assert paper['latest_version'] == '1.21.8 build 61'
     assert paper['update_available'] is True
     assert row.paper_build == '42'
-    assert paper['compatibility'] == 'Compatible'
+    assert 'compatibility' not in paper
     assert monitor.paper_result(db, row) == paper
     (tmp_path / 'Survival/paper.jar').write_bytes(b'replaced')
     assert monitor.paper_result(db, row)['status'] == 'Not checked'
@@ -211,21 +211,31 @@ def test_grouped_notifications_deduplicate_and_report_newer(db, tmp_path, monkey
     second = server(db, tmp_path, 'Creative')
     admin(db)
     admin(db, 'disabled', enabled=False)
+    from app.settings_manager import save_instance_settings
+    save_instance_settings(db, {'instance_name': 'Test Console', 'public_url': 'https://console.example.test'})
     calls = upstream(monkeypatch, [first, second])
     sent = []
-    monkeypatch.setattr(monitor, 'send_email', lambda *args: sent.append(args[1:]))
+    def record_email(_db, recipient, subject, body, **kwargs):
+        sent.append({'recipient': recipient, 'subject': subject, 'body': body, 'html': kwargs.get('html_body', '')})
+    monkeypatch.setattr(monitor, 'send_email', record_email)
     monitor.check_updates(db, now=NOW, notify=True)
     assert len(sent) == 1
-    assert sent[0][1] == 'Craftarr: Plugin updates available'
-    assert all(text in sent[0][2] for text in ['Survival', 'Creative', 'ViaVersion', 'Paper', '5.6.0', 'build 61', 'https://github.com'])
+    assert sent[0]['recipient'] == 'admin@example.org'
+    assert sent[0]['subject'] == 'Craftarr · Test Console · Updates available'
+    assert all(text in sent[0]['body'] for text in ['Survival', 'Creative', 'ViaVersion', 'Paper', '5.6.0', 'build 61'])
+    assert 'https://console.example.test/servers/' in sent[0]['body']
+    assert 'Review in Craftarr' in sent[0]['html']
+    assert 'https://console.example.test/static/images/logo.png' in sent[0]['html']
+    assert 'Compatibility' not in sent[0]['body'] + sent[0]['html']
+    assert 'https://github.com' not in sent[0]['body'] + sent[0]['html']
     assert db.query(UpdateNotification).count() == 4
     monitor.check_updates(db, now=NOW + timedelta(days=1), notify=True)
     assert len(sent) == 1
     upstream(monkeypatch, [first, second], latest='5.7.0')
     monitor.check_updates(db, now=NOW + timedelta(days=2), notify=True)
     assert len(sent) == 2
-    assert '5.7.0' in sent[-1][2]
-    assert ': Paper' not in sent[-1][2]
+    assert '5.7.0' in sent[-1]['body']
+    assert ': Paper' not in sent[-1]['body']
     jar(tmp_path / 'Survival/plugins/arbitrary-name.jar', 'ViaVersion', '5.7.0')
     # Cached UI is compared against the current JAR, not an old check snapshot.
     assert monitor.plugin_results(db, first)[0]['status'] == 'Current'
@@ -236,7 +246,7 @@ def test_manual_check_does_not_consume_notification(db, tmp_path, monkeypatch):
     admin(db)
     upstream(monkeypatch, [row])
     sent = []
-    monkeypatch.setattr(monitor, 'send_email', lambda *args: sent.append(args))
+    monkeypatch.setattr(monitor, 'send_email', lambda *args, **kwargs: sent.append(args))
     monitor.check_updates(db, now=NOW)
     assert not sent
     assert db.query(UpdateNotification).count() == 0
@@ -250,13 +260,13 @@ def test_partial_smtp_failure_retries_only_failed_recipient(db, tmp_path, monkey
     admin(db, 'second')
     upstream(monkeypatch, [row])
     sent = []
-    def send(db, recipient, *args):
+    def send(db, recipient, *args, **kwargs):
         if recipient.startswith('second'):
             raise RuntimeError('password=secret')
         sent.append(recipient)
     monkeypatch.setattr(monitor, 'send_email', send)
     monitor.check_updates(db, now=NOW, notify=True)
-    monkeypatch.setattr(monitor, 'send_email', lambda db, recipient, *args: sent.append(recipient))
+    monkeypatch.setattr(monitor, 'send_email', lambda db, recipient, *args, **kwargs: sent.append(recipient))
     monitor.check_updates(db, now=NOW, notify=True)
     assert sent == ['admin@example.org', 'second@example.org']
 
@@ -281,7 +291,7 @@ def test_cli_one_server_all_and_explicit_notifications(db, tmp_path, monkeypatch
     upstream(monkeypatch, [first, second])
     monkeypatch.setattr(admin_cli, 'SessionLocal', lambda: db)
     sent = []
-    monkeypatch.setattr(monitor, 'send_email', lambda *args: sent.append(args))
+    monkeypatch.setattr(monitor, 'send_email', lambda *args, **kwargs: sent.append(args))
     monkeypatch.setattr(sys, 'argv', ['console', 'check-updates', '--server', 'Survival'])
     assert admin_cli.main() == 0
     output = capsys.readouterr().out
@@ -372,7 +382,7 @@ def test_current_paper_and_plugin_do_not_notify(db, tmp_path, monkeypatch):
     upstream(monkeypatch, [row], build=42)
     admin(db)
     sent = []
-    monkeypatch.setattr(monitor, 'send_email', lambda *args: sent.append(args))
+    monkeypatch.setattr(monitor, 'send_email', lambda *args, **kwargs: sent.append(args))
     results = monitor.check_updates(db, now=NOW, notify=True)[0][1]
     assert all(result['status'] == 'Current' for result in results)
     assert not sent
@@ -383,7 +393,7 @@ def test_unsupported_and_failed_sources_do_not_notify(db, tmp_path, monkeypatch)
     jar(tmp_path / 'Survival/plugins/custom.jar', 'Custom', '1')
     admin(db)
     sent = []
-    monkeypatch.setattr(monitor, 'send_email', lambda *args: sent.append(args))
+    monkeypatch.setattr(monitor, 'send_email', lambda *args, **kwargs: sent.append(args))
     def timeout(url):
         raise httpx.ReadTimeout('token-secret')
     monkeypatch.setattr(providers, 'get_json', timeout)
@@ -404,10 +414,10 @@ def test_notifications_respect_admin_content_and_server_access(db, tmp_path, mon
     db.commit()
     upstream(monkeypatch, [first, second])
     sent = []
-    monkeypatch.setattr(monitor, 'send_email', lambda *args: sent.append(args[3]))
+    monkeypatch.setattr(monitor, 'send_email', lambda *args, **kwargs: sent.append(args[3]))
     monitor.check_updates(db, now=NOW, notify=True)
     assert len(sent) == 1
-    assert 'Survival: Paper' in sent[0]
+    assert 'Survival' in sent[0] and 'Paper' in sent[0]
     assert 'Creative' not in sent[0]
     assert 'ViaVersion' not in sent[0]
 
@@ -518,7 +528,7 @@ def test_monitoring_settings_disable_override_reset_and_server_scope(db, tmp_pat
     admin(db)
     calls = upstream(monkeypatch, [first, second])
     sent = []
-    monkeypatch.setattr(monitor, 'send_email', lambda *args: sent.append(args[3]))
+    monkeypatch.setattr(monitor, 'send_email', lambda *args, **kwargs: sent.append(args[3]))
     save_monitoring_config(db, first.id, 'ViaVersion', 'disabled')
     grouped = monitor.check_updates(db, now=NOW, notify=True, scope='plugins')
     assert grouped[0][1][0]['status'] == 'Monitoring disabled'
@@ -800,7 +810,7 @@ def test_preview_permissions_no_persistence_and_matches_saved_check(db, tmp_path
     result = response.json()
     assert result['latest_version'] == '5.7.0'
     assert result['download_url'] == 'https://example.org/plugin.jar'
-    assert result['compatibility'] == 'Unknown'
+    assert 'compatibility' not in result
     assert result['update_available']
     assert db.get(PluginMonitoringSetting, (row.id, 'viaversion')).provider == 'github'
     assert db.query(UpstreamUpdateCache).count() == 0
