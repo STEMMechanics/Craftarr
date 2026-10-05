@@ -1277,6 +1277,20 @@ function setOverviewServerState(state, consoleAvailable = true) {
   label.textContent = serverStateLabel(state, consoleAvailable);
 }
 
+function setTopbarServerState(state, consoleAvailable = true) {
+  const dot = document.getElementById("topbar-server-status-dot");
+  const status = document.getElementById("topbar-server-status");
+  const label = serverStateLabel(state, consoleAvailable);
+  if (dot) {
+    dot.classList.remove("is-online", "is-offline", "is-starting", "is-stopping", "is-node-offline", "is-unknown", "running");
+    dot.classList.add(statusClass(state));
+  }
+  if (status) {
+    status.title = label;
+    status.setAttribute("aria-label", `Server status: ${label}`);
+  }
+}
+
 function markServerNodeOffline(serverId) {
   const page = document.querySelector("#page-content > [data-server-id]");
   if (!page || page.dataset.serverId !== serverId) return;
@@ -1341,6 +1355,7 @@ async function updateServerStatus() {
   const topbarStart = document.getElementById("topbar-server-start");
   const topbarStop = document.getElementById("topbar-server-stop");
   const topbarRestart = document.getElementById("topbar-server-restart");
+  const topbarProgress = document.getElementById("topbar-server-progress");
   const topbar = document.querySelector(".topbar");
   const page = document.querySelector("#page-content > [data-server-id]");
   const serverId = topbar?.dataset.serverId || page?.dataset.serverId;
@@ -1352,12 +1367,29 @@ async function updateServerStatus() {
     if (startButton) startButton.disabled = state !== "stopped";
     if (stopButton) stopButton.disabled = !consoleAvailable || state !== "running";
     if (restartButton) restartButton.disabled = !consoleAvailable || state !== "running";
-    if (topbarStart) topbarStart.disabled = state !== "stopped";
-    if (topbarStop) topbarStop.disabled = !consoleAvailable || state !== "running";
-    if (topbarRestart) topbarRestart.disabled = !consoleAvailable || state !== "running";
+
+    const canStart = state === "stopped";
+    const canOperate = state === "running" && consoleAvailable;
+    const transitioning = state === "starting" || state === "stopping";
+    if (topbarProgress) {
+      topbarProgress.hidden = !transitioning;
+      topbarProgress.title = state === "stopping" ? "Server is shutting down" : "Server is starting";
+    }
+    if (topbarStart) {
+      topbarStart.hidden = !canStart;
+      topbarStart.disabled = !canStart;
+    }
+    if (topbarStop) {
+      topbarStop.hidden = !canOperate;
+      topbarStop.disabled = !canOperate;
+    }
+    if (topbarRestart) {
+      topbarRestart.hidden = !canOperate;
+      topbarRestart.disabled = !canOperate;
+    }
 
     const nodeOffline = state === "node_offline";
-    for (const control of [startButton, stopButton, restartButton, topbarStart, topbarStop, topbarRestart]) {
+    for (const control of [startButton, stopButton, restartButton]) {
       if (control && nodeOffline) control.disabled = true;
     }
 
@@ -1414,6 +1446,7 @@ async function updateServerStatus() {
     if (state === "node_offline") {
       setControls(state, false);
       setOverviewServerState(state, false);
+      setTopbarServerState(state, false);
       markServerNodeOffline(serverId);
       return;
     }
@@ -1451,9 +1484,11 @@ async function updateServerStatus() {
 
     setControls(state, consoleAvailable);
     setOverviewServerState(state, data.console_available);
+    setTopbarServerState(state, data.console_available);
   } catch (error) {
     setControls("unknown", false);
     setOverviewServerState("unknown", false);
+    setTopbarServerState("unknown", false);
   }
 }
 
@@ -1581,6 +1616,7 @@ let pluginPendingUpdates = [];
 let pluginUpdatePreviousFocus = null;
 let pluginUpdateInProgress = false;
 let pluginRestartRequired = false;
+let pluginIdleRestartQueued = false;
 let pluginServerRunning = false;
 let pluginDuplicateGroups = [];
 let duplicatePluginFilenames = new Set();
@@ -1925,6 +1961,7 @@ async function updatePluginsPage(forceDuplicatePrompt = false) {
     }
 
     pluginRestartRequired = data.restart_required === true;
+    pluginIdleRestartQueued = data.restart_when_empty_scheduled === true;
     pluginServerRunning = data.running === true;
 
     showPluginRestartAlert();
@@ -2147,6 +2184,7 @@ function openPluginUpdateModal(filename = null) {
   const state = document.getElementById("plugin-update-modal-state");
   const confirm = document.getElementById("confirm-plugin-update");
   const deleteCurrent = document.getElementById("plugin-update-delete-current");
+  const restartWhenEmpty = document.getElementById("plugin-update-restart-when-empty");
   if (!modal || !title || !summary || !list || !state || !confirm || !deleteCurrent) return;
 
   pluginPendingUpdates = targets.map((plugin) => ({...plugin}));
@@ -2162,6 +2200,7 @@ function openPluginUpdateModal(filename = null) {
     return `<li><strong>${escapeHtml(plugin.name)}</strong><span>${escapeHtml(installed)} <i class="fa-solid fa-arrow-right" aria-hidden="true"></i> ${escapeHtml(latest)}</span></li>`;
   }).join("");
   deleteCurrent.checked = false;
+  if (restartWhenEmpty) restartWhenEmpty.checked = false;
   state.textContent = pluginServerRunning
     ? "The server is running. If an enabled plugin changes, restart it to load the new version."
     : "If a plugin is currently disabled, its updated JAR will stay disabled.";
@@ -2183,17 +2222,18 @@ async function confirmPluginUpdate() {
   if (!pluginPendingUpdates.length || pluginUpdateInProgress) return;
   const targets = pluginPendingUpdates;
   const deleteCurrentVersion = document.getElementById("plugin-update-delete-current")?.checked === true;
+  const restartWhenEmpty = document.getElementById("plugin-update-restart-when-empty")?.checked === true;
   const button = document.getElementById("confirm-plugin-update");
   if (button) button.disabled = true;
   closePluginUpdateModal();
   try {
-    await installPluginUpdates(targets, deleteCurrentVersion);
+    await installPluginUpdates(targets, deleteCurrentVersion, restartWhenEmpty);
   } finally {
     if (button) button.disabled = false;
   }
 }
 
-async function installPluginUpdates(plugins, deleteCurrentVersion) {
+async function installPluginUpdates(plugins, deleteCurrentVersion, restartWhenEmpty = false) {
   const page = document.querySelector(".plugins-page");
   if (!page || !plugins.length) return;
   pluginUpdateInProgress = true;
@@ -2202,6 +2242,7 @@ async function installPluginUpdates(plugins, deleteCurrentVersion) {
   const successes = [];
   const retainedPreviousVersions = [];
   const failures = [];
+  let idleRestartQueued = false;
   let progress = showToast(
     `Preparing ${total === 1 ? plugins[0].name : `${total} plugin updates`}…`,
     "info",
@@ -2220,7 +2261,10 @@ async function installPluginUpdates(plugins, deleteCurrentVersion) {
         const response = await nativeFetch(`/api/web/servers/${page.dataset.serverId}/plugins/update`, {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({filename: plugin.filename, delete_previous: deleteCurrentVersion}),
+          body: JSON.stringify({
+            filename: plugin.filename,
+            delete_previous: deleteCurrentVersion,
+          }),
         });
         if (handleAuthenticationResponse(response)) {
           progress?.remove();
@@ -2243,6 +2287,26 @@ async function installPluginUpdates(plugins, deleteCurrentVersion) {
       });
     }
 
+    let restartQueueError = null;
+    if (restartWhenEmpty && successes.length) {
+      try {
+        const response = await nativeFetch(`/api/web/servers/${page.dataset.serverId}/idle-restart`, {
+          method: "POST",
+        });
+        if (handleAuthenticationResponse(response)) {
+          progress?.remove();
+          return;
+        }
+        let data = {};
+        try { data = await response.json(); } catch { /* Use the HTTP status below. */ }
+        if (!response.ok) throw new Error(data.error || "Unable to queue the restart");
+        idleRestartQueued = data.restart_when_empty_scheduled === true;
+      } catch (error) {
+        restartQueueError = error.message || "Unable to queue the restart";
+      }
+    }
+
+    pluginIdleRestartQueued = idleRestartQueued;
     showPluginRestartAlert();
     await updatePluginsPage(false);
     await refreshNotifications(false);
@@ -2252,8 +2316,17 @@ async function installPluginUpdates(plugins, deleteCurrentVersion) {
     const deletedSummary = successes.length && deleteCurrentVersion
       ? " Previous versions were deleted after validation and successful installation."
       : "";
+    const restartSummary = idleRestartQueued
+      ? " A restart is queued after all players have been offline for 30 seconds."
+      : restartWhenEmpty && successes.length
+        ? restartQueueError?.toLowerCase().includes("server is stopped")
+          ? " The server was stopped, so no restart was queued."
+          : restartQueueError
+            ? ` The restart could not be queued: ${restartQueueError}.`
+            : " A restart was not queued."
+        : pluginRestartRequired ? " Restart the server to load enabled updates." : "";
     const summary = successes.length
-      ? `Updated ${successes.length} of ${total} plugin${total === 1 ? "" : "s"}.${retainedSummary}${deletedSummary}${pluginRestartRequired ? " Restart the server to load enabled updates." : ""}`
+      ? `Updated ${successes.length} of ${total} plugin${total === 1 ? "" : "s"}.${retainedSummary}${deletedSummary}${restartSummary}`
       : `No plugins were updated.`;
     const failureDetail = failures.length ? ` Failed: ${failures.join("; ")}` : "";
     if (successes.length) {
@@ -2262,7 +2335,7 @@ async function installPluginUpdates(plugins, deleteCurrentVersion) {
         id: `plugin-install:${page.dataset.serverId}:${Date.now()}`,
         kind: "plugin-install",
         title: successes.length === 1 ? "Plugin update installed" : "Plugin updates installed",
-        message: `${serverName}: ${successes.join(", ")}${pluginRestartRequired ? " · restart required" : ""}`,
+        message: `${serverName}: ${successes.join(", ")}${idleRestartQueued ? " · restart queued" : pluginRestartRequired ? " · restart required" : ""}`,
         url: `/servers/${encodeURIComponent(page.dataset.serverId)}/plugins`,
         checked_at: new Date().toISOString(),
       });
@@ -2450,8 +2523,8 @@ function renderPluginVersionStatus(plugin, canManage = false) {
     label = "Could not check";
     icon = "fa-triangle-exclamation";
     statusClass = "is-error";
-  } else if (update.status === "Incompatible") {
-    label = "May not fit this server";
+  } else if (update.status === "Update not available") {
+    label = "Update unavailable";
     icon = "fa-triangle-exclamation";
     statusClass = "is-warning";
   } else if (update.status === "Monitoring disabled") {
@@ -4144,16 +4217,22 @@ function showPluginRestartAlert() {
   const label = document.getElementById("plugin-change-alert-label");
 
   if (!alert) return;
-  alert.hidden = !pluginRestartRequired;
-  if (!pluginRestartRequired || !icon || !message || !label) return;
+  alert.hidden = !pluginRestartRequired && !pluginIdleRestartQueued;
+  if ((!pluginRestartRequired && !pluginIdleRestartQueued) || !icon || !message || !label) return;
 
-  icon.className = pluginServerRunning
+  icon.className = pluginIdleRestartQueued
+    ? "fa-solid fa-hourglass-half"
+    : pluginServerRunning
     ? "fa-solid fa-rotate"
     : "fa-solid fa-circle-info";
-  message.textContent = pluginServerRunning
+  message.textContent = pluginIdleRestartQueued
+    ? "Plugin changes are ready. The server will restart after everyone has been offline for 30 seconds."
+    : pluginServerRunning
     ? "Plugin changes are pending. Restart the server to apply them."
     : "Plugin changes will apply when the server is next started.";
-  label.textContent = pluginServerRunning
+  label.textContent = pluginIdleRestartQueued
+    ? "Restart queued"
+    : pluginServerRunning
     ? "Restart required"
     : "Applies on next start";
 }
@@ -6390,55 +6469,33 @@ async function saveOwnProfile(event) {
     .trim() ||
     "";
 
-  const password = document
-    .getElementById(
-      "settings-profile-password",
-    )
-    ?.value ||
-    "";
+  const passwordInput = document.getElementById("settings-profile-password");
+  const password = passwordInput?.value || "";
+  if (passwordInput) passwordInput.value = "";
 
   const status = document.getElementById(
     "profile-save-status",
   );
 
-  const response = await fetch(
-    "/api/web/settings/profile",
-    {
-      method: "POST",
-
-      headers: {
-        "Content-Type": "application/json",
+  try {
+    const response = await fetch(
+      "/api/web/settings/profile",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, email, password }),
       },
+    );
 
-      body: JSON.stringify({
-        username,
-        email,
-        password,
-      }),
-    },
-  );
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    if (status) {
-      status.textContent = data.error ||
-        "Unable to save.";
+    const data = await response.json();
+    if (!response.ok) {
+      if (status) status.textContent = data.error || "Unable to save.";
+      return;
     }
 
-    return;
-  }
-
-  if (status) {
-    status.textContent = "Saved";
-  }
-
-  const passwordInput = document.getElementById(
-    "settings-profile-password",
-  );
-
-  if (passwordInput) {
-    passwordInput.value = "";
+    if (status) status.textContent = "Saved";
+  } catch {
+    if (status) status.textContent = "Unable to save. Check your connection and try again.";
   }
 }
 
@@ -6576,7 +6633,7 @@ function openAddUserModal() {
 
   document.getElementById(
     "settings-password-help",
-  ).textContent = "Minimum 8 characters";
+  ).textContent = "Use at least 8 characters.";
 
   document.getElementById(
     "delete-user-button",
@@ -6645,7 +6702,7 @@ async function openEditUserModal(
 
   document.getElementById(
     "settings-password-help",
-  ).textContent = "Leave blank to keep current password";
+  ).textContent = "Enter 8+ characters to reset it; leave blank to keep it. Tick Require password change to make them choose another on sign-in.";
 
   const allowed = new Set(
     data.servers.map(
@@ -6719,6 +6776,14 @@ async function saveSettingsUser() {
     )
     .value;
 
+  const passwordInput = document.getElementById("settings-user-password");
+  const password = passwordInput?.value || "";
+  if (password && password.length < 8) {
+    if (passwordInput) passwordInput.value = "";
+    showSettingsUserError("Password must be at least 8 characters.");
+    return;
+  }
+
   const payload = {
     username: document
       .getElementById(
@@ -6727,11 +6792,7 @@ async function saveSettingsUser() {
       .value
       .trim(),
 
-    password: document
-      .getElementById(
-        "settings-user-password",
-      )
-      .value,
+    password,
 
     role_id: Number(document
       .getElementById(
@@ -6753,36 +6814,29 @@ async function saveSettingsUser() {
   };
 
   const url = id ? `/api/web/settings/users/${id}` : "/api/web/settings/users";
+  if (passwordInput) passwordInput.value = "";
 
-  const response = await fetch(
-    url,
-    {
-      method: "POST",
-
-      headers: {
-        "Content-Type": "application/json",
+  try {
+    const response = await fetch(
+      url,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       },
-
-      body: JSON.stringify(
-        payload,
-      ),
-    },
-  );
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    showSettingsUserError(
-      data.error ||
-        "Unable to save user.",
     );
 
-    return;
+    const data = await response.json();
+    if (!response.ok) {
+      showSettingsUserError(data.error || "Unable to save user.");
+      return;
+    }
+
+    closeUserModal();
+    window.location.reload();
+  } catch {
+    showSettingsUserError("Unable to save user. Check your connection and try again.");
   }
-
-  closeUserModal();
-
-  window.location.reload();
 }
 
 async function deleteSettingsUser() {
@@ -6848,6 +6902,37 @@ function clearSettingsUserError() {
 
   error.textContent = "";
   error.hidden = true;
+}
+
+async function updateInstanceSettings() {
+  const input = document.getElementById("instance-name");
+  if (!input) return;
+  const response = await fetch("/api/web/settings/instance");
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Unable to load console identity.");
+  setValue("instance-name", data.instance_name);
+  setValue("instance-public-url", data.public_url);
+}
+
+async function saveInstanceSettings() {
+  const status = document.getElementById("instance-save-status");
+  if (status) status.textContent = "Saving…";
+  const response = await fetch("/api/web/settings/instance", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      instance_name: valueOf("instance-name"),
+      public_url: valueOf("instance-public-url"),
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    if (status) status.textContent = data.error || "Unable to save console identity.";
+    return;
+  }
+  setValue("instance-name", data.instance_name);
+  setValue("instance-public-url", data.public_url);
+  if (status) status.textContent = "Saved";
 }
 
 async function updateSMTPSettings() {
@@ -7057,6 +7142,10 @@ async function sendSMTPTest() {
 }
 
 updateSMTPSettings();
+updateInstanceSettings().catch((error) => {
+  const status = document.getElementById("instance-save-status");
+  if (status) status.textContent = error.message || "Unable to load console identity.";
+});
 
 let offsiteRemoteState = [];
 
@@ -8939,7 +9028,8 @@ async function loadServerSchedules() {
   const page = automationPage();
   const commandList = document.getElementById("command-schedule-list");
   const backupList = document.getElementById("backup-schedule-list");
-  if (!page || (!commandList && !backupList)) return;
+  const restartList = document.getElementById("restart-schedule-list");
+  if (!page || (!commandList && !backupList && !restartList)) return;
   try {
     const response = await fetch(
       `/api/web/servers/${page.dataset.serverId}/schedules?runs_page=${scheduleRunsPage}&runs_per_page=10`,
@@ -8973,32 +9063,53 @@ async function loadServerSchedules() {
       return `Every ${task.interval_minutes} minutes`;
     };
     const canManage = page.dataset.canManage === "true";
+    const canControl = page.dataset.canControl === "true";
     const activeJobs = data.backup_jobs || [];
     const backupRunning = activeJobs.length > 0;
     const renderTasks = (type) => {
       const matches = tasks.filter((task) => task.task_type === type);
-      return matches.length ? matches.map((task) => `
-            <div class="schedule-row"><div><strong>${
-        escapeHtml(task.name)
-      }</strong><br>
-            <small>${task.task_type === "backup" ? `${describeWhen(task)} · ` : ""}${
-        task.task_type === "backup"
-          ? `Keeps ${task.retention_count || "all"} backup${Number(task.retention_count) === 1 ? "" : "s"} on this server${
-            task.remote_destination
-              ? ` and copies each one to ${escapeHtml(task.remote_destination)}, keeping ${task.remote_retention_count || "all"} there`
-              : ""
-          }`
-          : escapeHtml(task.command)
-      }${task.task_type === "command" ? ` · ${describeWhen(task)}` : ""}</small></div>
-            ${canManage ? `<div class="schedule-row-actions">
+      return matches.length ? matches.map((task) => {
+        const summary = task.task_type === "backup"
+          ? `${describeWhen(task)} · Keeps ${task.retention_count || "all"} backup${Number(task.retention_count) === 1 ? "" : "s"} on this server${task.remote_destination ? ` and copies each one to ${escapeHtml(task.remote_destination)}, keeping ${task.remote_retention_count || "all"} there` : ""}`
+          : task.task_type === "command"
+            ? `${escapeHtml(task.command)} · ${describeWhen(task)}`
+            : `Restarts the server · ${describeWhen(task)}`;
+        return `
+            <div class="schedule-row"><div><strong>${escapeHtml(task.name)}</strong><br>
+            <small>${summary}</small></div>
+            ${canManage && (type !== "restart" || canControl) ? `<div class="schedule-row-actions">
               ${type === "backup" ? `<button class="button" onclick="runServerScheduleNow(${Number(task.id)}, this)" ${backupRunning ? "disabled" : ""}>${backupRunning ? "Backup running" : "Run now"}</button>` : ""}
               <button class="button" onclick="editServerSchedule(${Number(task.id)})">Edit</button>
               <button class="button" onclick="deleteServerSchedule(${Number(task.id)})">Delete</button>
-            </div>` : ""}</div>`).join("")
+            </div>` : ""}</div>`;
+      }).join("")
         : `<div class="empty-message">No ${type} jobs yet.</div>`;
     };
     if (commandList) commandList.innerHTML = renderTasks("command");
     if (backupList) backupList.innerHTML = renderTasks("backup");
+    if (restartList) restartList.innerHTML = renderTasks("restart");
+    const idleRestartCard = document.getElementById("idle-restart-status");
+    const idleRestartMessage = document.getElementById("idle-restart-status-message");
+    const idleRestartDetail = document.getElementById("idle-restart-status-detail");
+    const idleRestart = data.idle_restart;
+    if (idleRestartCard && idleRestartMessage && idleRestartDetail) {
+      idleRestartCard.hidden = !idleRestart;
+      if (idleRestart) {
+        if (Number(idleRestart.players_online) > 0) {
+          idleRestartMessage.textContent = `Waiting for ${idleRestart.players_online} player${Number(idleRestart.players_online) === 1 ? "" : "s"} to log out.`;
+        } else if (idleRestart.remaining_seconds !== null && idleRestart.remaining_seconds !== undefined) {
+          idleRestartMessage.textContent = idleRestart.remaining_seconds > 0
+            ? "Everyone is offline. The server will restart in about " + idleRestart.remaining_seconds + " seconds."
+            : "Everyone is offline. The server restart is starting shortly.";
+        } else {
+          idleRestartMessage.textContent = "No players are online. Craftarr is starting the 30-second wait.";
+        }
+        const requestedAt = parseUtcTimestamp(idleRestart.requested_at).toLocaleString();
+        idleRestartDetail.textContent = `${idleRestart.last_error ? `${idleRestart.last_error} · ` : ""}Requested by ${idleRestart.requested_by} at ${requestedAt}.`;
+        const cancelButton = idleRestartCard.querySelector(".card-header button");
+        if (cancelButton) cancelButton.hidden = !canControl;
+      }
+    }
     const progress = document.getElementById("scheduled-backup-progress");
     if (progress) progress.innerHTML = activeJobs.map((job) => {
       const uploading = job.status === "uploading";
@@ -9048,6 +9159,7 @@ async function loadServerSchedules() {
   } catch (error) {
     if (commandList) commandList.textContent = error.message;
     if (backupList) backupList.textContent = error.message;
+    if (restartList) restartList.textContent = error.message;
   }
 }
 
@@ -9121,7 +9233,7 @@ function closeCustomSchedule(keepCustom) {
     const hidden = customScheduleSelect.closest(".schedule-when-fields").querySelector("[name=cron_expression]");
     if (!hidden.value) {
       const form = customScheduleSelect.closest("form");
-      customScheduleSelect.value = form?.elements.task_type.value === "backup" ? "daily" : "hourly";
+      customScheduleSelect.value = form?.elements.task_type.value === "command" ? "hourly" : "daily";
       updateScheduleWhen(customScheduleSelect);
     }
   }
@@ -9173,7 +9285,7 @@ function openServerScheduleModal(taskType) {
 
 function closeServerScheduleModal(event) {
   if (event && event.target !== event.currentTarget) return;
-  document.querySelectorAll("#command-schedule-modal, #backup-schedule-modal").forEach((modal) => {
+  document.querySelectorAll("#command-schedule-modal, #backup-schedule-modal, #restart-schedule-modal").forEach((modal) => {
     modal.hidden = true;
     const form = modal.querySelector(".friendly-schedule-form");
     if (form) resetServerScheduleForm(form);
@@ -9215,7 +9327,7 @@ function resetServerScheduleForm(form) {
   form.reset();
   form.elements.schedule_id.value = "";
   form.elements.schedule_timezone.value = localScheduleTimezone();
-  form.elements.frequency.value = form.elements.task_type.value === "backup" ? "daily" : "hourly";
+  form.elements.frequency.value = form.elements.task_type.value === "command" ? "hourly" : "daily";
   const submit = form.querySelector(".schedule-submit-button");
   submit.textContent = submit.dataset.createLabel;
   updateScheduleWhen(form.elements.frequency);
@@ -9253,6 +9365,15 @@ async function deleteServerSchedule(taskId) {
   loadServerSchedules();
 }
 
+async function cancelIdleRestart() {
+  const page = automationPage();
+  if (!page || !confirm("Cancel the restart that is waiting for players to leave?")) return;
+  const response = await fetch(`/api/web/servers/${page.dataset.serverId}/idle-restart`, {method: "DELETE"});
+  const data = await response.json();
+  if (!response.ok) return alert(data.error || "Unable to cancel the restart");
+  await loadServerSchedules();
+}
+
 loadServerMetrics();
 loadServerSchedules();
 
@@ -9287,12 +9408,13 @@ function renderPluginMonitoringVersionPreview(detection) {
 function renderPluginMonitoringPreview(data) {
   const isUpdate = data.update_available === true;
   const isCurrent = data.status === "Current";
+  const isUnavailable = data.status === "Update not available";
   const hasError = data.status === "Check failed";
-  const statusClass = isUpdate ? "is-update" : isCurrent ? "is-current" : hasError ? "is-error" : "is-pending";
-  const statusIcon = isUpdate ? "fa-circle-up" : isCurrent ? "fa-circle-check" : hasError ? "fa-triangle-exclamation" : "fa-circle-question";
+  const statusClass = isUpdate ? "is-update" : isCurrent ? "is-current" : isUnavailable ? "is-warning" : hasError ? "is-error" : "is-pending";
+  const statusIcon = isUpdate ? "fa-circle-up" : isCurrent ? "fa-circle-check" : isUnavailable || hasError ? "fa-triangle-exclamation" : "fa-circle-question";
   const statusLabel = isUpdate
     ? `New version ${data.latest_version || "available"}`
-    : isCurrent ? "Up to date" : hasError ? "Could not check" : data.status || "Check complete";
+    : isCurrent ? "Up to date" : isUnavailable ? "Update unavailable" : hasError ? "Could not check" : data.status || "Check complete";
   const installed = data.installed_version || data.installed_comparison || "Unknown";
   const latest = data.latest_version || "Unknown";
   const release = data.release_url?.startsWith("https://")
@@ -9322,7 +9444,6 @@ function renderPluginMonitoringPreview(data) {
     <dl class="monitoring-preview-details">
       <div><dt>Installed</dt><dd>${escapeHtml(installed)}</dd><small>${escapeHtml(data.installed_comparison_source || "JAR metadata")}</small></div>
       <div><dt>Latest</dt><dd>${release}</dd></div>
-      <div><dt>Compatibility</dt><dd>${escapeHtml(data.compatibility || "Unknown")}</dd></div>
       <div><dt>Source</dt><dd>${source}</dd></div>
       ${assetDetail}
     </dl>
@@ -9376,16 +9497,8 @@ function updateCheckFeedback(scope, updates, serverId) {
       link: pluginsLink,
     };
   }
-  const incompatible = results.filter((item) => item.status === "Incompatible");
-  if (incompatible.length) {
-    return {
-      message: `${incompatible.length} plugin version${incompatible.length === 1 ? "" : "s"} may not match this Minecraft version. Open Plugins to review.`,
-      type: "warning",
-      link: pluginsLink,
-    };
-  }
   const failures = results.filter((item) => item.status === "Check failed");
-  const checked = results.filter((item) => ["Current", "Update available", "Incompatible", "Compatibility unknown", "Check failed"].includes(item.status));
+  const checked = results.filter((item) => ["Current", "Update available", "Update not available", "Check failed"].includes(item.status));
   const skipped = results.length - checked.length;
   if (!results.length) return { message: "No plugins were found to check.", type: "info" };
   if (!checked.length) {
@@ -9459,10 +9572,8 @@ async function checkPluginUpdate(filename, button) {
         ? `${plugin.name} is up to date (${update.installed_version}).`
         : `${plugin.name} is up to date.`;
       type = "success";
-    } else if (update?.status === "Incompatible") {
-      message = update.latest_version
-        ? `${plugin.name} has a newer version (${update.latest_version}) that may not match this Minecraft version.`
-        : `A newer version of ${plugin.name} may not match this Minecraft version.`;
+    } else if (update?.status === "Update not available") {
+      message = `No update is available for ${plugin.name}.`;
       type = "warning";
     } else if (update?.status === "Check failed") {
       message = `Couldn't check ${plugin.name}: ${update.error || "Try again shortly."}`;

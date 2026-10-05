@@ -12,15 +12,20 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .backup_jobs import run_backup_job
 from .backup_manager import list_backups, delete_backup
 from .database import SessionLocal
-from .models import BackupJob, ScheduledTask, Server, ServerMetric, TaskRun
+from .models import BackupJob, PendingIdleRestart, ScheduledTask, Server, ServerMetric, TaskRun
 from .player_manager import get_online_players
-from .processes import register_server, send_command, server_process_stats, server_status
+from .processes import (
+    register_server, restart_server, run_pre_stop_commands, send_command,
+    server_process_stats, server_status,
+)
+from .audit import record_audit_event
 from .config import SCHEDULE_TIMEZONE
 from .offsite_backups import OffsiteBackupError, enforce_remote_retention, upload_backup
 from .system_alerts import check_system_alerts
 
 
 _stop = threading.Event()
+_idle_restart_wake = threading.Event()
 _thread: threading.Thread | None = None
 _manual_task_lock = threading.Lock()
 _manual_backup_servers: set[int] = set()
@@ -28,6 +33,11 @@ logger = logging.getLogger(__name__)
 POLL_SECONDS = max(5, int(getenv("CRAFTARR_AUTOMATION_POLL_SECONDS", "30")))
 METRIC_SECONDS = max(15, int(getenv("CRAFTARR_METRIC_INTERVAL_SECONDS", "60")))
 METRIC_RETENTION_DAYS = max(1, int(getenv("CRAFTARR_METRIC_RETENTION_DAYS", "30")))
+IDLE_RESTART_EMPTY_SECONDS = 30
+
+
+def wake_idle_restart_monitor() -> None:
+    _idle_restart_wake.set()
 
 
 def next_task_run(task, now: datetime, schedule_timezone=None) -> datetime:
@@ -134,8 +144,24 @@ def enforce_backup_retention(server, keep: int | None) -> None:
 
 
 def can_execute_task(task, server_id: int) -> bool:
-    """Commands wait for a running server; backups may run while stopped."""
-    return task.task_type != "command" or bool(server_status(server_id).get("running"))
+    """Commands and restarts wait for a running server; backups may run while stopped."""
+    return task.task_type not in {"command", "restart"} or bool(server_status(server_id).get("running"))
+
+
+def restart_managed_server(server) -> int | None:
+    run_pre_stop_commands(server.id, server.stop_commands)
+    pid = restart_server(
+        server.id,
+        server.directory,
+        server.memory,
+        server.jar_name,
+        server.java_args,
+        server.min_memory,
+        server.java_path,
+    )
+    server.plugins_dirty = False
+    server.plugin_session_pid = pid
+    return pid
 
 
 def execute_task(task_id: int, *, reschedule: bool = True) -> None:
@@ -171,6 +197,9 @@ def execute_task(task_id: int, *, reschedule: bool = True) -> None:
                 raise RuntimeError("Scheduled command is empty")
             send_command(server.id, task.command)
             run.detail = f"Sent: {task.command}"
+        elif task.task_type == "restart":
+            restart_managed_server(server)
+            run.detail = "Restarted the server"
         elif task.task_type == "backup":
             existing = db.query(BackupJob).filter(
                 BackupJob.server_id == server.id,
@@ -317,13 +346,102 @@ def run_due_tasks() -> None:
         execute_task(task_id)
 
 
+def process_pending_idle_restarts() -> None:
+    """Restart servers after their online player list stays empty for 30 seconds."""
+    db = SessionLocal()
+    try:
+        requests = db.query(PendingIdleRestart).all()
+        for pending in requests:
+            server_id = pending.server_id
+            server = db.get(Server, server_id)
+            if not server:
+                db.delete(pending)
+                db.commit()
+                continue
+
+            try:
+                register_server(server)
+                state = server_status(server.id).get("state")
+                if state == "stopped":
+                    db.delete(pending)
+                    db.commit()
+                    continue
+                if state != "running":
+                    pending.empty_since = None
+                    db.commit()
+                    continue
+
+                if get_online_players(server.id):
+                    pending.empty_since = None
+                    pending.last_error = None
+                    db.commit()
+                    continue
+
+                now = datetime.utcnow()
+                if pending.empty_since is None:
+                    pending.empty_since = now
+                    pending.last_error = None
+                    db.commit()
+                    continue
+                if now - pending.empty_since < timedelta(seconds=IDLE_RESTART_EMPTY_SECONDS):
+                    continue
+
+                current_request = db.query(PendingIdleRestart).filter_by(
+                    server_id=server_id,
+                ).populate_existing().with_for_update().first()
+                if current_request is None:
+                    continue
+                pending = current_request
+                requested_by_user_id = pending.requested_by_user_id
+                requested_by_username = pending.requested_by_username
+                restart_managed_server(server)
+                db.delete(pending)
+                db.commit()
+                record_audit_event(
+                    db,
+                    server_id=server.id,
+                    server_name=server.name,
+                    actor_user_id=requested_by_user_id,
+                    actor_username=requested_by_username,
+                    action="Server restarted after players left",
+                    details="The server was restarted after it had no online players for 30 seconds following a plugin update.",
+                )
+            except Exception:
+                logger.exception("Player-free restart failed for server %s", server_id)
+                db.rollback()
+                retry = db.get(PendingIdleRestart, server_id)
+                if retry:
+                    retry.empty_since = None
+                    retry.last_error = "Restart failed; the empty-player timer will start again"
+                    db.commit()
+    finally:
+        db.close()
+
+
 def _automation_loop() -> None:
     last_metrics = 0.0
-    while not _stop.wait(POLL_SECONDS):
+    while not _stop.is_set():
+        db = SessionLocal()
+        try:
+            has_pending_idle_restart = db.query(PendingIdleRestart.server_id).first() is not None
+        except Exception:
+            logger.exception("Unable to check pending player-free restarts")
+            has_pending_idle_restart = False
+        finally:
+            db.close()
+        wait_seconds = min(POLL_SECONDS, 5) if has_pending_idle_restart else POLL_SECONDS
+        _idle_restart_wake.wait(wait_seconds)
+        _idle_restart_wake.clear()
+        if _stop.is_set():
+            break
         try:
             run_due_tasks()
         except Exception:
             logger.exception("Scheduled task polling failed")
+        try:
+            process_pending_idle_restarts()
+        except Exception:
+            logger.exception("Player-free restart polling failed")
         try:
             from .update_monitor import run_scheduled_check
             run_scheduled_check()
@@ -348,6 +466,7 @@ def start_automation() -> None:
     if _thread and _thread.is_alive():
         return
     _stop.clear()
+    _idle_restart_wake.clear()
     try:
         collect_metrics()
     except Exception:
@@ -360,5 +479,6 @@ def start_automation() -> None:
 
 def stop_automation() -> None:
     _stop.set()
+    _idle_restart_wake.set()
     if _thread:
         _thread.join(timeout=5)

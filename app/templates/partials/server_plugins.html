@@ -2,6 +2,7 @@
     class="plugins-page"
     data-server-id="{{ server.id }}"
     data-can-manage="{{ 'true' if user.can('plugins.manage') else 'false' }}"
+    data-can-control="{{ 'true' if user.can('servers.control') else 'false' }}"
     data-can-view-files="{{ 'true' if user.can('files.view') else 'false' }}"
     data-can-edit-files="{{ 'true' if user.can('files.manage') else 'false' }}"
     data-page-title="Plugins"
@@ -103,6 +104,7 @@
         <p id="plugin-update-modal-summary" class="modal-note"></p>
         <ul id="plugin-update-modal-list" class="plugin-update-confirm-list"></ul>
         <label class="modal-checkbox plugin-update-delete-option"><input id="plugin-update-delete-current" type="checkbox"><span><strong>Delete the current version</strong><small>After the downloaded JAR passes validation and installs successfully, the current version will be deleted. If unchecked, it will be kept as a disabled previous version.</small></span></label>
+        {% if user.can("servers.control") %}<label class="modal-checkbox plugin-update-idle-restart-option"><input id="plugin-update-restart-when-empty" type="checkbox"><span><strong>Restart after players leave</strong><small>Wait until everyone has logged out, then restart the server after it has been empty for 30 seconds.</small></span></label>{% endif %}
         <p id="plugin-update-modal-state" class="modal-note"></p>
         <div class="modal-actions">
             <button id="cancel-plugin-update" class="button" type="button" onclick="closePluginUpdateModal()">Cancel</button>

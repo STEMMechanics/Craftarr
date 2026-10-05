@@ -82,7 +82,7 @@ def notifications(request: Request, db: Session = Depends(get_db)):
         if (
             isinstance(snapshot, dict)
             and snapshot.get("update_available") is True
-            and snapshot.get("status") in {"Update available", "Compatibility unknown"}
+            and snapshot.get("status") == "Update available"
         ):
             (paper_candidates if check.component == "@paper" else plugin_candidates).add(check.server_id)
 
@@ -178,7 +178,7 @@ def notifications(request: Request, db: Session = Depends(get_db)):
         for result in results:
             if not isinstance(result, dict) or result.get("update_available") is not True:
                 continue
-            if result.get("status") not in {"Update available", "Compatibility unknown"}:
+            if result.get("status") != "Update available":
                 continue
 
             is_paper = result.get("component") == "@paper"

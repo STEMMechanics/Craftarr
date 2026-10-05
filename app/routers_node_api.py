@@ -151,7 +151,7 @@ def node_notifications(
         if (
             not isinstance(result, dict)
             or result.get("update_available") is not True
-            or result.get("status") not in {"Update available", "Compatibility unknown"}
+            or result.get("status") != "Update available"
         ):
             continue
         is_paper = check.component == "@paper"

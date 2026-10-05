@@ -40,13 +40,15 @@
   document.addEventListener("invalid", (event) => {
     const field = event.target;
     if (!field?.matches?.("input, select, textarea")) return;
+    const validationMessage = field.validationMessage || "Check this value";
     clear(field);
     field.classList.add("field-invalid");
     field.setAttribute("aria-invalid", "true");
     const error = document.createElement("small");
     error.className = "field-error-message";
-    error.textContent = field.validationMessage || "Check this value";
+    error.textContent = validationMessage;
     field.insertAdjacentElement("afterend", error);
+    if (field.type === "password") field.value = "";
     window.showToast("Please correct the highlighted fields.", "error");
   }, true);
 
@@ -56,6 +58,11 @@
   document.addEventListener("DOMContentLoaded", () => {
     const error = Array.from(document.querySelectorAll(".login-error, .form-error"))
       .find((item) => !item.hidden && item.textContent.trim());
-    if (error) window.showToast(error.textContent.trim(), "error");
+    if (error) {
+      document.querySelectorAll("form input[type='password']").forEach((field) => {
+        field.value = "";
+      });
+      window.showToast(error.textContent.trim(), "error");
+    }
   });
 }());
