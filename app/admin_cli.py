@@ -75,11 +75,11 @@ def main() -> int:
             grouped = check_updates(db, servers, force=not args.cached, notify=args.notify)
             for server, results in grouped:
                 print(f"\n{server.name}")
-                print(f"{'Plugin':24} {'Installed':30} {'Latest':30} Status / Compatibility / Last checked")
+                print(f"{'Plugin':24} {'Installed':30} {'Latest':30} Status / Last checked")
                 for result in results:
                     print(f"{result['plugin']:24} {str(result['installed_version'] or 'Unknown'):30} "
                           f"{str(result['latest_version'] or 'Unknown'):30} {result['status']} / "
-                          f"{result['compatibility']} / {result['checked_at'] or 'Never'}")
+                          f"{result['checked_at'] or 'Never'}")
                     if result['error']:
                         print(f"  {result['error']}")
             return 0
@@ -91,13 +91,20 @@ def main() -> int:
                 getenv("CRAFTARR_BOOTSTRAP_ADMIN_PASSWORD") or None,
             )
             if password:
-                print(password)
+                print(f"Administrator account created: {args.username}")
+                print("Temporary administrator password (shown once):")
+                print(f"  {password}")
+                print("Copy it now. After signing in, Craftarr will require you to choose a new password.")
+            else:
+                print("An administrator account already exists; no account or password was changed.")
+                print("To recover an account, run: python -m app.admin_cli reset-password <username>")
             return 0
 
         password = reset_password(db, args.username)
         print(f"Password reset for {args.username}.")
-        print(f"Temporary password: {password}")
-        print("The user must change this password after signing in.")
+        print(f"Temporary password for {args.username} (shown once):")
+        print(f"  {password}")
+        print("Copy it now. This account must choose a new password after signing in.")
         print("Two-factor authentication was disabled for account recovery.")
         return 0
     except (ValueError, RuntimeError) as error:

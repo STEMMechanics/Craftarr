@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from .database import SessionLocal, get_db
-from .models import Server, ServerUpdateCheck
+from .models import PendingIdleRestart, Server, ServerUpdateCheck
 
 from .plugin_manager import (
     disable_plugin,
@@ -304,6 +304,9 @@ def plugins_data(
 
         "restart_required":
             server.plugins_dirty,
+
+        "restart_when_empty_scheduled":
+            db.get(PendingIdleRestart, server.id) is not None,
 
         "running":
             running,

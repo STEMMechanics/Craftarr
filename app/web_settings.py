@@ -36,6 +36,8 @@ from .settings_manager import (
     save_smtp_settings,
     get_system_alert_settings,
     save_system_alert_settings,
+    get_instance_settings,
+    save_instance_settings,
 )
 
 from .tfa import (
@@ -989,6 +991,32 @@ def get_smtp_settings_api(
     settings["smtp_password"] = ""
 
     return settings
+
+
+@router.get("/api/web/settings/instance")
+def get_instance_settings_api(request: Request, db: Session = Depends(get_db)):
+    admin = current_web_user(request, db)
+    if not admin:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not has_permission(admin, "settings.manage"):
+        return JSONResponse({"error": "Admin required"}, status_code=403)
+    return get_instance_settings(db)
+
+
+@router.post("/api/web/settings/instance")
+async def save_instance_settings_api(request: Request, db: Session = Depends(get_db)):
+    admin = current_web_user(request, db)
+    if not admin:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not has_permission(admin, "settings.manage"):
+        return JSONResponse({"error": "Admin required"}, status_code=403)
+    try:
+        data = await request.json()
+        if not isinstance(data, dict):
+            raise ValueError("Invalid instance settings")
+        return save_instance_settings(db, data)
+    except (ValueError, TypeError) as error:
+        return JSONResponse({"error": str(error)}, status_code=400)
 
 
 @router.post(

@@ -35,8 +35,11 @@ alembic upgrade head
 python -m app.admin_cli ensure-admin --username admin
 ```
 
-Save the temporary password printed by the command. Start the development
-server:
+The command prints a labeled temporary administrator password once. Copy it
+to sign in; Craftarr requires you to choose a new password at first login. If
+you need to recover an account later, run
+`python -m app.admin_cli reset-password admin` and use the temporary password
+it prints. Start the development server:
 
 ```bash
 uvicorn app.main:app --reload
