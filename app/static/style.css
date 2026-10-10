@@ -5255,6 +5255,7 @@ input[type="checkbox"] {
   flex: 0 0 auto;
   gap: 0.5rem;
   justify-content: end;
+  margin-bottom: 0.5rem;
 }
 
 .card-header-buttons {
