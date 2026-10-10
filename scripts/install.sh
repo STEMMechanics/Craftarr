@@ -335,6 +335,7 @@ install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$DATA_DIR" "$DATA_DIR
 install -d -m 0750 -o root -g "$SERVICE_GROUP" "$CONFIG_DIR"
 section "Installing Craftarr application"
 cp -a "$SOURCE_DIR/app" "$SOURCE_DIR/migrations" "$SOURCE_DIR/alembic.ini" "$SOURCE_DIR/requirements.txt" "$INSTALL_DIR/"
+install -m 0644 "$SOURCE_DIR/plugin-monitoring.yml" "$INSTALL_DIR/app/bundled_plugin_monitoring.yml"
 if [[ ! -f "$INSTALL_DIR/plugin-monitoring.yml" ]]; then
   cp -a "$SOURCE_DIR/plugin-monitoring.yml" "$INSTALL_DIR/"
 fi

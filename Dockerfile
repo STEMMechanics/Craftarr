@@ -31,6 +31,7 @@ RUN python3 -m venv .venv && \
 
 COPY app ./app
 COPY migrations ./migrations
+COPY plugin-monitoring.yml ./app/bundled_plugin_monitoring.yml
 COPY alembic.ini .
 
 RUN mkdir -p \

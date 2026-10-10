@@ -90,7 +90,7 @@ def _schedule_values(data: dict) -> dict:
         raise ValueError("Choose a day of the week")
     if frequency == "custom":
         validate_cron_expression(cron_expression or "")
-    if task_type not in {"backup", "command", "restart"} or not name or interval < 1 or interval > 525600:
+    if task_type not in {"backup", "command", "restart", "update"} or not name or interval < 1 or interval > 525600:
         raise ValueError("Type, name and a positive interval are required")
     if task_type == "command" and not command:
         raise ValueError("Command required")
@@ -225,8 +225,8 @@ async def create_schedule(server_id: int, request: Request, db: Session = Depend
         values = _schedule_values(await request.json())
     except (OffsiteBackupError, ValueError) as error:
         return JSONResponse({"error": str(error)}, status_code=400)
-    if values["task_type"] == "restart" and not has_permission(user, "servers.control"):
-        return JSONResponse({"error": "Server control access is required to schedule restarts"}, status_code=403)
+    if values["task_type"] in {"restart", "update"} and not has_permission(user, "servers.control"):
+        return JSONResponse({"error": "Server control access is required to schedule restarts and automatic updates"}, status_code=403)
     task = ScheduledTask(server_id=server.id, enabled=True, next_run_at=datetime.utcnow(), **values)
     task.next_run_at = next_task_run(task, datetime.utcnow())
     db.add(task)
@@ -253,8 +253,8 @@ async def update_schedule(server_id: int, task_id: int, request: Request, db: Se
         return JSONResponse({"error": str(error)}, status_code=400)
     if values["task_type"] != task.task_type:
         return JSONResponse({"error": "Schedule type cannot be changed"}, status_code=400)
-    if task.task_type == "restart" and not has_permission(user, "servers.control"):
-        return JSONResponse({"error": "Server control access is required to manage restarts"}, status_code=403)
+    if task.task_type in {"restart", "update"} and not has_permission(user, "servers.control"):
+        return JSONResponse({"error": "Server control access is required to manage restarts and automatic updates"}, status_code=403)
     for key, value in values.items():
         setattr(task, key, value)
     task.next_run_at = next_task_run(task, datetime.utcnow())
@@ -299,6 +299,15 @@ def delete_schedule(server_id: int, task_id: int, request: Request, db: Session 
         return JSONResponse({"error": "Schedule not found"}, status_code=404)
     # Keep the task row so its immutable execution audit remains available.
     task.enabled = False
+    from .models import PendingAutomaticUpdate
+    pending = db.get(PendingAutomaticUpdate, server.id)
+    if pending and pending.task_id == task.id:
+        run = db.get(TaskRun, pending.run_id)
+        if run:
+            run.status = "cancelled"
+            run.detail = "Automatic update schedule was disabled while waiting for players to leave"
+            run.finished_at = datetime.utcnow()
+        db.delete(pending)
     db.commit()
     request.state.audit_action = "Scheduled task disabled"
     request.state.audit_details = task.name

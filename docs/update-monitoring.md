@@ -1,8 +1,8 @@
 # Craftarr plugin and Paper update monitoring
 
-**Monitoring never installs or downloads plugin/Paper JARs.** It reads release
-metadata and links. Existing administrator-controlled installation features are
-separate.
+Monitoring by itself only reads release metadata and links. Administrators can
+install plugin updates from the Plugins page or create an opt-in automatic update
+schedule for plugins and Paper.
 
 A plugin's name/version is read from `plugin.yml` or `paper-plugin.yml`. The shared
 `plugin-monitoring.yml` repository maps normalized metadata names and aliases to
@@ -14,6 +14,18 @@ such as Citizens while keeping metadata parsing bounded.
 The existing Craftarr automation worker checks all managed servers every 24 hours.
 The last daily run is persisted across restarts. Downtime delays checks until the
 Craftarr runs again. No additional service or cron entry is needed.
+
+## Scheduled automatic updates
+
+On a server's **Scheduling** page, create an **Automatic updates** job and choose
+the same customizable schedule and timezone options used for other jobs. No update
+job is created by default; deleting its schedule disables it. At run time, Craftarr
+checks monitored plugins with downloadable releases and Paper's latest stable
+build. Replaced plugin and Paper JARs are retained as disabled files. If updates
+are available while the server is running, Craftarr waits until there are no
+players for 30 seconds, installs the updates, and restarts the server. It skips the
+restart when no update was installed. If the server is already stopped, it installs
+updates and leaves the server stopped.
 
 ## Configuring a source
 
@@ -46,10 +58,13 @@ an active check or preview; retry after it finishes.
 ## Shared settings repository
 
 Administrators with `settings.manage` can edit the YAML, download it for sharing,
-and upload a replacement from **Settings → Shared plugin update settings**. The
-file is validated before it is saved. By default, the editable copy lives beside
-the Craftarr database so it persists across container image updates. The bundled
-`plugin-monitoring.yml` seeds the repository until an editable copy is created.
+upload a replacement, or reset it from **Settings → Shared plugin update settings**.
+The file is validated before it is saved. Reset replaces the shared file with the
+defaults bundled in the installed Craftarr release and synchronizes them to linked
+Nodes; server-specific plugin overrides are unchanged. By default, the editable
+copy lives beside the Craftarr database so it persists across container image
+updates. The bundled `plugin-monitoring.yml` seeds the repository until an editable
+copy is created.
 `CRAFTARR_PLUGIN_MONITORING_DEFAULTS` can set a different persistent path.
 
 On the Plugins page, **Use shared settings** follows the current repository entry
@@ -68,10 +83,11 @@ The shipped configuration covers:
 | Custom URL | Geyser, Floodgate (GeyserMC public download metadata API) |
 
 Citizens compares Jenkins build numbers and needs a build number in its installed
-JAR metadata. Geyser/Floodgate defaults compare base versions, not individual CI
-builds. Their compatibility remains unknown. PlotSquared monitors public release
-metadata without authenticated premium downloads. Use Preview to verify the
-source still matches the upstream format and your installed version.
+JAR metadata. Geyser compares the GeyserMC build number with the build number in
+the installed JAR filename; Floodgate still compares base versions. Their
+compatibility remains unknown. PlotSquared monitors public release metadata
+without authenticated premium downloads. Use Preview to verify the source still
+matches the upstream format and your installed version.
 
 To share a source with other Craftarr users, add an entry to the repository:
 
@@ -83,9 +99,11 @@ plugins:
     provider: github
     project: https://github.com/example/plugin
     version_pattern: ''
-    link_pattern: ''
+    download_url: ''
+    download_rename: ''
     installed_pattern: ''
     asset_pattern: ''
+    installed_detection: auto
 ```
 
 Supported provider values are `github`, `modrinth`, `jenkins` and `custom`.
@@ -96,9 +114,22 @@ A missing repository starts from the bundled mappings. Invalid entries report ch
 failures without stopping other sources. Existing manual and disabled settings work
 independently of the file.
 
+The installed_detection key defaults to auto, which uses the current metadata-first
+detection and filename fallback. Set it to filename, plugin.yml, or paper-plugin.yml
+to choose the installed input explicitly. The installed_pattern expression is
+applied to that selected value.
+
+For Jenkins and Custom URL sources, `download_url` replaces the former
+`link_pattern` key. It accepts a fixed public HTTPS download URL or an expression
+that captures a URL in the first group or named `url` group. Existing shared files
+that still use `link_pattern` continue to load. `download_rename` is an optional
+filename template supporting `{filename}`, `{version}` and `{extension}`; for
+example, `{filename}-{version}.{extension}` turns an upstream `Geyser-Spigot.jar`
+into `Geyser-Spigot-1250.jar`.
+
 Install/upgrade scripts preserve the bundled root file. App-managed settings are
 stored separately from the installed code and can be downloaded before sharing or
-backing them up. No database migration is required for the shared mode.
+backing them up. Startup applies the migration for the installed-version selector.
 
 ## Expressions and preview
 
@@ -126,12 +157,13 @@ meaningful. When a JAR doesn't expose a build number, same-version CI builds can
 reliably be distinguished. Comparing only base versions monitors base-version
 changes, not every build.
 
-**Download link expression** is optional for Jenkins/Custom URL. It returns the
-first capture group or the named `url` group. For example,
-`"url"\s*:\s*"([^\"]+)"` extracts a URL from JSON. Relative URLs resolve against the
-configured source URL (Jenkins uses its successful build page). HTML entities and
-JSON-escaped slashes are decoded. The detected link is displayed but never fetched.
-Without this expression, Jenkins constructs an artifact link only if the response
+**Download link setting** is optional for Jenkins/Custom URL. It can be a fixed
+public HTTPS URL, or an expression that returns the first capture group or named
+`url` group. For example, `"url"\s*:\s*"([^\"]+)"` extracts a URL from JSON.
+Relative URLs resolve against the configured source URL (Jenkins uses its successful
+build page). HTML entities and JSON-escaped slashes are decoded. Craftarr displays the
+link during checks and fetches it only when an administrator installs the update.
+Without a link setting, Jenkins constructs an artifact link only if the response
 identifies exactly one JAR; otherwise it links to the build page. GitHub similarly
 shows a download link for a single JAR asset unless a filename expression selects one.
 For releases with separate plugin and API JARs, **GitHub JAR filename expression**
@@ -181,6 +213,15 @@ source and any detected download link. Official/source links open in a new tab.
 - **Check failed**: request, parsing or comparison failed. Other sources still run.
 - **Not checked**: no result exists yet, or the Paper JAR changed since its last check.
 
+When a direct download is available, an administrator can install the update from
+the plugin row. Craftarr downloads to a temporary file, validates the JAR and plugin
+identity. If `download_rename` is configured, Craftarr applies it to the upstream
+`Content-Disposition` filename, falling back to the final download URL's filename.
+For example, `{filename}-{version}.{extension}` turns `Geyser-Spigot.jar` into
+`Geyser-Spigot-1250.jar`. Otherwise, Craftarr uses the existing filename and, when
+`installed_detection` is `filename`, replaces the version captured by
+`installed_pattern`. The previous JAR is kept disabled unless deletion is selected.
+
 Modrinth selects the newest eligible release for the installed Minecraft version,
 including an older compatible release when newer releases target other versions.
 It prefers stable versions and falls back to beta only when a project has no
@@ -221,8 +262,8 @@ again, must resolve only to public IP addresses, and is connected through a pinn
 address with TLS hostname verification. Requests have a ten-second socket timeout,
 an overall read deadline, a 1 MiB response limit and text/JSON/XML content checks.
 Known artifact URL suffixes, archive responses and compressed responses are
-rejected. Download links are validated as HTTPS browser links and never requested by
-the monitor. API bodies, regex input text and exception details containing
+rejected. Download links are validated as HTTPS URLs; the monitor does not fetch them
+during checks, while the explicit update-install action does. API bodies, regex input text and exception details containing
 credentials are not logged.
 The structured service clients retain their 15-second timeout and 8 MiB limit.
 
@@ -281,8 +322,10 @@ applies migrations automatically. No new service, permission or secret is needed
 - `27b10c8d39a4`: upstream cache, server check snapshots, notification history and lease.
 - `38c21d9e40b5`: per-server plugin monitoring preferences.
 - `49d32eaf51c6`: source URLs and extraction expressions; removes automatic selection.
+- `a13d7c9e5b20`: explicit installed-version input selection.
+- `b47e2c9a61d0`: download naming and scheduled automatic updates.
 
-The latest migration preserves explicitly configured GitHub/Modrinth sources.
+The `49d32eaf51c6` migration preserves explicitly configured GitHub/Modrinth sources.
 Former automatic/GeyserMC/Citizens-specific configurations become disabled and need
 an explicit generic source. Saved disabled settings take precedence over YAML
 starting settings.

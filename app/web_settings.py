@@ -111,6 +111,48 @@ def download_plugin_monitoring_repository(request: Request, db: Session = Depend
     return PlainTextResponse(content, headers={'Content-Disposition': 'attachment; filename="plugin-monitoring.yml"'})
 
 
+@router.post('/api/web/settings/plugin-monitoring-repository/reset')
+def reset_plugin_monitoring_repository(request: Request, db: Session = Depends(get_db)):
+    admin = current_web_user(request, db)
+    if not admin:
+        return JSONResponse({'error': 'Not authenticated'}, status_code=401)
+    if not has_permission(admin, 'settings.manage'):
+        return JSONResponse({'error': 'Admin required'}, status_code=403)
+
+    from .monitoring_defaults import bundled_defaults_path, save_repository_text, validate_repository_text
+    try:
+        content = bundled_defaults_path().read_text(encoding='utf-8')
+        validate_repository_text(content)
+    except OSError:
+        return JSONResponse({'error': 'Unable to read the bundled plugin settings for this release'}, status_code=500)
+    except ValueError as error:
+        return JSONResponse({'error': str(error)}, status_code=400)
+
+    from datetime import datetime
+    from .models import UpdateMonitorLease
+    from .update_monitor import acquire_lease, CheckInProgress
+    try:
+        acquire_lease(db, datetime.utcnow())
+    except CheckInProgress as error:
+        return JSONResponse({'error': str(error)}, status_code=409)
+    try:
+        result = save_repository_text(content)
+        from .remote_nodes import synchronize_plugin_monitoring_repositories
+        sync_result = synchronize_plugin_monitoring_repositories(db)
+        result.update(
+            content=content,
+            linked_nodes=sync_result['linked_nodes'],
+            sync_errors=sync_result['failed_nodes'],
+        )
+        return result
+    except (ValueError, TypeError) as error:
+        return JSONResponse({'error': str(error)}, status_code=400)
+    finally:
+        db.rollback()
+        db.query(UpdateMonitorLease).filter_by(id=1).update({'expires_at': datetime.min})
+        db.commit()
+
+
 async def _save_plugin_monitoring_repository(request: Request, db: Session):
     admin = current_web_user(request, db)
     if not admin:

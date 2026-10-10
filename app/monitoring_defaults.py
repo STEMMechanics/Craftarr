@@ -14,9 +14,18 @@ from .update_providers import normalize_name
 
 logger = logging.getLogger(__name__)
 DEFAULTS_PATH = Path(__file__).resolve().parent.parent / 'plugin-monitoring.yml'
-FIELDS = ('provider', 'project', 'version_pattern', 'link_pattern', 'installed_pattern', 'asset_pattern')
+BUNDLED_DEFAULTS_PATH = Path(__file__).resolve().parent / 'bundled_plugin_monitoring.yml'
+FIELDS = ('provider', 'project', 'version_pattern', 'download_url', 'installed_pattern', 'asset_pattern', 'installed_detection', 'download_rename')
+FIELD_DEFAULTS = {'installed_detection': 'auto', 'download_rename': ''}
 MAX_REPOSITORY_BYTES = 262144
 _repository_lock = threading.RLock()
+
+
+def _fields_for(definition):
+    fields = {field: definition.get(field, FIELD_DEFAULTS.get(field, '')) for field in FIELDS}
+    if 'download_url' not in definition:
+        fields['download_url'] = definition.get('link_pattern', '')
+    return fields
 
 
 def repository_path():
@@ -27,13 +36,18 @@ def repository_path():
     return database.parent / 'plugin-monitoring.yml'
 
 
+def bundled_defaults_path():
+    """Return the release-pinned defaults, with the repository file as dev fallback."""
+    return BUNDLED_DEFAULTS_PATH if BUNDLED_DEFAULTS_PATH.is_file() else DEFAULTS_PATH
+
+
 def _source_path():
     path = repository_path()
     if path.exists() or getenv('CRAFTARR_PLUGIN_MONITORING_DEFAULTS', '').strip():
         return path
     # Keep bundled mappings available until an app-managed copy is saved. The
     # managed copy lives beside the database so it survives image replacement.
-    return DEFAULTS_PATH
+    return bundled_defaults_path()
 
 
 def default_for(name):
@@ -46,7 +60,14 @@ def default_for(name):
     except OSError:
         return None, 'Unable to read plugin monitoring defaults'
     entry = entries.get(normalize_name(name))
-    return (dict(entry) if entry else None), error
+    if not entry:
+        return None, error
+    result = dict(entry)
+    if not result.get('error'):
+        # Preserve the old lookup key for existing integrations; repository
+        # files and the settings UI use download_url from this release onward.
+        result.setdefault('link_pattern', result.get('download_url', ''))
+    return result, error
 
 
 def read_repository_text():
@@ -112,7 +133,7 @@ def validate_repository_text(content):
             if key in names:
                 raise ValueError(f'{alias}: duplicate plugin name or alias')
             names[key] = name
-        fields = {field: definition.get(field, '') for field in FIELDS}
+        fields = _fields_for(definition)
         if not all(isinstance(value, str) for value in fields.values()):
             raise ValueError(f'{name}: provider, project and expressions must be text')
         notes = definition.get('notes', '')
@@ -120,7 +141,8 @@ def validate_repository_text(content):
             raise ValueError(f'{name}: notes must be text of at most 1000 characters')
         try:
             custom_provider(fields['provider'], fields['project'], fields['version_pattern'],
-                            fields['link_pattern'], fields['installed_pattern'], fields['asset_pattern'])
+                            fields['download_url'], fields['installed_pattern'], fields['asset_pattern'],
+                            fields['installed_detection'], fields['download_rename'])
         except (ValueError, TypeError) as error:
             raise ValueError(f'{name}: {error}') from None
     return data
@@ -174,11 +196,12 @@ def upsert_repository_entry(name, settings):
         content = read_repository_text()
         data = validate_repository_text(content)
         key = normalize_name(name)
-        fields = {field: settings[field] for field in FIELDS}
+        fields = {field: settings.get(field, FIELD_DEFAULTS.get(field, '')) for field in FIELDS}
         for existing, definition in data['plugins'].items():
             aliases = definition.get('aliases', [])
             if key == normalize_name(existing) or key in {normalize_name(alias) for alias in aliases}:
                 replacement = dict(definition)
+                replacement.pop('link_pattern', None)
                 replacement.update(fields)
                 data['plugins'][existing] = replacement
                 _write_repository_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
@@ -196,7 +219,7 @@ def _add_repository_entry(name, settings):
     for existing, definition in data['plugins'].items():
         if key == normalize_name(existing) or key in {normalize_name(alias) for alias in definition.get('aliases', [])}:
             raise ValueError('Shared settings already exist for this plugin')
-    fields = {field: settings[field] for field in FIELDS}
+    fields = {field: settings.get(field, FIELD_DEFAULTS.get(field, '')) for field in FIELDS}
     definition = dict(fields)
     # Append a new mapping to the normal block-style YAML while preserving the
     # shipped repository's comments and formatting.
@@ -248,8 +271,8 @@ def _load(path, mtime, size, inode):
             if not isinstance(aliases, list) or not all(isinstance(alias, str) and normalize_name(alias) for alias in aliases):
                 raise ValueError()
             names += aliases
-            entry = {field: definition.get(field, '') for field in FIELDS}
-            provider = custom_provider(entry['provider'], entry['project'], entry['version_pattern'], entry['link_pattern'], entry['installed_pattern'], entry['asset_pattern'])
+            entry = _fields_for(definition)
+            provider = custom_provider(entry['provider'], entry['project'], entry['version_pattern'], entry['download_url'], entry['installed_pattern'], entry['asset_pattern'], entry['installed_detection'], entry['download_rename'])
             entry['project'] = provider.project
             notes = definition.get('notes', '')
             if not isinstance(notes, str) or len(notes) > 1000:

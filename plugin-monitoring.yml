@@ -30,9 +30,12 @@ plugins:
     aliases: [Geyser-Spigot, Geyser-Bukkit]
     provider: custom
     project: https://download.geysermc.org/v2/projects/geyser/versions/latest/builds/latest
-    version_pattern: '"version"\s*:\s*"([^\"]+)"'
-    installed_pattern: '^v?([0-9.]+)'
-    notes: Monitors base-version changes, not individual CI builds. Minecraft compatibility is unknown.
+    version_pattern: '"build"\s*:\s*(\d+)'
+    download_url: 'https://download.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/spigot'
+    download_rename: '{filename}-{version}.{extension}'
+    installed_pattern: '(?i)^Geyser-(?:Spigot|Bukkit)-([0-9]+)\.jar$'
+    installed_detection: filename
+    notes: Monitors and installs individual GeyserMC Spigot builds using the JAR filename. Minecraft compatibility is unknown.
   LuckPerms:
     provider: modrinth
     project: https://modrinth.com/plugin/luckperms

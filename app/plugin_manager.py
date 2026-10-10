@@ -9,6 +9,7 @@ import shutil
 import tempfile
 import uuid
 import yaml
+import regex
 from .env import getenv
 
 from pathlib import Path
@@ -30,16 +31,22 @@ def plugins_directory(server) -> Path:
     return Path(server.directory) / "plugins"
 
 
-def read_plugin_yml(jar_path: Path) -> dict:
+def read_plugin_yml(jar_path: Path, metadata_source: str = "auto") -> dict:
     """
-    Read the small amount of metadata we need
-    from plugin.yml inside a Paper/Spigot plugin.
+    Read the small amount of metadata we need from a plugin descriptor.
     """
+
+    if metadata_source not in {"auto", "plugin.yml", "paper-plugin.yml"}:
+        return {}
 
     try:
         with zipfile.ZipFile(jar_path) as jar:
-
-            metadata_name = "plugin.yml" if "plugin.yml" in jar.namelist() else "paper-plugin.yml"
+            names = set(jar.namelist())
+            metadata_name = metadata_source
+            if metadata_name == "auto":
+                metadata_name = "plugin.yml" if "plugin.yml" in names else "paper-plugin.yml"
+            if metadata_name not in names:
+                return {}
             if jar.getinfo(metadata_name).file_size > MAX_PLUGIN_METADATA_BYTES:
                 return {}
             with jar.open(metadata_name) as file:
@@ -137,6 +144,33 @@ def filename_for_plugin_build(filename: str, build: str) -> str | None:
     return corrected + (".disabled" if disabled else "")
 
 
+def filename_for_installed_pattern(filename: str, pattern: str, version: str) -> str | None:
+    """Replace the version captured from the installed JAR filename."""
+    if (not isinstance(filename, str) or Path(filename).name != filename
+            or not isinstance(pattern, str) or not pattern
+            or not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9.+_-]+", version)):
+        return None
+    disabled = filename.endswith(".jar.disabled")
+    display_filename = filename[:-9] if disabled else filename
+    try:
+        compiled = regex.compile(pattern)
+        if compiled.groups < 1:
+            return None
+        match = compiled.search(display_filename, timeout=0.1)
+    except (regex.error, RecursionError, TimeoutError):
+        return None
+    if not match:
+        return None
+    group = "version" if "version" in compiled.groupindex else 1
+    start, end = match.span(group)
+    if start < 0 or end <= start or match.group(group) == version:
+        return None
+    corrected = display_filename[:start] + version + display_filename[end:]
+    if Path(corrected).name != corrected or not corrected.lower().endswith(".jar"):
+        return None
+    return corrected + (".disabled" if disabled else "")
+
+
 def plugin_info(
     path: Path,
 ) -> dict:
@@ -152,6 +186,10 @@ def plugin_info(
     metadata = read_plugin_yml(
         path
     )
+    version_sources = {
+        source: read_plugin_yml(path, source).get("version")
+        for source in ("plugin.yml", "paper-plugin.yml")
+    }
 
     filename = path.name
 
@@ -223,6 +261,9 @@ def plugin_info(
 
         "version_source":
             version_source,
+
+        "version_sources":
+            version_sources,
 
         "enabled":
             not disabled,
@@ -490,7 +531,45 @@ def normalize_previous_plugin_filenames(server) -> None:
             continue
 
 
-def install_plugin_update(server, filename: str, url: str, *, delete_previous: bool = False, expected_name: str | None = None, expected_version: str | None = None, provider_name: str | None = None) -> dict:
+def _download_response_filename(response) -> str | None:
+    candidate = None
+    headers = getattr(response, "headers", None)
+    if headers is not None and hasattr(headers, "get_filename"):
+        candidate = headers.get_filename()
+    if not candidate:
+        candidate = Path(urllib.parse.unquote(urllib.parse.urlsplit(response.geturl()).path)).name
+    candidate = urllib.parse.unquote(str(candidate)).replace("\\", "/").rsplit("/", 1)[-1]
+    if (candidate and len(candidate) <= 255 and candidate.lower().endswith(".jar")
+            and not any(ord(character) < 32 for character in candidate)):
+        return candidate
+    return None
+
+
+def _filename_from_download_template(template: str, source_filename: str | None, version: str | None) -> str:
+    if not isinstance(template, str) or not template or len(template) > 255:
+        raise ValueError("Download rename template is invalid")
+    if not source_filename:
+        raise ValueError("The download did not provide a JAR filename for the rename template")
+    source = Path(source_filename)
+    extension = source.suffix.lstrip(".")
+    if not extension:
+        raise ValueError("The download filename has no extension")
+    try:
+        renamed = template.format(
+            filename=source.stem,
+            version=version or "",
+            extension=extension,
+        )
+    except (KeyError, ValueError, IndexError):
+        raise ValueError("Download rename supports only {filename}, {version} and {extension}") from None
+    if (Path(renamed).name != renamed or "/" in renamed or "\\" in renamed
+            or len(renamed) > 255 or not renamed.lower().endswith(".jar")
+            or any(ord(character) < 32 for character in renamed)):
+        raise ValueError("Download rename must produce a valid JAR filename")
+    return renamed
+
+
+def install_plugin_update(server, filename: str, url: str, *, delete_previous: bool = False, expected_name: str | None = None, expected_version: str | None = None, provider_name: str | None = None, installed_pattern: str | None = None, installed_detection: str = "auto", download_rename: str = "") -> dict:
     """Install a validated release, retaining the old JAR disabled unless deletion is requested."""
     if Path(filename).name != filename or not filename.lower().endswith((".jar", ".jar.disabled")):
         raise ValueError("Select a valid installed plugin file")
@@ -513,6 +592,7 @@ def install_plugin_update(server, filename: str, url: str, *, delete_previous: b
     previous_path = None
     replaced_path = None
     moved_current = False
+    downloaded_filename = None
     try:
         with tempfile.NamedTemporaryFile(
             prefix=".craftarr-update-", suffix=".jar", dir=directory, delete=False,
@@ -520,6 +600,7 @@ def install_plugin_update(server, filename: str, url: str, *, delete_previous: b
             temporary_path = Path(temporary.name)
             with opener.open(request, timeout=120) as response:
                 _validate_public_https_url(response.geturl())
+                downloaded_filename = _download_response_filename(response)
                 content_length = response.headers.get("Content-Length")
                 if content_length and int(content_length) > MAX_PLUGIN_BYTES:
                     raise ValueError("Plugin exceeds the configured size limit")
@@ -541,10 +622,15 @@ def install_plugin_update(server, filename: str, url: str, *, delete_previous: b
             )
 
         target_filename = filename
-        if expected_version:
-            version_token = re.sub(r"[^A-Za-z0-9.+_-]", "", expected_version).strip(".-_")
-            current_version = _filename_plugin_version(filename.removesuffix(".disabled"), expected_name)
-            corrected_build_filename = filename_for_plugin_build(filename, version_token)
+        version_token = re.sub(r"[^A-Za-z0-9.+_-]", "", expected_version or "").strip(".-_")
+        current_version = _filename_plugin_version(filename.removesuffix(".disabled"), expected_name)
+        if download_rename:
+            target_filename = _filename_from_download_template(download_rename, downloaded_filename, version_token)
+        elif expected_version:
+            corrected_build_filename = (
+                filename_for_installed_pattern(filename, installed_pattern, version_token)
+                if installed_detection == "filename" and installed_pattern else None
+            ) or filename_for_plugin_build(filename, version_token)
             if corrected_build_filename:
                 target_filename = corrected_build_filename
             elif (
@@ -555,8 +641,8 @@ def install_plugin_update(server, filename: str, url: str, *, delete_previous: b
                 plugin_stem = re.sub(r"[^A-Za-z0-9._ -]", "", expected_name).strip(" .")
                 if plugin_stem:
                     target_filename = f"{plugin_stem}-{version_token}.jar"
-                    if not current["enabled"]:
-                        target_filename += ".disabled"
+        if not current["enabled"] and not target_filename.endswith(".disabled"):
+            target_filename += ".disabled"
         target_path = safe_plugin_path(server, target_filename)
         if target_path != current_path and target_path.exists():
             raise ValueError("A JAR for this plugin version already exists; resolve the duplicate before updating")

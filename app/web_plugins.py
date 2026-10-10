@@ -62,6 +62,13 @@ logger = logging.getLogger(__name__)
 PLUGIN_PROGRESS_COMPONENT = "@plugins-progress"
 
 
+def monitoring_download_url(data):
+    """Read the current setting name, falling back to legacy API payloads."""
+    if "download_url" in data:
+        return data.get("download_url", "")
+    return data.get("link_pattern", "")
+
+
 def plugin_action_requires_restart(
     action: str,
     filenames: list[str],
@@ -344,6 +351,7 @@ async def update_installed_plugin(server_id: int, request: Request, db: Session 
     if not update or update.get("update_available") is not True or not isinstance(download_url, str) or not download_url.startswith("https://"):
         return JSONResponse({"error": "A downloadable update is no longer available for this plugin"}, status_code=409)
     comparison_details = update.get("comparison_details") or {}
+    monitoring_settings = update.get("monitoring") or {}
     expected_version = comparison_details.get("release_value") or update.get("latest_version")
 
     server_running = bool(server_status(server.id).get("running"))
@@ -356,6 +364,9 @@ async def update_installed_plugin(server_id: int, request: Request, db: Session 
             expected_name=installed["name"],
             expected_version=expected_version if isinstance(expected_version, str) else None,
             provider_name=update.get("provider"),
+            download_rename=monitoring_settings.get("download_rename", ""),
+            installed_pattern=monitoring_settings.get("installed_pattern"),
+            installed_detection=monitoring_settings.get("installed_detection", "auto"),
         )
         action_requires_restart = installed["enabled"] and server_running
         restart_required = record_plugin_restart_requirement(db, server, action_requires_restart)
@@ -547,6 +558,9 @@ async def plugin_action(
     )
 
     current_plugins = list_plugins(server)
+    current_filenames = {plugin["filename"] for plugin in current_plugins}
+    if any(filename not in current_filenames for filename in filenames):
+        return JSONResponse({"error": "Plugin selection changed; reload the plugin list"}, status_code=409)
     action_requires_restart = plugin_action_requires_restart(
         action, filenames, current_plugins,
         bool(server_status(server.id).get("running")),
@@ -581,6 +595,7 @@ async def plugin_action(
         ValueError,
         FileNotFoundError,
         FileExistsError,
+        OSError,
     ) as error:
 
         return JSONResponse(
@@ -841,8 +856,9 @@ async def save_plugin_monitoring(server_id: int, request: Request, db: Session =
     try:
         save_monitoring_config(db, server.id, plugin['name'], data.get('mode'),
                                data.get('provider', ''), data.get('project', ''),
-                               data.get('version_pattern', ''), data.get('link_pattern', ''),
-                               data.get('installed_pattern', ''), data.get('asset_pattern', ''))
+                               data.get('version_pattern', ''), monitoring_download_url(data),
+                               data.get('installed_pattern', ''), data.get('asset_pattern', ''),
+                               data.get('installed_detection', 'auto'), data.get('download_rename', ''))
         return {'success': True}
     except ValueError as error:
         return JSONResponse({'error': str(error)}, status_code=400)
@@ -875,8 +891,9 @@ async def promote_plugin_monitoring(server_id: int, request: Request, db: Sessio
         if not plugin:
             return JSONResponse({'error': 'Installed plugin not found; reload the Plugins page'}, status_code=404)
         provider = custom_provider(data.get('provider'), data.get('project'), data.get('version_pattern', ''),
-                                   data.get('link_pattern', ''), data.get('installed_pattern', ''),
-                                   data.get('asset_pattern', ''))
+                                   monitoring_download_url(data), data.get('installed_pattern', ''),
+                                   data.get('asset_pattern', ''), data.get('installed_detection', 'auto'),
+                                   data.get('download_rename', ''))
     except ValueError as error:
         return JSONResponse({'error': str(error)}, status_code=400)
     try:
@@ -888,9 +905,11 @@ async def promote_plugin_monitoring(server_id: int, request: Request, db: Sessio
             'provider': data.get('provider'),
             'project': provider.project,
             'version_pattern': data.get('version_pattern', ''),
-            'link_pattern': data.get('link_pattern', ''),
+            'download_url': monitoring_download_url(data),
             'installed_pattern': data.get('installed_pattern', ''),
             'asset_pattern': data.get('asset_pattern', ''),
+            'installed_detection': data.get('installed_detection', 'auto'),
+            'download_rename': data.get('download_rename', ''),
         })
         save_monitoring_config(db, server.id, plugin['name'], 'global')
         from .remote_nodes import synchronize_plugin_monitoring_repositories
@@ -911,12 +930,12 @@ async def preview_plugin_monitoring(server_id: int, request: Request, db: Sessio
     from datetime import datetime
     import json
     from types import SimpleNamespace
-    from urllib.parse import quote
+    from urllib.parse import quote, urljoin
     from starlette.concurrency import run_in_threadpool
     from .models import UpdateMonitorLease
     from .plugin_monitoring import custom_provider
     from .update_monitor import acquire_lease, CheckInProgress, compare_release
-    from .update_providers.http_source import SourceError
+    from .update_providers.http_source import SourceError, validate_url
     from .update_providers.configured import extract
     from .update_providers import Release
     from .update_providers.versions import parse_version
@@ -993,8 +1012,9 @@ async def preview_plugin_monitoring(server_id: int, request: Request, db: Sessio
         provider = None
         release = None
         try:
-            provider = custom_provider(kind, project, pattern, data.get('link_pattern', ''),
-                                       data.get('installed_pattern', ''), data.get('asset_pattern', ''))
+            provider = custom_provider(kind, project, pattern, monitoring_download_url(data),
+                                       data.get('installed_pattern', ''), data.get('asset_pattern', ''),
+                                       data.get('installed_detection', 'auto'), data.get('download_rename', ''))
             release = Release(detected, str(data.get('release_url') or provider.project))
             asset_preview = None
             if kind == 'github':
@@ -1010,17 +1030,31 @@ async def preview_plugin_monitoring(server_id: int, request: Request, db: Sessio
                 asset_preview = provider.source.asset_preview
                 release.url = f'https://github.com/{provider.project}/releases/tag/{quote(asset_tag, safe="")}'
                 release.download_url = selected_asset['download_url'] if selected_asset else None
-            installed_comparison, installed_source = provider.installed_details(plugin.get('version'), plugin['filename'])
-            comparison = provider.compare(plugin.get('version'), release, filename=plugin['filename'])
+            elif kind in {'jenkins', 'custom'}:
+                source = provider.source
+                if getattr(source, 'direct_download_url', None):
+                    release.download_url = source.direct_download_url
+                elif getattr(source, 'download_url', ''):
+                    release.download_url = validate_url(urljoin(
+                        release.url,
+                        extract(source.download_url, preview_input, 'url'),
+                    ))
+            installed_comparison, installed_source = provider.installed_details(
+                plugin.get('version'), plugin['filename'], plugin.get('version_sources'),
+            )
+            comparison = provider.compare(plugin.get('version'), release, filename=plugin['filename'],
+                                          version_sources=plugin.get('version_sources'))
             result = {
                 'status': 'Check failed' if comparison is None else 'Update available' if comparison > 0 else 'Current',
                 'update_available': comparison is not None and comparison > 0,
                 'latest_version': provider.display_version(release),
-                'installed_version': provider.display_installed(plugin.get('version'), release, filename=plugin['filename']),
+                'installed_version': provider.display_installed(plugin.get('version'), release, filename=plugin['filename'],
+                                                               version_sources=plugin.get('version_sources')),
                 'installed_comparison': installed_comparison,
                 'installed_comparison_source': installed_source,
                 'error': 'Installed version/build cannot be reliably compared' if comparison is None else None,
                 'version_preview': diagnostic,
+                'download_rename': provider.download_rename,
                 'download_url': release.download_url,
                 'release_url': release.url,
                 'asset_preview': asset_preview,
@@ -1048,6 +1082,7 @@ async def preview_plugin_monitoring(server_id: int, request: Request, db: Sessio
                 'installed_version': plugin.get('version'),
                 'error': message,
                 'version_preview': diagnostic,
+                'download_rename': provider.download_rename if provider else '',
                 'download_url': None,
                 'asset_preview': asset_preview,
             }
@@ -1061,8 +1096,9 @@ async def preview_plugin_monitoring(server_id: int, request: Request, db: Sessio
             provider = custom_provider(*(defaults[field] for field in FIELDS))
         else:
             provider = custom_provider(data.get('provider'), data.get('project'), data.get('version_pattern', ''),
-                                       data.get('link_pattern', ''), data.get('installed_pattern', ''),
-                                       data.get('asset_pattern', ''))
+                                       monitoring_download_url(data), data.get('installed_pattern', ''),
+                                       data.get('asset_pattern', ''), data.get('installed_detection', 'auto'),
+                                       data.get('download_rename', ''))
     except ValueError as error:
         return JSONResponse({'error': str(error)}, status_code=400)
     now = datetime.utcnow()
@@ -1073,9 +1109,13 @@ async def preview_plugin_monitoring(server_id: int, request: Request, db: Sessio
     try:
         releases = await run_in_threadpool(provider.fetch)
         row = SimpleNamespace(payload=json.dumps([release.to_dict() for release in releases]), checked_at=now, error=None)
-        result = compare_release(plugin['name'], plugin.get('version'), provider, row, server.minecraft_version, filename=plugin['filename'])
+        result = compare_release(plugin['name'], plugin.get('version'), provider, row, server.minecraft_version,
+                                 filename=plugin['filename'], version_sources=plugin.get('version_sources'))
+        result['download_rename'] = provider.download_rename
         try:
-            result['installed_comparison'], result['installed_comparison_source'] = provider.installed_details(plugin.get('version'), plugin['filename'])
+            result['installed_comparison'], result['installed_comparison_source'] = provider.installed_details(
+                plugin.get('version'), plugin['filename'], plugin.get('version_sources'),
+            )
         except SourceError:
             if not result.get('comparison_details'):
                 raise

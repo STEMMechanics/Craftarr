@@ -225,6 +225,9 @@ def install_release(tag: str, project_root: Path | None = None) -> dict:
                         shutil.copytree(current, backup / name)
                     else:
                         shutil.copy2(current, backup / name)
+            incoming_defaults = source / MONITORING_DEFAULTS_FILE
+            if incoming_defaults.is_file():
+                shutil.copy2(incoming_defaults, source / "app" / "bundled_plugin_monitoring.yml")
             for name in UPDATE_ITEMS:
                 incoming = source / name
                 if name == MONITORING_DEFAULTS_FILE and ((root / name).exists() or not incoming.exists()):

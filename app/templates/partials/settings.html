@@ -178,7 +178,10 @@
     <section class="overview-card settings-section">
         <div class="card-header">
             <span>Shared plugin update settings</span>
-            <a class="settings-header-button" href="/api/web/settings/plugin-monitoring-repository/download"><i class="fa-solid fa-download" aria-hidden="true"></i> Download</a>
+            <div class="card-header-buttons">
+                <button class="settings-header-button" type="button" onclick="resetPluginMonitoringRepository()"><i class="fa-solid fa-arrow-rotate-left" aria-hidden="true"></i> Reset to release defaults</button>
+                <a class="settings-header-button" href="/api/web/settings/plugin-monitoring-repository/download"><i class="fa-solid fa-download" aria-hidden="true"></i> Download</a>
+            </div>
         </div>
         <div class="settings-content plugin-monitoring-repository-content">
             <p class="modal-note full-width">These settings are available to every server and synchronize across linked Nodes. Plugin settings can use this shared source or keep a server-specific source. Uploading replaces the shared repository. Use version 1 YAML, up to 256 KiB.</p>

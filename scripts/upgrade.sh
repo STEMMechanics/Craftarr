@@ -42,6 +42,7 @@ section "Installing application update"
 systemctl stop craftarr-console.service 2>/dev/null || true
 rm -rf "$INSTALL_DIR/app" "$INSTALL_DIR/migrations"
 cp -R "$SOURCE_DIR/app" "$SOURCE_DIR/migrations" "$SOURCE_DIR/alembic.ini" "$SOURCE_DIR/requirements.txt" "$INSTALL_DIR/"
+install -m 0644 "$SOURCE_DIR/plugin-monitoring.yml" "$INSTALL_DIR/app/bundled_plugin_monitoring.yml"
 if [[ ! -f "$INSTALL_DIR/plugin-monitoring.yml" ]]; then
   cp -a "$SOURCE_DIR/plugin-monitoring.yml" "$INSTALL_DIR/"
 fi

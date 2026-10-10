@@ -65,6 +65,19 @@
         {% endif %}
     </div>
 
+    {% if user.can("plugins.manage") %}
+    <div id="plugin-bulk-actions" class="plugin-bulk-actions" hidden>
+      <label class="plugin-select-visible"><input id="plugin-select-visible" type="checkbox" onchange="selectVisiblePlugins(this.checked)"><span>Select visible</span></label>
+      <span id="plugin-selection-count" class="muted-small">0 selected</span>
+      <div class="plugin-bulk-buttons">
+        <button class="button" type="button" onclick="bulkPluginAction('enable')"><i class="fa-solid fa-toggle-on" aria-hidden="true"></i> Enable</button>
+        <button class="button" type="button" onclick="bulkPluginAction('disable')"><i class="fa-solid fa-toggle-off" aria-hidden="true"></i> Disable</button>
+        <button class="button danger" type="button" onclick="bulkPluginAction('remove')"><i class="fa-solid fa-trash" aria-hidden="true"></i> Delete</button>
+        <button class="button secondary" type="button" onclick="clearPluginSelection()">Clear</button>
+      </div>
+    </div>
+    {% endif %}
+
 
     <section id="plugin-list-card" class="overview-card plugin-list-card">
 
@@ -265,14 +278,24 @@
             <input id="plugin-monitoring-asset-pattern" type="text" maxlength="1024" autocomplete="off" spellcheck="false" oninput="previewPluginMonitoringExpressionChanged()">
             <p class="modal-note">Match the asset filename. A download link is available only when exactly one JAR matches. For STEMCraft, <code>^STEMCraft-(?!API-).*\.jar$</code> selects the plugin and skips the API JAR.</p>
           </div>
-          <div id="plugin-monitoring-link-fields">
-            <label for="plugin-monitoring-link-pattern">How to find the download link (optional)</label>
-            <input id="plugin-monitoring-link-pattern" type="text" maxlength="1024" autocomplete="off" spellcheck="false" oninput="clearMonitoringPreview()">
-            <p class="modal-note">Capture a URL in the first group or a named “url” group. Relative links are resolved against the source URL. The link is displayed, never fetched.</p>
+          <div id="plugin-monitoring-download-url-fields">
+            <label for="plugin-monitoring-download-url">How to find the download URL (optional)</label>
+            <input id="plugin-monitoring-download-url" type="text" maxlength="1024" autocomplete="off" spellcheck="false" oninput="clearMonitoringPreview()">
+            <p class="modal-note">Capture a URL in the first group or a named “url” group, or paste a fixed public HTTPS download URL. Relative links resolve against the source URL. Craftarr fetches the link only when you install an update.</p>
           </div>
+          <label for="plugin-monitoring-download-rename">Rename the downloaded file (optional)</label>
+          <input id="plugin-monitoring-download-rename" type="text" maxlength="255" autocomplete="off" spellcheck="false" placeholder="{filename}-{version}.{extension}" oninput="clearMonitoringPreview()">
+          <p class="modal-note">Use <code>{filename}</code>, <code>{version}</code> and <code>{extension}</code>. For example, <code>{filename}-{version}.{extension}</code> turns <code>Geyser-Spigot.jar</code> into <code>Geyser-Spigot-1250.jar</code>.</p>
           <label for="plugin-monitoring-installed-pattern">How to read the installed version (optional)</label>
           <input id="plugin-monitoring-installed-pattern" type="text" maxlength="1024" autocomplete="off" spellcheck="false" oninput="clearMonitoringPreview()">
-          <p class="modal-note">Extract the comparable part of the JAR’s version, for example ^([0-9.]+). Expressions use the first capture group or a named “version” group.</p>
+          <label for="plugin-monitoring-installed-detection">Where should we read the installed version?</label>
+          <select id="plugin-monitoring-installed-detection" onchange="clearMonitoringPreview()">
+            <option value="auto">Automatic</option>
+            <option value="filename">JAR filename</option>
+            <option value="plugin.yml">plugin.yml</option>
+            <option value="paper-plugin.yml">paper-plugin.yml</option>
+          </select>
+          <p id="plugin-monitoring-installed-hint" class="modal-note">Automatic uses plugin.yml when available, otherwise paper-plugin.yml; it falls back to a filename version when metadata has no version. The expression uses the first capture group or a named “version” group.</p>
         </div>
       </details>
     </div>

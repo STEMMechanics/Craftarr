@@ -73,7 +73,7 @@ def base_result(name, installed, provider=None):
         status='Not checked' if provider else 'Unsupported/unmonitored')
 
 
-def compare_release(name, installed, provider, cache, minecraft_version, filename=None):
+def compare_release(name, installed, provider, cache, minecraft_version, filename=None, version_sources=None):
     result = base_result(name, installed, provider)
     if not provider or not cache:
         return result
@@ -88,23 +88,35 @@ def compare_release(name, installed, provider, cache, minecraft_version, filenam
         result.update(latest_version=release.version, release_url=release.url, download_url=release.download_url, release_date=release.date)
         comparison_details = None
         if hasattr(provider, 'installed_details'):
+            detection = getattr(provider, 'installed_detection', 'auto')
+            selected_input = installed
+            if detection == 'filename':
+                selected_input = filename
+            elif detection in {'plugin.yml', 'paper-plugin.yml'}:
+                selected_input = (version_sources or {}).get(detection)
             comparison_details = {
-                'installed_value': str(installed or '')[:300],
+                'installed_value': str(selected_input or '')[:300],
                 'installed_filename': str(filename or '')[:300],
                 'release_value': str(release.version or '')[:200],
                 'release_pattern': str(getattr(provider, 'version_pattern', '') or '')[:1024],
                 'installed_pattern': str(getattr(provider, 'installed_pattern', '') or '')[:1024],
-                'installed_source': 'JAR metadata',
+                'installed_detection': str(detection or 'auto')[:32],
+                'installed_source': ('JAR filename' if detection == 'filename' else
+                                     f'{detection} metadata' if detection in {'plugin.yml', 'paper-plugin.yml'} else
+                                     'JAR metadata'),
             }
             try:
-                matched, source = provider.installed_details(installed, filename)
+                matched, source = provider.installed_details(installed, filename, version_sources)
                 comparison_details.update(installed_comparison=str(matched)[:300], installed_source=source)
             except SourceError as exc:
                 comparison_details['match_error'] = str(exc)
             result['comparison_details'] = comparison_details
-        comparison = provider.compare(installed, release, filename=filename)
+        if hasattr(provider, 'installed_details'):
+            comparison = provider.compare(installed, release, filename=filename, version_sources=version_sources)
+        else:
+            comparison = provider.compare(installed, release, filename=filename)
         if hasattr(provider, 'display_installed'):
-            result['installed_version'] = provider.display_installed(installed, release, filename=filename)
+            result['installed_version'] = provider.display_installed(installed, release, filename=filename, version_sources=version_sources)
         result['latest_version'] = provider.display_version(release)
         if comparison is None:
             result.update(status='Check failed', error='Installed version/build cannot be reliably compared')
@@ -153,7 +165,8 @@ def plugin_results(db, server, plugins=None, *, fetch=False, force=False, now=No
             continue
         provider, config = monitoring_config(db, server.id, plugin['name'])
         cache = cached_releases(db, provider, now, force, fetch, seen) if provider else None
-        result = compare_release(plugin['name'], plugin.get('version'), provider, cache, server.minecraft_version, filename=plugin['filename'])
+        result = compare_release(plugin['name'], plugin.get('version'), provider, cache, server.minecraft_version,
+                                 filename=plugin['filename'], version_sources=plugin.get('version_sources'))
         result['monitoring'] = config
         if config.get('error'):
             result.update(status='Check failed', error=config['error'])

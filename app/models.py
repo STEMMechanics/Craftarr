@@ -520,6 +520,20 @@ class PendingIdleRestart(Base):
     last_error = Column(String(255), nullable=True)
 
 
+class PendingAutomaticUpdate(Base):
+    """A scheduled update waiting for the server to become player-free."""
+
+    __tablename__ = "pending_automatic_updates"
+
+    server_id = Column(Integer, ForeignKey("servers.id", ondelete="CASCADE"), primary_key=True)
+    task_id = Column(Integer, ForeignKey("scheduled_tasks.id", ondelete="CASCADE"), nullable=False)
+    run_id = Column(Integer, ForeignKey("task_runs.id", ondelete="CASCADE"), nullable=False)
+    requested_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    empty_since = Column(DateTime, nullable=True)
+    restart_after_update = Column(Boolean, nullable=False, default=True)
+    last_error = Column(String(255), nullable=True)
+
+
 class TaskRun(Base):
     __tablename__ = "task_runs"
 
@@ -585,9 +599,20 @@ class PluginMonitoringSetting(Base):
     provider = Column(String(30), nullable=False, default='')
     project = Column(Text, nullable=False, default='')
     version_pattern = Column(Text, nullable=False, default='')
-    link_pattern = Column(Text, nullable=False, default='')
+    download_url = Column(Text, nullable=False, default='')
+    download_rename = Column(String(255), nullable=False, default='')
     installed_pattern = Column(Text, nullable=False, default='')
     asset_pattern = Column(Text, nullable=False, default='')
+    installed_detection = Column(String(32), nullable=False, default='auto')
+
+    @property
+    def link_pattern(self):
+        """Compatibility alias for older integrations using the former name."""
+        return self.download_url
+
+    @link_pattern.setter
+    def link_pattern(self, value):
+        self.download_url = value
 
 
 class ServerAuditEvent(Base):

@@ -2,6 +2,7 @@
 
 import threading
 import logging
+import json
 from calendar import monthrange
 from datetime import datetime, timedelta, timezone
 from .env import getenv
@@ -12,10 +13,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .backup_jobs import run_backup_job
 from .backup_manager import list_backups, delete_backup
 from .database import SessionLocal
-from .models import BackupJob, PendingIdleRestart, ScheduledTask, Server, ServerMetric, TaskRun
+from .models import BackupJob, PendingAutomaticUpdate, PendingIdleRestart, ScheduledTask, Server, ServerMetric, ServerUpdateCheck, TaskRun, UpdateMonitorLease
 from .player_manager import get_online_players
 from .processes import (
     register_server, restart_server, run_pre_stop_commands, send_command,
+    start_server, stop_server_and_wait,
     server_process_stats, server_status,
 )
 from .audit import record_audit_event
@@ -164,6 +166,121 @@ def restart_managed_server(server) -> int | None:
     return pid
 
 
+def apply_scheduled_updates(db, server) -> tuple[str, list[str]]:
+    """Install available monitored plugin and Paper updates, retaining old JARs disabled."""
+    from .plugin_manager import install_plugin_update, list_plugins
+    from .paper import download_paper, get_builds, inspect_paper_jar, match_paper_build
+    from .update_monitor import acquire_lease, plugin_results
+
+    acquired = False
+    updated = []
+    errors = []
+    try:
+        acquire_lease(db, datetime.utcnow())
+        acquired = True
+        plugins = [plugin for plugin in list_plugins(server) if plugin.get("enabled") and not plugin.get("previous_version")]
+        results = plugin_results(db, server, plugins, fetch=True, force=True)
+        by_filename = {plugin["filename"]: plugin for plugin in plugins}
+        for result in results:
+            if result.get("update_available") is not True:
+                continue
+            plugin = by_filename.get(result.get("component"))
+            url = result.get("download_url")
+            if not plugin or not isinstance(url, str) or not url.startswith("https://"):
+                continue
+            monitoring = result.get("monitoring") or {}
+            try:
+                install_plugin_update(
+                    server, plugin["filename"], url,
+                    expected_name=plugin["name"],
+                    expected_version=result.get("latest_version"),
+                    provider_name=result.get("provider"),
+                    installed_pattern=monitoring.get("installed_pattern"),
+                    installed_detection=monitoring.get("installed_detection", "auto"),
+                    download_rename=monitoring.get("download_rename", ""),
+                    delete_previous=False,
+                )
+                updated.append(f"{plugin['name']} to {result.get('latest_version') or 'latest'}")
+            except Exception as error:
+                errors.append(f"{plugin['name']}: {str(error)[:180]}")
+
+        paper_path = Path(server.directory) / server.jar_name
+        try:
+            installed_paper = inspect_paper_jar(paper_path)
+            builds = get_builds(installed_paper["version"])
+            stable = [build for build in builds if str(build.get("channel", "")).upper() in {"STABLE", "RECOMMENDED"}]
+            latest = stable[0] if stable else (builds[0] if builds else None)
+            if not latest:
+                raise ValueError("No Paper builds are available")
+            installed_build = match_paper_build(installed_paper["sha256"], builds)
+            latest_build = str(int(latest["id"]))
+            if installed_build != latest_build:
+                result = download_paper(
+                    installed_paper["version"], server.directory, server.jar_name,
+                    int(latest["id"]), preserve_previous=True,
+                )
+                server.minecraft_version = result["version"]
+                server.paper_build = result["build"]
+                updated.append(f"Paper {result['version']} build {result['build']}")
+                from .update_monitor import paper_result
+                status = paper_result(db, server, fetch=True, force=True)
+                row = db.get(ServerUpdateCheck, (server.id, "@paper"))
+                if row is None:
+                    row = ServerUpdateCheck(server_id=server.id, component="@paper")
+                    db.add(row)
+                row.payload = json.dumps(status)
+        except Exception as error:
+            # A non-Paper/custom server JAR should not prevent plugin updates.
+            errors.append(f"Paper: {str(error)[:180]}")
+        db.commit()
+    finally:
+        if acquired:
+            db.query(UpdateMonitorLease).filter_by(id=1).update({"expires_at": datetime.min})
+            db.commit()
+
+    detail = "Installed " + (", ".join(updated) if updated else "no available updates")
+    if errors:
+        detail += ". Issues: " + "; ".join(errors)
+    return detail, errors
+
+
+def scheduled_updates_available(db, server) -> tuple[bool, list[str]]:
+    """Check for installable changes before stopping a running server."""
+    from .plugin_manager import list_plugins
+    from .paper import get_builds, inspect_paper_jar, match_paper_build
+    from .update_monitor import acquire_lease, plugin_results
+
+    acquired = False
+    available = False
+    errors = []
+    try:
+        acquire_lease(db, datetime.utcnow())
+        acquired = True
+        plugins = [plugin for plugin in list_plugins(server) if plugin.get("enabled") and not plugin.get("previous_version")]
+        for result in plugin_results(db, server, plugins, fetch=True, force=True):
+            if (result.get("update_available") is True
+                    and isinstance(result.get("download_url"), str)
+                    and result["download_url"].startswith("https://")):
+                available = True
+                break
+
+        try:
+            installed = inspect_paper_jar(Path(server.directory) / server.jar_name)
+            builds = get_builds(installed["version"])
+            stable = [build for build in builds if str(build.get("channel", "")).upper() in {"STABLE", "RECOMMENDED"}]
+            latest = stable[0] if stable else (builds[0] if builds else None)
+            if not latest:
+                raise ValueError("No Paper builds are available")
+            available = available or match_paper_build(installed["sha256"], builds) != str(int(latest["id"]))
+        except Exception as error:
+            errors.append(f"Paper: {str(error)[:180]}")
+    finally:
+        if acquired:
+            db.query(UpdateMonitorLease).filter_by(id=1).update({"expires_at": datetime.min})
+            db.commit()
+    return available, errors
+
+
 def execute_task(task_id: int, *, reschedule: bool = True) -> None:
     db = SessionLocal()
     run = None
@@ -200,6 +317,30 @@ def execute_task(task_id: int, *, reschedule: bool = True) -> None:
         elif task.task_type == "restart":
             restart_managed_server(server)
             run.detail = "Restarted the server"
+        elif task.task_type == "update":
+            state = server_status(server.id).get("state")
+            if state == "stopped":
+                run.detail, errors = apply_scheduled_updates(db, server)
+                run.status = "warning" if errors else "complete"
+                run.finished_at = datetime.utcnow()
+            else:
+                if db.get(PendingAutomaticUpdate, server.id):
+                    raise RuntimeError("An automatic update is already waiting for this server")
+                pending_restart = db.get(PendingIdleRestart, server.id)
+                if pending_restart:
+                    db.delete(pending_restart)
+                pending = PendingAutomaticUpdate(
+                    server_id=server.id,
+                    task_id=task.id,
+                    run_id=run.id,
+                    requested_at=now,
+                    empty_since=None if get_online_players(server.id) else now,
+                )
+                db.add(pending)
+                run.status = "waiting"
+                run.detail = "Waiting for players to leave; updates install after the server has been empty for 30 seconds"
+                db.commit()
+                return
         elif task.task_type == "backup":
             existing = db.query(BackupJob).filter(
                 BackupJob.server_id == server.id,
@@ -418,18 +559,163 @@ def process_pending_idle_restarts() -> None:
         db.close()
 
 
+def process_pending_automatic_updates() -> None:
+    """Apply queued updates after the server is empty, then restart it cleanly."""
+    from .update_monitor import CheckInProgress
+
+    db = SessionLocal()
+    try:
+        requests = db.query(PendingAutomaticUpdate).all()
+        for pending in requests:
+            server = db.get(Server, pending.server_id)
+            run = db.get(TaskRun, pending.run_id)
+            if not server or not run:
+                db.delete(pending)
+                db.commit()
+                continue
+            stopped_for_update = False
+            try:
+                register_server(server)
+                state = server_status(server.id).get("state")
+                if state not in {"running", "stopped"}:
+                    pending.empty_since = None
+                    db.commit()
+                    continue
+                if state == "running" and get_online_players(server.id):
+                    pending.empty_since = None
+                    pending.last_error = None
+                    run.detail = "Waiting for players to leave; updates install after the server has been empty for 30 seconds"
+                    db.commit()
+                    continue
+
+                now = datetime.utcnow()
+                if state == "running":
+                    if pending.empty_since is None:
+                        pending.empty_since = now
+                        pending.last_error = None
+                        db.commit()
+                        continue
+                    if now - pending.empty_since < timedelta(seconds=IDLE_RESTART_EMPTY_SECONDS):
+                        continue
+                    available, check_errors = scheduled_updates_available(db, server)
+                    if not available:
+                        detail = "No available updates"
+                        if check_errors:
+                            detail += ". Issues: " + "; ".join(check_errors)
+                        run.detail = detail[:1000]
+                        run.status = "warning" if check_errors else "complete"
+                        run.finished_at = datetime.utcnow()
+                        db.delete(pending)
+                        db.commit()
+                        continue
+                    # The update check above may take long enough for players to
+                    # join. Keep the server online if that happened during the
+                    # check, and begin a fresh empty-server window.
+                    if get_online_players(server.id):
+                        pending.empty_since = None
+                        pending.last_error = None
+                        run.detail = "Waiting for players to leave; updates install after the server has been empty for 30 seconds"
+                        db.commit()
+                        continue
+                    run_pre_stop_commands(server.id, server.stop_commands)
+                    # Stop commands can include a delay, so make one final check
+                    # before actually stopping the server.
+                    if get_online_players(server.id):
+                        pending.empty_since = None
+                        pending.last_error = None
+                        run.detail = "Waiting for players to leave; updates install after the server has been empty for 30 seconds"
+                        db.commit()
+                        continue
+                    stopped_for_update = True
+                    stop_server_and_wait(server.id)
+
+                detail, errors = apply_scheduled_updates(db, server)
+                pid = None
+                if pending.restart_after_update and stopped_for_update:
+                    pid = start_server(
+                        server.id, server.directory, server.memory, server.jar_name,
+                        server.java_args, server.min_memory, server.java_path,
+                    )
+                    server.plugins_dirty = False
+                    server.plugin_session_pid = pid
+                    detail += "; restarted the server"
+                run.detail = detail[:1000]
+                run.status = "warning" if errors else "complete"
+                run.finished_at = datetime.utcnow()
+                db.delete(pending)
+                db.commit()
+                record_audit_event(
+                    db,
+                    server_id=server.id,
+                    server_name=server.name,
+                    actor_user_id=None,
+                    actor_username="Craftarr automation",
+                    action="Scheduled automatic updates completed",
+                    details=run.detail,
+                )
+            except CheckInProgress:
+                db.rollback()
+                if stopped_for_update:
+                    try:
+                        register_server(server)
+                        pid = start_server(
+                            server.id, server.directory, server.memory, server.jar_name,
+                            server.java_args, server.min_memory, server.java_path,
+                        )
+                        server.plugins_dirty = False
+                        server.plugin_session_pid = pid
+                    except Exception:
+                        logger.exception("Server restart while delaying an automatic update failed for %s", server.id)
+                retry = db.get(PendingAutomaticUpdate, server.id)
+                waiting_run = db.get(TaskRun, pending.run_id)
+                if retry:
+                    retry.empty_since = None
+                    retry.last_error = "Another update check is running; the automatic update will retry shortly"
+                if waiting_run:
+                    waiting_run.status = "waiting"
+                    waiting_run.detail = "Another update check is running; waiting before retrying automatic updates"
+                db.commit()
+            except Exception as error:
+                logger.exception("Scheduled automatic update failed for server %s", server.id)
+                db.rollback()
+                if stopped_for_update:
+                    try:
+                        register_server(server)
+                        pid = start_server(
+                            server.id, server.directory, server.memory, server.jar_name,
+                            server.java_args, server.min_memory, server.java_path,
+                        )
+                        server.plugins_dirty = False
+                        server.plugin_session_pid = pid
+                    except Exception:
+                        logger.exception("Server restart after automatic update failure failed for %s", server.id)
+                retry = db.get(PendingAutomaticUpdate, server.id)
+                failed_run = db.get(TaskRun, pending.run_id)
+                if retry:
+                    db.delete(retry)
+                if failed_run:
+                    failed_run.status = "failed"
+                    failed_run.detail = str(error)[:1000]
+                    failed_run.finished_at = datetime.utcnow()
+                db.commit()
+    finally:
+        db.close()
+
+
 def _automation_loop() -> None:
     last_metrics = 0.0
     while not _stop.is_set():
         db = SessionLocal()
         try:
             has_pending_idle_restart = db.query(PendingIdleRestart.server_id).first() is not None
+            has_pending_automatic_update = db.query(PendingAutomaticUpdate.server_id).first() is not None
         except Exception:
             logger.exception("Unable to check pending player-free restarts")
             has_pending_idle_restart = False
+            has_pending_automatic_update = False
         finally:
             db.close()
-        wait_seconds = min(POLL_SECONDS, 5) if has_pending_idle_restart else POLL_SECONDS
+        wait_seconds = min(POLL_SECONDS, 5) if has_pending_idle_restart or has_pending_automatic_update else POLL_SECONDS
         _idle_restart_wake.wait(wait_seconds)
         _idle_restart_wake.clear()
         if _stop.is_set():
@@ -442,6 +728,10 @@ def _automation_loop() -> None:
             process_pending_idle_restarts()
         except Exception:
             logger.exception("Player-free restart polling failed")
+        try:
+            process_pending_automatic_updates()
+        except Exception:
+            logger.exception("Scheduled automatic update polling failed")
         try:
             from .update_monitor import run_scheduled_check
             run_scheduled_check()
