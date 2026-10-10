@@ -4,16 +4,27 @@ from urllib.parse import urlsplit
 
 from .models import PluginMonitoringSetting
 from . import update_providers as providers
-from .update_providers.configured import ConfiguredProvider, DocumentSource, Jenkins
+from .update_providers.configured import (
+    ConfiguredProvider, DocumentSource, Jenkins, compile_download_rename,
+)
 from .update_providers.http_source import validate_url
 
 
-def custom_provider(kind, project, version_pattern='', link_pattern='', installed_pattern='', asset_pattern=''):
+def custom_provider(kind, project, version_pattern='', download_url='', installed_pattern='', asset_pattern='', installed_detection='auto', download_rename='', *, link_pattern=None):
+    if link_pattern is not None:
+        if download_url and download_url != link_pattern:
+            raise ValueError('Set either download_url or the legacy link_pattern, not both')
+        download_url = link_pattern
     if not isinstance(kind, str) or not isinstance(project, str):
         raise ValueError('Select a provider and enter its project or URL')
     if not isinstance(asset_pattern, str):
         raise ValueError('The GitHub JAR filename expression must be text')
+    if not isinstance(download_rename, str):
+        raise ValueError('Download rename must be text')
+    if not isinstance(installed_detection, str):
+        raise ValueError('Installed detection must be auto, filename, plugin.yml or paper-plugin.yml')
     project = project.strip()
+    compile_download_rename(download_rename)
     if kind == 'github':
         if project.startswith('https://'):
             parts = urlsplit(validate_url(project))
@@ -38,16 +49,16 @@ def custom_provider(kind, project, version_pattern='', link_pattern='', installe
     elif kind == 'jenkins':
         if asset_pattern:
             raise ValueError('JAR filename expressions apply only to GitHub Releases')
-        source = Jenkins(project, version_pattern, link_pattern)
+        source = Jenkins(project, version_pattern, download_url)
     elif kind == 'custom':
         if asset_pattern:
             raise ValueError('JAR filename expressions apply only to GitHub Releases')
-        source = DocumentSource(project, version_pattern, link_pattern)
+        source = DocumentSource(project, version_pattern, download_url)
     else:
         raise ValueError('Select GitHub, Modrinth, Jenkins or Custom URL')
-    if link_pattern and kind in {'github', 'modrinth'}:
-        raise ValueError('Link expressions apply to Jenkins and Custom URL sources')
-    return ConfiguredProvider(source, version_pattern, link_pattern, installed_pattern, asset_pattern)
+    if download_url and kind in {'github', 'modrinth'}:
+        raise ValueError('Download URLs apply to Jenkins and Custom URL sources')
+    return ConfiguredProvider(source, version_pattern, download_url, installed_pattern, asset_pattern, installed_detection, download_rename)
 
 
 def monitoring_config(db, server_id, name):
@@ -55,7 +66,7 @@ def monitoring_config(db, server_id, name):
     setting = db.get(PluginMonitoringSetting, (server_id, providers.normalize_name(name)))
     defaults, file_error = default_for(name)
     global_entry = defaults if defaults and not defaults.get('error') else None
-    global_settings = {field: global_entry.get(field, '') for field in FIELDS} if global_entry else {}
+    global_settings = {field: global_entry.get(field, 'auto' if field == 'installed_detection' else '') for field in FIELDS} if global_entry else {}
     if global_entry:
         global_settings['notes'] = global_entry.get('notes', '')
     global_error = (defaults or {}).get('error') or file_error
@@ -68,7 +79,7 @@ def monitoring_config(db, server_id, name):
     elif selection == 'global':
         fields = dict(global_settings)
     else:
-        fields = {field: '' for field in FIELDS}
+        fields = {field: ('auto' if field == 'installed_detection' else '') for field in FIELDS}
     config = dict(fields)
     config.update(mode=mode, source=None, configured=bool(setting or defaults or file_error),
                   selection=selection,
@@ -88,20 +99,26 @@ def monitoring_config(db, server_id, name):
     return provider, config
 
 
-def save_monitoring_config(db, server_id, name, mode, kind='', project='', version_pattern='', link_pattern='', installed_pattern='', asset_pattern=''):
+def save_monitoring_config(db, server_id, name, mode, kind='', project='', version_pattern='', download_url='', installed_pattern='', asset_pattern='', installed_detection='auto', download_rename='', *, link_pattern=None):
+    if link_pattern is not None:
+        if download_url and download_url != link_pattern:
+            raise ValueError('Set either download_url or the legacy link_pattern, not both')
+        download_url = link_pattern
     if mode not in ('disabled', 'global', 'custom'):
         raise ValueError('Select disabled, shared or manual monitoring')
     if mode == 'custom':
-        provider = custom_provider(kind, project, version_pattern, link_pattern, installed_pattern, asset_pattern)
+        provider = custom_provider(kind, project, version_pattern, download_url, installed_pattern, asset_pattern, installed_detection, download_rename)
         project = provider.project
     elif mode == 'global':
         from .monitoring_defaults import default_for
         defaults, error = default_for(name)
         if not defaults or defaults.get('error') or error:
             raise ValueError('No valid shared update settings are available for this plugin')
-        kind = project = version_pattern = link_pattern = installed_pattern = asset_pattern = ''
+        kind = project = version_pattern = download_url = installed_pattern = asset_pattern = download_rename = ''
+        installed_detection = 'auto'
     else:
-        kind, project, version_pattern, link_pattern, installed_pattern, asset_pattern = '', '', '', '', '', ''
+        kind, project, version_pattern, download_url, installed_pattern, asset_pattern, download_rename = '', '', '', '', '', '', ''
+        installed_detection = 'auto'
     key = providers.normalize_name(name)
     if not key:
         raise ValueError('Plugin has no usable name')
@@ -110,6 +127,8 @@ def save_monitoring_config(db, server_id, name, mode, kind='', project='', versi
         setting = PluginMonitoringSetting(server_id=server_id, plugin_name=key)
         db.add(setting)
     setting.mode, setting.provider, setting.project = mode, kind, project
-    setting.version_pattern, setting.link_pattern, setting.installed_pattern = version_pattern, link_pattern, installed_pattern
+    setting.version_pattern, setting.download_url, setting.installed_pattern = version_pattern, download_url, installed_pattern
     setting.asset_pattern = asset_pattern
+    setting.installed_detection = installed_detection
+    setting.download_rename = download_rename
     db.commit()

@@ -944,17 +944,18 @@ def test_default_rules_parse_expected_release_formats(monkeypatch):
     from app.plugin_monitoring import custom_provider
     from app.update_providers import configured
     monkeypatch.setenv('CRAFTARR_PLUGIN_MONITORING_DEFAULTS', str(DEFAULTS_PATH))
-    for name, document, installed, expected in [
-        ('Geyser', '{"version":"2.8.3","build":123}', '2.8.2-SNAPSHOT', '2.8.3'),
-        ('Floodgate', '{"version":"2.2.4","build":56}', '2.2.3-SNAPSHOT', '2.2.4'),
-        ('Citizens', json.dumps({'number': 4100, 'timestamp': 1700000000000, 'artifacts': []}), '2.0.40-SNAPSHOT (build 4099)', '4100'),
+    for name, document, installed, expected, filename in [
+        ('Geyser', '{"version":"2.8.3","build":123}', '2.8.3-SNAPSHOT', '123', 'Geyser-Spigot-122.jar'),
+        ('Floodgate', '{"version":"2.2.4","build":56}', '2.2.3-SNAPSHOT', '2.2.4', None),
+        ('Citizens', json.dumps({'number': 4100, 'timestamp': 1700000000000, 'artifacts': []}), '2.0.40-SNAPSHOT (build 4099)', '4100', None),
     ]:
         entry, _ = default_for(name)
-        source = custom_provider(entry['provider'], entry['project'], entry['version_pattern'], entry['link_pattern'], entry['installed_pattern'])
+        source = custom_provider(entry['provider'], entry['project'], entry['version_pattern'], entry['link_pattern'],
+                                 entry['installed_pattern'], entry['asset_pattern'], entry['installed_detection'])
         monkeypatch.setattr(configured, 'fetch_document', lambda url: document)
         release = source.fetch()[0]
         assert release.version == expected
-        assert source.compare(installed, release) == 1
+        assert source.compare(installed, release, filename=filename) == 1
     fawe, _ = default_for('FAWE')
     source = custom_provider(fawe['provider'], fawe['project'], fawe['version_pattern'], fawe['link_pattern'], fawe['installed_pattern'])
     assert source.compare('2.15.4-SNAPSHOT-1357+995c825', providers.Release('1389', 'https://ci.athion.net')) == 1

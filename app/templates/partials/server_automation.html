@@ -15,6 +15,13 @@
       <div class="card-header"><span><i class="fa-solid fa-power-off"></i> Restarts</span>{% if user.can("automation.manage") and user.can("servers.control") %}<button class="panel-header-button" type="button" onclick="openServerScheduleModal('restart')"><i class="fa-solid fa-plus"></i> Add restart</button>{% endif %}</div>
       <div id="restart-schedule-list" class="schedule-list"><div class="empty-message">Loading restarts...</div></div>
     </section>
+
+    {% if user.can("automation.manage") and user.can("servers.control") %}
+    <section class="overview-card automation-card">
+      <div class="card-header"><span><i class="fa-solid fa-arrows-rotate"></i> Automatic updates</span><button class="panel-header-button" type="button" onclick="openServerScheduleModal('update')"><i class="fa-solid fa-plus"></i> Schedule updates</button></div>
+      <div id="update-schedule-list" class="schedule-list"><div class="empty-message">Loading update schedules...</div></div>
+    </section>
+    {% endif %}
   </div>
 
   <section id="idle-restart-status" class="overview-card idle-restart-status" hidden aria-live="polite">
@@ -35,17 +42,18 @@
 </div>
 
 {% if user.can("automation.manage") %}
-{% for task_type, title in [('command', 'command'), ('backup', 'backup'), ('restart', 'restart')] %}
-{% if task_type != 'restart' or user.can('servers.control') %}
+{% for task_type, title in [('command', 'command'), ('backup', 'backup'), ('restart', 'restart'), ('update', 'automatic updates')] %}
+{% if task_type not in ['restart', 'update'] or user.can('servers.control') %}
 <div id="{{ task_type }}-schedule-modal" class="modal-backdrop" hidden onclick="closeServerScheduleModal(event)">
   <div class="modal-card schedule-editor-modal" role="dialog" aria-modal="true" aria-labelledby="{{ task_type }}-schedule-title">
     <h2 id="{{ task_type }}-schedule-title">Add {{ title }}</h2>
     <form class="friendly-schedule-form" onsubmit="createServerSchedule(event)">
       <input type="hidden" name="task_type" value="{{ task_type }}">
       <input type="hidden" name="schedule_id" value="">
-      <label><span>Name this job</span><input name="name" maxlength="100" placeholder="{{ 'Morning message' if task_type == 'command' else 'Daily backup' if task_type == 'backup' else 'Daily restart' }}" required></label>
+      <label><span>Name this job</span><input name="name" maxlength="100" placeholder="{{ 'Morning message' if task_type == 'command' else 'Daily backup' if task_type == 'backup' else 'Daily restart' if task_type == 'restart' else 'Daily automatic updates' }}" required></label>
       {% if task_type == 'command' %}<label><span>Command to run</span><input name="command" maxlength="500" placeholder="say Good morning!" required></label>{% endif %}
       {% if task_type == 'restart' %}<p class="modal-note">Craftarr will send the configured stop commands, stop the server cleanly, and start it again at the scheduled time.</p>{% endif %}
+      {% if task_type == 'update' %}<p class="modal-note">Craftarr checks monitored plugins and Paper for updates and keeps replaced versions disabled. If the server is running, updates wait until it has been empty for 30 seconds; Craftarr restarts only when an update is installed. If the server is stopped at the scheduled time, updates install without starting it.</p>{% endif %}
       {% include "partials/schedule_when_fields.html" %}
       {% if task_type == 'backup' %}
       <label><span>How many backups should we keep?</span><input name="retention_count" type="number" min="1" max="10000" value="7" required></label>

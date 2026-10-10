@@ -1608,6 +1608,8 @@ let playerSort = "name-asc";
 let playerPage = 1;
 const PLAYER_PAGE_SIZE = 25;
 let pluginData = [];
+const selectedPluginFilenames = new Set();
+let pluginBulkActionInProgress = false;
 let pluginMonitoringPreviousFocus = null;
 let pluginPendingRemoval = null;
 let pluginRemovalInProgress = false;
@@ -1942,6 +1944,10 @@ async function updatePluginsPage(forceDuplicatePrompt = false) {
     }
 
     pluginData = data.plugins || [];
+    const currentPluginFilenames = new Set(pluginData.map((plugin) => plugin.filename));
+    for (const filename of selectedPluginFilenames) {
+      if (!currentPluginFilenames.has(filename)) selectedPluginFilenames.delete(filename);
+    }
     pluginDuplicateGroups = data.duplicates || [];
     duplicatePluginFilenames = new Set(
       pluginDuplicateGroups.flatMap((group) =>
@@ -2406,6 +2412,8 @@ function renderPlugins() {
     }`;
   }
 
+  updateBulkPluginSelectionUI(visiblePlugins);
+
   if (!visiblePlugins.length) {
     list.innerHTML = `<div class="empty-message">
                 ${search ? "No plugin found. Try another name." : "No plugins yet. Choose a plugin file above."}
@@ -2415,7 +2423,8 @@ function renderPlugins() {
   }
 
   list.innerHTML = visiblePlugins.map((plugin) => `
-    <article class="plugin-row ${plugin.enabled ? "" : "disabled"} ${duplicatePluginFilenames.has(plugin.filename) ? "duplicate" : ""}">
+    <article class="plugin-row ${canManage ? "has-plugin-select" : ""} ${plugin.enabled ? "" : "disabled"} ${duplicatePluginFilenames.has(plugin.filename) ? "duplicate" : ""}">
+      ${canManage ? `<label class="plugin-select"><input type="checkbox" value="${escapeHtml(plugin.filename)}" aria-label="Select ${escapeHtml(plugin.name)}" ${selectedPluginFilenames.has(plugin.filename) ? "checked" : ""} onchange="togglePluginSelection(this)"></label>` : ""}
       <span class="plugin-status-indicator ${plugin.enabled ? "is-enabled" : "is-disabled"}" aria-hidden="true" title="${plugin.enabled ? "Enabled" : "Disabled"}"></span>
       <div class="plugin-main">
         <div class="plugin-name-line">
@@ -2434,6 +2443,77 @@ function renderPlugins() {
     </article>
   `)
     .join("");
+}
+
+function updateBulkPluginSelectionUI(visiblePlugins = []) {
+  const toolbar = document.getElementById("plugin-bulk-actions");
+  const selectVisible = document.getElementById("plugin-select-visible");
+  const count = document.getElementById("plugin-selection-count");
+  if (!toolbar) return;
+  const selectedCount = pluginData.filter((plugin) => selectedPluginFilenames.has(plugin.filename)).length;
+  toolbar.hidden = pluginData.length === 0;
+  if (count) count.textContent = `${selectedCount} selected`;
+  if (selectVisible) {
+    const visibleSelected = visiblePlugins.filter((plugin) => selectedPluginFilenames.has(plugin.filename)).length;
+    selectVisible.checked = visiblePlugins.length > 0 && visibleSelected === visiblePlugins.length;
+    selectVisible.indeterminate = visibleSelected > 0 && visibleSelected < visiblePlugins.length;
+    selectVisible.disabled = pluginBulkActionInProgress || visiblePlugins.length === 0;
+  }
+  toolbar.querySelectorAll("button").forEach((button) => { button.disabled = pluginBulkActionInProgress || selectedCount === 0; });
+}
+
+function togglePluginSelection(input) {
+  const filename = input.value;
+  if (input.checked) selectedPluginFilenames.add(input.value);
+  else selectedPluginFilenames.delete(input.value);
+  renderPlugins();
+  [...document.querySelectorAll(".plugin-select input")].find((item) => item.value === filename)?.focus({preventScroll: true});
+}
+
+function selectVisiblePlugins(checked) {
+  const search = (document.getElementById("plugin-search")?.value || "").trim().toLowerCase();
+  for (const plugin of pluginData) {
+    if (plugin.name.toLowerCase().includes(search) || plugin.filename.toLowerCase().includes(search)) {
+      if (checked) selectedPluginFilenames.add(plugin.filename);
+      else selectedPluginFilenames.delete(plugin.filename);
+    }
+  }
+  renderPlugins();
+  document.getElementById("plugin-select-visible")?.focus({preventScroll: true});
+}
+
+function clearPluginSelection() {
+  selectedPluginFilenames.clear();
+  renderPlugins();
+}
+
+async function bulkPluginAction(action) {
+  const page = document.querySelector(".plugins-page[data-can-manage='true']");
+  const filenames = pluginData.filter((plugin) => selectedPluginFilenames.has(plugin.filename)).map((plugin) => plugin.filename);
+  if (!page || !filenames.length || pluginBulkActionInProgress) return;
+  if (action === "remove" && !window.confirm(`Delete ${filenames.length} selected plugin file${filenames.length === 1 ? "" : "s"}? Plugin configuration and data folders will be kept.`)) return;
+  pluginBulkActionInProgress = true;
+  updateBulkPluginSelectionUI(pluginData);
+  try {
+    const response = await fetch(`/api/web/servers/${page.dataset.serverId}/plugins/action`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({filenames, action, remove_config: false}),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `Unable to ${action} selected plugins`);
+    selectedPluginFilenames.clear();
+    pluginRestartRequired = data.restart_required === true;
+    showPluginRestartAlert();
+    showToast(`${action === "remove" ? "Deleted" : action === "enable" ? "Enabled" : "Disabled"} ${data.affected || filenames.length} plugin file${(data.affected || filenames.length) === 1 ? "" : "s"}.${data.action_requires_restart ? " Restart required." : ""}`, data.action_requires_restart ? "warning" : "success");
+    await updatePluginsPage();
+    await refreshNotifications(false);
+  } catch (error) {
+    showToast(error.message || "Unable to update selected plugins.", "error");
+  } finally {
+    pluginBulkActionInProgress = false;
+    renderPlugins();
+  }
 }
 
 function renderPluginActions(plugin, canViewFiles, canEditFiles) {
@@ -2471,11 +2551,13 @@ function renderPluginComparisonDetails(details) {
   const source = details.installed_source || "JAR metadata";
   const expression = details.installed_pattern
     ? `installed expression <code>${escapeHtml(details.installed_pattern)}</code>`
+    : details.installed_detection && details.installed_detection !== "auto"
+    ? escapeHtml(details.installed_detection) + " installed detection"
     : "automatic installed version detection";
   const matched = details.installed_comparison !== undefined
     ? `${details.installed_pattern ? "matched" : "detected"} as <code>${escapeHtml(details.installed_comparison)}</code>`
     : `did not match${details.match_error ? ` (${escapeHtml(details.match_error)})` : ""}`;
-  const filename = details.installed_filename
+  const filename = details.installed_filename && details.installed_detection !== "filename"
     ? ` from <code>${escapeHtml(details.installed_filename)}</code>`
     : "";
   const release = details.release_value || "(empty)";
@@ -7382,6 +7464,23 @@ async function loadPluginMonitoringRepository() {
   }
 }
 
+async function resetPluginMonitoringRepository() {
+  const editor = document.getElementById("plugin-monitoring-repository-editor");
+  const status = document.getElementById("plugin-monitoring-repository-status");
+  if (!editor || !status) return;
+  if (!confirm("Replace the shared plugin settings with the defaults bundled in this Craftarr release? This overwrites the current shared file and synchronizes the reset to linked Nodes. Server-specific plugin overrides are unchanged.")) return;
+  status.textContent = "Restoring release defaults…";
+  try {
+    const response = await fetch("/api/web/settings/plugin-monitoring-repository/reset", { method: "POST" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to reset shared plugin settings.");
+    editor.value = data.content || "";
+    status.textContent = `${data.plugins} release default${data.plugins === 1 ? "" : "s"} restored.${pluginRepositorySyncMessage(data)}`;
+  } catch (error) {
+    status.textContent = error.message || "Unable to reset shared plugin settings.";
+  }
+}
+
 async function savePluginMonitoringRepository() {
   const editor = document.getElementById("plugin-monitoring-repository-editor");
   const status = document.getElementById("plugin-monitoring-repository-status");
@@ -9029,7 +9128,8 @@ async function loadServerSchedules() {
   const commandList = document.getElementById("command-schedule-list");
   const backupList = document.getElementById("backup-schedule-list");
   const restartList = document.getElementById("restart-schedule-list");
-  if (!page || (!commandList && !backupList && !restartList)) return;
+  const updateList = document.getElementById("update-schedule-list");
+  if (!page || (!commandList && !backupList && !restartList && !updateList)) return;
   try {
     const response = await fetch(
       `/api/web/servers/${page.dataset.serverId}/schedules?runs_page=${scheduleRunsPage}&runs_per_page=10`,
@@ -9073,11 +9173,13 @@ async function loadServerSchedules() {
           ? `${describeWhen(task)} · Keeps ${task.retention_count || "all"} backup${Number(task.retention_count) === 1 ? "" : "s"} on this server${task.remote_destination ? ` and copies each one to ${escapeHtml(task.remote_destination)}, keeping ${task.remote_retention_count || "all"} there` : ""}`
           : task.task_type === "command"
             ? `${escapeHtml(task.command)} · ${describeWhen(task)}`
-            : `Restarts the server · ${describeWhen(task)}`;
+            : task.task_type === "update"
+              ? `Checks monitored plugins and Paper · Keeps previous JARs disabled · ${describeWhen(task)}`
+              : `Restarts the server · ${describeWhen(task)}`;
         return `
             <div class="schedule-row"><div><strong>${escapeHtml(task.name)}</strong><br>
             <small>${summary}</small></div>
-            ${canManage && (type !== "restart" || canControl) ? `<div class="schedule-row-actions">
+            ${canManage && (!(["restart", "update"].includes(type)) || canControl) ? `<div class="schedule-row-actions">
               ${type === "backup" ? `<button class="button" onclick="runServerScheduleNow(${Number(task.id)}, this)" ${backupRunning ? "disabled" : ""}>${backupRunning ? "Backup running" : "Run now"}</button>` : ""}
               <button class="button" onclick="editServerSchedule(${Number(task.id)})">Edit</button>
               <button class="button" onclick="deleteServerSchedule(${Number(task.id)})">Delete</button>
@@ -9088,6 +9190,7 @@ async function loadServerSchedules() {
     if (commandList) commandList.innerHTML = renderTasks("command");
     if (backupList) backupList.innerHTML = renderTasks("backup");
     if (restartList) restartList.innerHTML = renderTasks("restart");
+    if (updateList) updateList.innerHTML = renderTasks("update");
     const idleRestartCard = document.getElementById("idle-restart-status");
     const idleRestartMessage = document.getElementById("idle-restart-status-message");
     const idleRestartDetail = document.getElementById("idle-restart-status-detail");
@@ -9160,6 +9263,7 @@ async function loadServerSchedules() {
     if (commandList) commandList.textContent = error.message;
     if (backupList) backupList.textContent = error.message;
     if (restartList) restartList.textContent = error.message;
+    if (updateList) updateList.textContent = error.message;
   }
 }
 
@@ -9285,7 +9389,7 @@ function openServerScheduleModal(taskType) {
 
 function closeServerScheduleModal(event) {
   if (event && event.target !== event.currentTarget) return;
-  document.querySelectorAll("#command-schedule-modal, #backup-schedule-modal, #restart-schedule-modal").forEach((modal) => {
+  document.querySelectorAll("#command-schedule-modal, #backup-schedule-modal, #restart-schedule-modal, #update-schedule-modal").forEach((modal) => {
     modal.hidden = true;
     const form = modal.querySelector(".friendly-schedule-form");
     if (form) resetServerScheduleForm(form);
@@ -9434,6 +9538,9 @@ function renderPluginMonitoringPreview(data) {
   const assetDetail = assetPreview
     ? `<div><dt>GitHub JAR selection</dt><dd>${escapeHtml(assetPreview.selected_asset || assetPreview.message || "No single JAR selected")}</dd>${assetNames ? `<small>Release JARs: ${assetNames}</small>` : ""}</div>`
     : "";
+  const downloadRename = data.download_rename
+    ? `<div><dt>Installed filename template</dt><dd><code>${escapeHtml(data.download_rename)}</code></dd></div>`
+    : "";
   const versionDetection = renderPluginMonitoringVersionPreview(data.version_preview);
 
   return `<div class="monitoring-preview-card ${statusClass}">
@@ -9445,6 +9552,7 @@ function renderPluginMonitoringPreview(data) {
       <div><dt>Installed</dt><dd>${escapeHtml(installed)}</dd><small>${escapeHtml(data.installed_comparison_source || "JAR metadata")}</small></div>
       <div><dt>Latest</dt><dd>${release}</dd></div>
       <div><dt>Source</dt><dd>${source}</dd></div>
+      ${downloadRename}
       ${assetDetail}
     </dl>
     ${versionDetection}
@@ -9741,9 +9849,12 @@ function openPluginMonitoring(index) {
   document.getElementById("plugin-monitoring-mode").value = selectedMode;
   document.getElementById("plugin-monitoring-provider").value = config.provider || "github";
   document.getElementById("plugin-monitoring-project").value = config.project || "";
-  for (const field of ["version", "link", "installed", "asset"]) {
+  document.getElementById("plugin-monitoring-installed-detection").value = config.installed_detection || "auto";
+  for (const field of ["version", "installed", "asset"]) {
     document.getElementById(`plugin-monitoring-${field}-pattern`).value = config[`${field}_pattern`] || "";
   }
+  document.getElementById("plugin-monitoring-download-url").value = config.download_url || config.link_pattern || "";
+  document.getElementById("plugin-monitoring-download-rename").value = config.download_rename || "";
   document.getElementById("plugin-monitoring-expressions").open = false;
   updatePluginMonitoringFields();
   if (config.error) setPluginMonitoringFeedback(config.error, "error");
@@ -9799,8 +9910,8 @@ function updatePluginMonitoringFields(providerChanged = false) {
   globalOption.disabled = !globalAvailable;
   globalOption.textContent = globalAvailable ? "Use shared settings" : "Shared settings unavailable";
 
-  const fieldNames = ["provider", "project", "version_pattern", "link_pattern", "installed_pattern", "asset_pattern"];
-  const fieldIds = ["provider", "project", "version-pattern", "link-pattern", "installed-pattern", "asset-pattern"];
+  const fieldNames = ["provider", "project", "version_pattern", "download_url", "installed_pattern", "asset_pattern", "installed_detection", "download_rename"];
+  const fieldIds = ["provider", "project", "version-pattern", "download-url", "installed-pattern", "asset-pattern", "installed-detection", "download-rename"];
   const readFields = () => Object.fromEntries(fieldNames.map((name, index) => [name, document.getElementById(`plugin-monitoring-${fieldIds[index]}`).value]));
   const fillFields = (fields) => fieldIds.forEach((field, index) => {
     document.getElementById(`plugin-monitoring-${field}`).value = fields[fieldNames[index]] || "";
@@ -9840,7 +9951,9 @@ function updatePluginMonitoringFields(providerChanged = false) {
   const previewButton = document.getElementById("plugin-monitoring-preview-button");
   if (providerChanged) {
     project.value = "";
-    for (const field of ["version", "link", "installed", "asset"]) document.getElementById(`plugin-monitoring-${field}-pattern`).value = "";
+    for (const field of ["version", "installed", "asset"]) document.getElementById(`plugin-monitoring-${field}-pattern`).value = "";
+    document.getElementById("plugin-monitoring-download-url").value = "";
+    document.getElementById("plugin-monitoring-installed-detection").value = "auto";
   }
   project.required = editable;
   project.disabled = !editable;
@@ -9861,11 +9974,22 @@ function updatePluginMonitoringFields(providerChanged = false) {
     : documentSource
     ? 'Required. Match the metadata response and capture the version, for example "version"\\s*:\\s*"([^"]+)". Test shows the captured value.'
     : "Optional. Extract a comparable version from the release tag/version number, for example ^v?([0-9.]+). Test shows the tag and captured value; edits preview against the same fetched release.";
-  document.getElementById("plugin-monitoring-link-fields").hidden = !documentSource;
+  document.getElementById("plugin-monitoring-download-url-fields").hidden = !documentSource;
   document.getElementById("plugin-monitoring-asset-fields").hidden = provider !== "github";
-  for (const field of ["version", "link", "installed", "asset"]) {
-    document.getElementById(`plugin-monitoring-${field}-pattern`).disabled = !editable || (field === "link" && !documentSource);
+  for (const field of ["version", "installed", "asset"]) {
+    document.getElementById(`plugin-monitoring-${field}-pattern`).disabled = !editable || (field === "asset" && provider !== "github");
   }
+  document.getElementById("plugin-monitoring-download-url").disabled = !editable || !documentSource;
+  document.getElementById("plugin-monitoring-download-rename").disabled = !editable;
+  const installedDetection = document.getElementById("plugin-monitoring-installed-detection");
+  const installedPattern = document.getElementById("plugin-monitoring-installed-pattern");
+  installedDetection.disabled = !editable;
+  installedPattern.required = editable && installedDetection.value === "filename";
+  document.getElementById("plugin-monitoring-installed-hint").textContent = installedDetection.value === "filename"
+    ? "Required for filename detection. Match the full JAR filename, for example ^Geyser-(?:Spigot|Bukkit)-([0-9]+)\\.jar$."
+    : installedDetection.value === "auto"
+    ? "Automatic uses plugin.yml when available, otherwise paper-plugin.yml; it falls back to a filename version when metadata has no version. The expression uses the first capture group or a named “version” group."
+    : "The expression applies to the version key inside " + installedDetection.value + ".";
   document.getElementById("plugin-monitoring-asset-pattern").disabled = !editable || provider !== "github";
   clearMonitoringPreview();
 }
@@ -9887,9 +10011,11 @@ function pluginMonitoringPayload() {
     provider,
     project: String(fieldValue("project", "plugin-monitoring-project")).trim(),
     version_pattern: fieldValue("version_pattern", "plugin-monitoring-version-pattern"),
-    link_pattern: ["jenkins", "custom"].includes(provider) ? fieldValue("link_pattern", "plugin-monitoring-link-pattern") : "",
+    download_url: ["jenkins", "custom"].includes(provider) ? fieldValue("download_url", "plugin-monitoring-download-url") : "",
+    download_rename: fieldValue("download_rename", "plugin-monitoring-download-rename"),
     installed_pattern: fieldValue("installed_pattern", "plugin-monitoring-installed-pattern"),
     asset_pattern: provider === "github" ? fieldValue("asset_pattern", "plugin-monitoring-asset-pattern") : "",
+    installed_detection: fieldValue("installed_detection", "plugin-monitoring-installed-detection") || "auto",
   };
 }
 

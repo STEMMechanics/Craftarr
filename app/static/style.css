@@ -3324,8 +3324,8 @@ input[type="checkbox"] {
   text-transform: none;
 }
 
-.settings-header-button:last-of-type,
-.panel-header-button:last-of-type {
+.card-header > .settings-header-button:last-child,
+.card-header > .panel-header-button:last-child {
   margin-right: -12px;
 }
 

@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import uuid
 import urllib.request
 import zipfile
 
@@ -208,6 +209,7 @@ def download_paper(
     directory: str,
     jar_name: str = "paper.jar",
     build_id: int | None = None,
+    preserve_previous: bool = False,
 ) -> dict:
 
     server_dir = Path(
@@ -264,6 +266,7 @@ def download_paper(
 
     digest = hashlib.sha256()
     expected_hash = download.get("checksums", {}).get("sha256")
+    previous = None
 
     try:
         with urllib.request.urlopen(request, timeout=120) as source:
@@ -275,7 +278,17 @@ def download_paper(
         if expected_hash and digest.hexdigest().lower() != expected_hash.lower():
             raise ValueError("Downloaded Paper JAR failed SHA-256 verification")
 
-        os.replace(temporary, destination)
+        if preserve_previous and destination.is_file():
+            while previous is None or previous.exists():
+                previous = server_dir / f"{jar_path.stem}.previous-{uuid.uuid4().hex[:12]}.jar.disabled"
+            shutil.copy2(destination, previous)
+        try:
+            os.replace(temporary, destination)
+        except Exception:
+            if previous:
+                previous.unlink(missing_ok=True)
+                previous = None
+            raise
     except Exception:
         temporary.unlink(missing_ok=True)
         raise
@@ -294,6 +307,8 @@ def download_paper(
             str(
                 destination
             ),
+
+        "previous_filename": previous.name if previous else None,
     }
 
 
