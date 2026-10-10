@@ -1,15 +1,20 @@
-import re
-import zipfile
+from email.header import decode_header, make_header
+from email.message import Message
+from email.utils import collapse_rfc2231_value
 import ipaddress
 import os
+import re
+import shutil
 import socket
+import tempfile
 import urllib.parse
 import urllib.request
-import shutil
-import tempfile
 import uuid
-import yaml
+import zipfile
+
 import regex
+import yaml
+
 from .env import getenv
 
 from pathlib import Path
@@ -532,16 +537,52 @@ def normalize_previous_plugin_filenames(server) -> None:
 
 
 def _download_response_filename(response) -> str | None:
-    candidate = None
+    candidates = []
     headers = getattr(response, "headers", None)
-    if headers is not None and hasattr(headers, "get_filename"):
-        candidate = headers.get_filename()
-    if not candidate:
-        candidate = Path(urllib.parse.unquote(urllib.parse.urlsplit(response.geturl()).path)).name
-    candidate = urllib.parse.unquote(str(candidate)).replace("\\", "/").rsplit("/", 1)[-1]
-    if (candidate and len(candidate) <= 255 and candidate.lower().endswith(".jar")
-            and not any(ord(character) < 32 for character in candidate)):
-        return candidate
+    if headers is not None:
+        disposition = headers.get("Content-Disposition")
+        if disposition:
+            message = Message()
+            message["Content-Disposition"] = str(disposition)
+            try:
+                parameters = message.get_params(header="Content-Disposition", unquote=True) or []
+            except (TypeError, ValueError):
+                parameters = []
+            extended_candidates = []
+            regular_candidates = []
+            for parameter, value in parameters[1:]:
+                parameter = str(parameter).casefold()
+                if parameter not in {"filename", "filename*"}:
+                    continue
+                is_extended = parameter.endswith("*") or isinstance(value, tuple)
+                if isinstance(value, tuple):
+                    try:
+                        value = collapse_rfc2231_value(value, errors="replace")
+                    except (LookupError, UnicodeError, ValueError):
+                        continue
+                elif is_extended and isinstance(value, str):
+                    encoded_value = re.match(r"^[^']*'[^']*'(.*)$", value)
+                    if encoded_value:
+                        value = urllib.parse.unquote(encoded_value.group(1))
+                (extended_candidates if is_extended else regular_candidates).append(value)
+            candidates.extend(extended_candidates)
+            candidates.extend(regular_candidates)
+        if hasattr(headers, "get_filename"):
+            candidates.append(headers.get_filename())
+
+    final_url = response.geturl()
+    candidates.append(Path(urllib.parse.unquote(urllib.parse.urlsplit(final_url).path)).name)
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            candidate = str(make_header(decode_header(str(candidate))))
+        except (LookupError, UnicodeError, ValueError):
+            candidate = str(candidate)
+        candidate = urllib.parse.unquote(candidate).replace("\\", "/").rsplit("/", 1)[-1]
+        if (len(candidate) <= 255 and candidate.lower().endswith(".jar")
+                and not any(ord(character) < 32 for character in candidate)):
+            return candidate
     return None
 
 
