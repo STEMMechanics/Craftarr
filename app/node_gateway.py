@@ -90,7 +90,7 @@ def _required_permissions(path: str, method: str) -> set[str] | None:
         return {"backups.view"} if method in {"GET", "HEAD"} and second not in {"restore", "delete", "create", "jobs"} else {"backups.manage"}
     if first in {"automation", "scheduling", "schedules"}:
         return {"automation.manage", "backups.view"} if method in {"GET", "HEAD"} else {"automation.manage"}
-    if first in {"status", "process-stats", "metrics"}:
+    if first in {"status", "process-stats", "metrics", "storage"}:
         return {"servers.view"}
     return None
 

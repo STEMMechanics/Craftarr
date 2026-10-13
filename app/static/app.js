@@ -1248,6 +1248,7 @@ document.body.addEventListener(
     updateServerProcessStats();
     updateConsoleVersionStatus();
     loadServerMetrics();
+    loadServerStorage();
     loadServerSchedules();
     loadPaperVersionStatus();
     normalizeButtonClasses();
@@ -8401,6 +8402,58 @@ function formatMemoryBytes(bytes) {
   return `${mb.toFixed(0)} MB`;
 }
 
+function formatStorageBytes(bytes) {
+  const value = Math.max(0, Number(bytes) || 0);
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  if (value < 1024) return `${Math.round(value)} B`;
+  const unit = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1);
+  return `${(value / (1024 ** unit)).toFixed(1)} ${units[unit]}`;
+}
+
+async function loadServerStorage() {
+  const panel = document.querySelector("[data-server-storage]");
+  if (!panel || document.hidden || panel.dataset.loading === "true") return;
+  panel.dataset.loading = "true";
+  panel.setAttribute("aria-busy", "true");
+  const status = panel.querySelector("[data-storage-status]");
+  try {
+    const response = await fetch(`/api/web/servers/${panel.dataset.serverId}/storage`, {cache: "no-store"});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Disk usage is unavailable");
+
+    const used = Number(data.used_bytes);
+    const free = Number(data.free_bytes);
+    const total = Number(data.total_bytes);
+    if (![used, free, total].every(Number.isFinite) || total <= 0) {
+      throw new Error("Disk usage data is invalid");
+    }
+    const percent = Math.max(0, Math.min(100, Number(data.percent) || 0));
+    panel.querySelector("[data-storage-summary]").textContent = `${formatStorageBytes(used)} used of ${formatStorageBytes(total)}`;
+    panel.querySelector("[data-storage-percent]").textContent = `${percent.toLocaleString(undefined, {maximumFractionDigits: 1})}% used`;
+    panel.querySelector("[data-storage-free]").textContent = `${formatStorageBytes(free)} available`;
+    const meter = panel.querySelector(".server-storage-meter");
+    meter.setAttribute("aria-valuenow", String(percent));
+    meter.setAttribute("aria-valuetext", `${percent}% used; ${formatStorageBytes(free)} available`);
+    meter.classList.toggle("is-warning", percent >= 80 && percent < 90);
+    meter.classList.toggle("is-critical", percent >= 90);
+    panel.querySelector("[data-storage-meter-fill]").style.width = `${percent}%`;
+    status.textContent = "Volume usage, including other files and services";
+  } catch (error) {
+    panel.querySelector("[data-storage-summary]").textContent = "Disk usage unavailable";
+    panel.querySelector("[data-storage-percent]").textContent = "—";
+    panel.querySelector("[data-storage-free]").textContent = "Available space: —";
+    const meter = panel.querySelector(".server-storage-meter");
+    meter.setAttribute("aria-valuenow", "0");
+    meter.setAttribute("aria-valuetext", "Disk usage unavailable");
+    meter.classList.remove("is-warning", "is-critical");
+    panel.querySelector("[data-storage-meter-fill]").style.width = "0";
+    status.textContent = error.message || "Disk usage is unavailable";
+  } finally {
+    panel.dataset.loading = "false";
+    panel.setAttribute("aria-busy", "false");
+  }
+}
+
 function formatConfiguredMemory(memory) {
   if (!memory) {
     return "";
@@ -9698,7 +9751,13 @@ async function cancelIdleRestart() {
 }
 
 loadServerMetrics();
+loadServerStorage();
 loadServerSchedules();
+
+setInterval(loadServerStorage, 60000);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) loadServerStorage();
+});
 
 setInterval(loadServerSchedules, 2500);
 document.addEventListener("visibilitychange", () => {

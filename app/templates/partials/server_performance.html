@@ -10,6 +10,8 @@
     </label>
   </section>
 
+  {% include "partials/server_storage_panel.html" %}
+
   <section class="overview-card performance-chart-panel" aria-label="Server performance history">
     <div class="performance-chart-grid">
       <article class="performance-chart-card metric-cpu-card"><div class="performance-chart-heading"><span class="metric-icon"><i class="fa-solid fa-microchip" aria-hidden="true"></i></span><div><h2>CPU use</h2><p>Processor used by the server</p></div></div><canvas id="metric-cpu" height="180" role="img" aria-label="CPU use over time"></canvas></article>
