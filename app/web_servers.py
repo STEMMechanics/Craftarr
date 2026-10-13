@@ -1325,10 +1325,13 @@ def web_force_stop_server(
         return JSONResponse({"error": "Access denied"}, status_code=403)
 
     try:
-        force_stop_server(server.id)
-        request.state.audit_action = "Server force-stopped"
-        request.state.audit_details = "The server process was terminated immediately."
-        return {"success": True}
+        stopped = force_stop_server(server.id)
+        request.state.audit_action = "Server force-stopped" if stopped else "Server force-stop checked"
+        request.state.audit_details = (
+            "The server process was terminated immediately."
+            if stopped else "The server was already stopped."
+        )
+        return {"success": True, "stopped": stopped}
     except RuntimeError as error:
         return JSONResponse({"error": str(error)}, status_code=400)
 

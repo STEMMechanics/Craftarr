@@ -664,6 +664,24 @@
 
     </form>
 
+    {% if user.can("servers.control") %}
+    <details class="overview-card server-danger-zone">
+        <summary class="server-danger-zone-summary">
+            <span><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> Danger zone</span>
+            <i class="fa-solid fa-chevron-down server-danger-zone-chevron" aria-hidden="true"></i>
+        </summary>
+        <div class="server-danger-zone-content">
+            <div>
+                <strong>Force stop server</strong>
+                <p>Use this if the server is stuck starting, running, or shutting down. It terminates the server immediately, so recent world changes may be lost. If it is already stopped, nothing will happen.</p>
+            </div>
+            <button id="server-force-stop-button" class="button danger" type="button" onclick="serverAction('force-stop', this)">
+                <i class="fa-solid fa-skull-crossbones" aria-hidden="true"></i> Force stop
+            </button>
+        </div>
+    </details>
+    {% endif %}
+
     <div id="server-settings-import-modal" class="modal-backdrop" hidden>
         <div class="modal-card">
             <h2>Import server settings?</h2>

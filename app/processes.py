@@ -504,11 +504,14 @@ def stop_server(
     process_lifecycle_states[server_id] = "stopping"
 
 
-def force_stop_server(server_id: int) -> None:
+def force_stop_server(server_id: int) -> bool:
     config = _systemd_config(server_id)
     if config:
-        if not _systemd_status(config)["running"]:
-            raise RuntimeError("Server is not running")
+        status = _systemd_status(config)
+        if not status["running"]:
+            if status.get("active_state") == "unknown":
+                raise RuntimeError("Could not determine whether the server is running")
+            return False
 
         unit = _systemd_unit_name(config)
         try:
@@ -536,8 +539,11 @@ def force_stop_server(server_id: int) -> None:
 
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            if not _systemd_status(config)["running"]:
-                return
+            status = _systemd_status(config)
+            if not status["running"]:
+                if status.get("active_state") == "unknown":
+                    raise RuntimeError("Could not verify that the server stopped")
+                return True
             time.sleep(0.25)
 
         if kill_result.returncode != 0:
@@ -547,7 +553,7 @@ def force_stop_server(server_id: int) -> None:
 
     process = processes.get(server_id)
     if not process or process.poll() is not None:
-        raise RuntimeError("Server is not running")
+        return False
 
     console_buffers.setdefault(server_id, deque(maxlen=MAX_CONSOLE_LINES)).append(
         "[Panel] Force-stopping server immediately; unsaved world changes may be lost."
@@ -567,6 +573,7 @@ def force_stop_server(server_id: int) -> None:
     stats_processes.pop(server_id, None)
     stats_process_roots.pop(server_id, None)
     stats_process_started_at.pop(server_id, None)
+    return True
 
 
 def run_pre_stop_commands(server_id: int, commands: str) -> None:
