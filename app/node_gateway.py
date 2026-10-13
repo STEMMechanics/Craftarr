@@ -183,10 +183,9 @@ def _inject_remote_version_notice(body: bytes, node_version: str | None, request
     else:
         message = "This Node did not report its Craftarr version. Some functions may not be available on this Node."
     banner = (
-        '<div class="node-version-warning" role="status" '
-        'style="margin:0 0 1rem;padding:.8rem 1rem;border:1px solid #c4b5fd;border-radius:.75rem;'
-        'background:#f5f3ff;color:#4c1d95;font-weight:600">'
-        f'{escape(message)}</div>'
+        '<div class="node-version-warning" role="status">'
+        '<i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i>'
+        f'<span>{escape(message)}</span></div>'
     ).encode("utf-8")
     if request.headers.get("HX-Request") == "true":
         return banner + body
