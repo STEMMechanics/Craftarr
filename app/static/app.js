@@ -2092,8 +2092,36 @@ async function installUploadedPlugin(file, replace = false) {
   if (!page || !file) return;
 
   if (button) button.disabled = true;
-  showFileOperationProgress("Uploading plugin", `Uploading ${file.name}…`, 0);
+  showFileOperationProgress(
+    replace ? "Uploading plugin" : "Checking plugin",
+    replace ? `Uploading ${file.name}…` : `Checking ${file.name}…`,
+    replace ? 0 : null,
+  );
   try {
+    if (!replace) {
+      const checkResponse = await fetch(
+        `/api/web/servers/${page.dataset.serverId}/plugins/upload-check`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filename: file.name }),
+        },
+      );
+      let checkData;
+      try {
+        checkData = await checkResponse.json();
+      } catch {
+        checkData = {};
+      }
+      if (checkResponse.status === 409 && checkData.code === "plugin_file_exists") {
+        hideFileOperationProgress();
+        openPluginReplaceModal({ type: "upload", file }, checkData);
+        return;
+      }
+      if (!checkResponse.ok) throw new Error(checkData.error || "Plugin upload check failed");
+    }
+
+    showFileOperationProgress("Uploading plugin", `Uploading ${file.name}…`, 0);
     const formData = new FormData();
     formData.append("plugin", file, file.name);
     const response = await uploadFileWithProgress(
