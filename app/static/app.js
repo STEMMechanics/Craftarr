@@ -1028,7 +1028,9 @@ document.addEventListener(
       !event.target.closest(".more-pages-toggle")
     ) closeMorePages();
 
-    document.querySelectorAll(".plugin-more-actions[open]").forEach((menu) => {
+    document.querySelectorAll(
+      ".plugin-more-actions[open], .backup-more-actions[open]",
+    ).forEach((menu) => {
       if (!menu.contains(event.target)) menu.open = false;
     });
   },
@@ -1055,6 +1057,12 @@ document.addEventListener("keydown", (event) => {
       closePluginMonitoring();
       return;
     }
+    const paperVersionChangeModal = document.getElementById("paper-version-change-modal");
+    if (paperVersionChangeModal && !paperVersionChangeModal.hidden) {
+      event.preventDefault();
+      closePaperVersionChangeModal();
+      return;
+    }
     const accountOpen = !document.getElementById("account-menu-panel")?.hidden;
     const notificationsOpen = !document.getElementById("notifications-panel")?.hidden;
     closeMorePages();
@@ -1070,6 +1078,8 @@ window.addEventListener("resize", closeMorePages);
 
 let hardwareStatsPending = false;
 let hardwareNodesLoading = false;
+let paperPendingVersionChange = null;
+let paperVersionChangePreviousFocus = null;
 
 async function loadHardwareNodeOptions() {
   const page = document.querySelector(".system-page");
@@ -1115,12 +1125,7 @@ function showHardwareUnavailable(message, nodeOffline = false) {
 function setNodeVersionWarning(warning, message, visible) {
   if (!warning) return;
   warning.hidden = !visible;
-  const icon = document.createElement("i");
-  icon.className = "fa-solid fa-circle-exclamation";
-  icon.setAttribute("aria-hidden", "true");
-  const text = document.createElement("span");
-  text.textContent = message;
-  warning.replaceChildren(icon, text);
+  warning.textContent = message;
 }
 
 async function updateSystemStats() {
@@ -5213,6 +5218,10 @@ async function updateBackupsPage() {
     const data = await response.json();
 
     backupData = data.backups || [];
+    page.dataset.serverRunning = String(data.running === true);
+    if (backupPendingRestore) {
+      setRestoreBackupServerRunning(data.running === true);
+    }
 
     const warning = document.getElementById(
       "backup-running-warning",
@@ -5310,9 +5319,9 @@ function renderBackups(
 
                         <button
                             class="button backup-action-button"
-                            ${serverRunning ? "disabled" : ""}
                             onclick="openRestoreBackupModal(
-                                '${escapeJs(backup.filename)}'
+                                '${escapeJs(backup.filename)}',
+                                ${serverRunning ? "true" : "false"}
                             )"
                             aria-label="Restore backup ${escapeHtml(backup.filename)}"
                         >
@@ -5416,6 +5425,7 @@ async function createBackup() {
 
 function openRestoreBackupModal(
   filename,
+  serverRunning = document.querySelector(".backups-page")?.dataset.serverRunning === "true",
 ) {
   backupPendingRestore = filename;
 
@@ -5423,9 +5433,33 @@ function openRestoreBackupModal(
     "restore-backup-name",
   ).textContent = filename;
 
+  setRestoreBackupServerRunning(serverRunning);
+
   document.getElementById(
     "restore-backup-modal",
   ).hidden = false;
+  document.getElementById(
+    serverRunning ? "close-restore-backup" : "confirm-restore-backup",
+  )?.focus();
+}
+
+function setRestoreBackupServerRunning(serverRunning) {
+  const runningNote = document.getElementById("restore-backup-running-note");
+  const restoreButton = document.getElementById("confirm-restore-backup");
+  const closeButton = document.getElementById("close-restore-backup");
+  const heading = document.getElementById("restore-backup-heading");
+  const introduction = document.getElementById("restore-backup-introduction");
+  const preservedNote = document.getElementById("restore-backup-preserved-note");
+  if (runningNote) runningNote.hidden = !serverRunning;
+  if (restoreButton) restoreButton.hidden = serverRunning;
+  if (closeButton) closeButton.textContent = serverRunning ? "Close" : "Cancel";
+  if (heading) heading.textContent = serverRunning ? "Stop server before restoring" : "Restore backup?";
+  if (introduction) {
+    introduction.textContent = serverRunning
+      ? "The server is running, so its files cannot be restored yet."
+      : "The current server files will be replaced with:";
+  }
+  if (preservedNote) preservedNote.hidden = serverRunning;
 }
 
 function closeRestoreBackupModal() {
@@ -5463,6 +5497,12 @@ async function confirmRestoreBackup() {
   const data = await response.json();
 
   if (!response.ok) {
+    if (/stop the server before restoring/i.test(data.error || "")) {
+      const page = document.querySelector(".backups-page");
+      if (page) page.dataset.serverRunning = "true";
+      setRestoreBackupServerRunning(true);
+      return;
+    }
     alert(
       data.error ||
         "Unable to restore backup",
@@ -5473,6 +5513,7 @@ async function confirmRestoreBackup() {
 
   closeRestoreBackupModal();
 
+  showToast("Backup restored. Start the server to load the restored files.", "success");
   updateBackupsPage();
 }
 
@@ -8752,6 +8793,7 @@ async function loadPaperVersionStatus() {
     );
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Unable to check Paper");
+    page.dataset.installedMinecraftVersion = data.current_version || "";
     const installed = document.getElementById("paper-installed-version");
     if (installed) {
       installed.innerHTML = `${escapeHtml(data.current_version || "Unknown")}${
@@ -8951,10 +8993,12 @@ async function loadPaperBuilds(version) {
   }
 }
 
-async function installPaperVersion() {
+async function installPaperVersion(versionChangeConfirmed = false) {
   const page = document.querySelector(".paper-management[data-server-id]");
   const message = document.getElementById("paper-update-message");
   const button = document.getElementById("paper-update-button");
+  const versionSelect = document.getElementById("paper-version-select");
+  const buildSelect = document.getElementById("paper-build-select");
   const unavailableReason = button?.dataset.unavailableReason;
   if (unavailableReason) {
     message.textContent = unavailableReason;
@@ -8962,6 +9006,26 @@ async function installPaperVersion() {
     return;
   }
   if (button?.disabled) return;
+
+  const selectedVersion = versionSelect?.value || "";
+  const selectedBuild = buildSelect?.value || "";
+  const installedVersion = page?.dataset.installedMinecraftVersion || "";
+  if (
+    !versionChangeConfirmed
+    && installedVersion
+    && selectedVersion
+    && selectedVersion !== installedVersion
+  ) {
+    paperPendingVersionChange = {version: selectedVersion, build: selectedBuild};
+    paperVersionChangePreviousFocus = document.activeElement;
+    document.getElementById("paper-version-change-from").textContent = installedVersion;
+    document.getElementById("paper-version-change-to").textContent = selectedVersion;
+    const modal = document.getElementById("paper-version-change-modal");
+    modal.hidden = false;
+    document.getElementById("confirm-paper-version-change")?.focus();
+    return;
+  }
+
   if (button) button.disabled = true;
   message.classList.remove("error");
   message.textContent = "Downloading and checking the new server files…";
@@ -8972,8 +9036,8 @@ async function installPaperVersion() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          version: document.getElementById("paper-version-select").value,
-          build: document.getElementById("paper-build-select").value,
+          version: selectedVersion,
+          build: selectedBuild,
         }),
       },
     );
@@ -9019,6 +9083,29 @@ async function installPaperVersion() {
       setPaperUpdateAvailability(button, error.message);
     }
   }
+}
+
+function closePaperVersionChangeModal() {
+  const modal = document.getElementById("paper-version-change-modal");
+  if (modal) modal.hidden = true;
+  paperPendingVersionChange = null;
+  if (paperVersionChangePreviousFocus?.isConnected) {
+    paperVersionChangePreviousFocus.focus();
+  }
+  paperVersionChangePreviousFocus = null;
+}
+
+function confirmPaperVersionChange() {
+  const pending = paperPendingVersionChange;
+  const currentVersion = document.getElementById("paper-version-select")?.value || "";
+  const currentBuild = document.getElementById("paper-build-select")?.value || "";
+  closePaperVersionChangeModal();
+  if (!pending) return;
+  if (pending.version !== currentVersion || pending.build !== currentBuild) {
+    installPaperVersion();
+    return;
+  }
+  installPaperVersion(true);
 }
 
 loadPaperVersionStatus();

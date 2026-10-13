@@ -7501,9 +7501,9 @@ textarea::placeholder {
 
 .system-node-selector {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 6px;
   margin-bottom: 18px;
 }
 
