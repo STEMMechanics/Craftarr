@@ -411,6 +411,23 @@ def validate_plugin_archive(path: Path) -> None:
         raise ValueError("Plugin is not a valid JAR archive") from error
 
 
+def check_plugin_file_conflict(server, filename: str) -> None:
+    """Check whether this JAR name would replace an installed plugin."""
+    safe_name = Path(filename).name
+    if safe_name != filename or not safe_name.lower().endswith(".jar"):
+        raise ValueError("Plugin filename must be a local .jar filename")
+
+    destination = safe_plugin_path(server, safe_name)
+    disabled_destination = safe_plugin_path(server, safe_name + ".disabled")
+    existing = (
+        destination if destination.exists()
+        else disabled_destination if disabled_destination.exists()
+        else None
+    )
+    if existing:
+        raise PluginFileExistsError(safe_name, existing == destination)
+
+
 def install_plugin_file(server, source: Path, filename: str, replace: bool = False) -> dict:
     safe_name = Path(filename).name
     if safe_name != filename or not safe_name.lower().endswith(".jar"):
@@ -418,11 +435,10 @@ def install_plugin_file(server, source: Path, filename: str, replace: bool = Fal
     validate_plugin_archive(source)
     directory = plugins_directory(server)
     directory.mkdir(parents=True, exist_ok=True)
+    if not replace:
+        check_plugin_file_conflict(server, safe_name)
     destination = safe_plugin_path(server, safe_name)
     disabled_destination = destination.with_name(destination.name + ".disabled")
-    existing = destination if destination.exists() else disabled_destination if disabled_destination.exists() else None
-    if existing and not replace:
-        raise PluginFileExistsError(safe_name, existing == destination)
     temporary = directory / f".{safe_name}.upload"
     try:
         shutil.copyfile(source, temporary)

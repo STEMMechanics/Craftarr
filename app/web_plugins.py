@@ -38,6 +38,7 @@ from .plugin_manager import (
     geyser_status,
     duplicate_plugin_groups,
     safe_plugin_path,
+    check_plugin_file_conflict,
     normalize_previous_plugin_filenames,
     PluginFileExistsError,
 )
@@ -159,6 +160,34 @@ async def upload_plugin(server_id: int, request: Request, plugin: UploadFile = F
             "suppress_toast": True,
         }, status_code=409)
     except (ValueError, FileExistsError, OSError) as error:
+        return JSONResponse({"error": str(error)}, status_code=400)
+
+
+@router.post("/api/web/servers/{server_id}/plugins/upload-check")
+async def check_plugin_upload(server_id: int, request: Request, db: Session = Depends(get_db)):
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not server or not has_permission(user, "plugins.manage"):
+        return JSONResponse({"error": "Administrator access required"}, status_code=403)
+
+    data = await request.json()
+    filename = data.get("filename") if isinstance(data, dict) else None
+    if not isinstance(filename, str):
+        return JSONResponse({"error": "Plugin filename is required"}, status_code=400)
+    filename = Path(filename).name
+    try:
+        check_plugin_file_conflict(server, filename)
+        return {"exists": False}
+    except PluginFileExistsError as error:
+        return JSONResponse({
+            "error": str(error),
+            "code": "plugin_file_exists",
+            "filename": error.filename,
+            "enabled": error.enabled,
+            "suppress_toast": True,
+        }, status_code=409)
+    except (ValueError, OSError) as error:
         return JSONResponse({"error": str(error)}, status_code=400)
 
 
