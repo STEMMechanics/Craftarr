@@ -55,6 +55,7 @@ from .paper import (
 )
 
 from .processes import (
+    force_stop_server,
     get_console,
     restart_server,
     run_pre_stop_commands,
@@ -1311,6 +1312,27 @@ def web_stop_server(
         )
 
 
+@router.post("/api/web/servers/{server_id}/force-stop")
+def web_force_stop_server(
+    server_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not server or not has_permission(user, "servers.control"):
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+
+    try:
+        force_stop_server(server.id)
+        request.state.audit_action = "Server force-stopped"
+        request.state.audit_details = "The server process was terminated immediately."
+        return {"success": True}
+    except RuntimeError as error:
+        return JSONResponse({"error": str(error)}, status_code=400)
+
+
 # -------------------------------------------------------------------
 # Restart
 # -------------------------------------------------------------------
@@ -2007,7 +2029,12 @@ def web_paper_status(server_id: int, request: Request, version: str | None = Non
         latest_version = versions[0] if versions else current_version
         selected_version = version or current_version
         builds = get_builds(selected_version) if selected_version else []
-        latest_build = builds[0] if builds else None
+        stable_builds = [
+            build for build in builds
+            if str(build.get("channel", "")).upper() in {"STABLE", "RECOMMENDED"}
+        ]
+        latest_build = stable_builds[0] if stable_builds else (builds[0] if builds else None)
+        ordered_builds = stable_builds + [build for build in builds if build not in stable_builds]
         latest_build_id = str(latest_build["id"]) if latest_build else None
         try:
             builds_behind = (
@@ -2025,7 +2052,7 @@ def web_paper_status(server_id: int, request: Request, version: str | None = Non
             "builds_behind": builds_behind,
             "versions": versions,
             "selected_version": selected_version,
-            "builds": [{"id": str(build["id"]), "channel": build.get("channel", "") } for build in builds],
+            "builds": [{"id": str(build["id"]), "channel": build.get("channel", "") } for build in ordered_builds],
             "running": server_status(server.id).get("running", False),
             "jar_inspected": detected is not None,
         }

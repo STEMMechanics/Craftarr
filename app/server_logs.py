@@ -1,6 +1,6 @@
 import gzip
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -45,7 +45,7 @@ def list_server_logs(server) -> list[dict]:
             "name": path.name,
             "size": stat.st_size,
             "size_display": _format_size(stat.st_size),
-            "modified": datetime.fromtimestamp(stat.st_mtime),
+            "modified": datetime.fromtimestamp(stat.st_mtime, timezone.utc),
         })
     return sorted(logs, key=lambda item: item["modified"], reverse=True)
 

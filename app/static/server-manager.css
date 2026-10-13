@@ -252,10 +252,12 @@ small, .muted-small { color: var(--sm-muted); }
 .server-control-label:hover:not(:disabled) { filter: brightness(.96); transform: none; }
 .server-control-label.start { background: var(--sm-green-dark); color: #fff; }
 .server-control-label.stop { background: #fbbf24; color: #3d2a0b; }
+.server-control-label.force-stop { background: #b42318; color: #fff; }
 .server-control-label.restart { background: var(--sm-purple-dark); color: #fff; }
 .server-control-label:disabled { opacity: .52; filter: saturate(.46); box-shadow: none; transform: none; cursor: not-allowed; }
 .server-actions .server-control-label.start:hover:not(:disabled) { background: #116b34; color: #fff; }
 .server-actions .server-control-label.stop:hover:not(:disabled) { background: #fcd34d; color: #3d2a0b; filter: none; }
+.server-actions .server-control-label.force-stop:hover:not(:disabled) { background: #912018; color: #fff; filter: none; }
 .server-actions .server-control-label.restart:hover:not(:disabled) { background: #5f30c0; color: #fff; }
 .page-content { width: auto; min-width: 0; margin: 12px 0 0 18px; padding: clamp(22px, 3vw, 38px) clamp(18px, 3vw, 42px) 44px; border-radius: var(--sm-radius-md); background: rgba(255,255,255,1); }
 #page-content:has(.players-page) { background-image: url("/static/images/server-manager/players-overview.webp"); }
@@ -888,6 +890,7 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .system-instance-row .server-control-button { width: 42px; height: 42px; min-height: 42px; flex: 0 0 42px; padding: 0; border-radius: 12px; background: #fff; }
 .system-instance-row .server-control-button.start { border-color: #b9e2c7; background: #e7f7ec; color: #17613a; }
 .system-instance-row .server-control-button.stop { border-color: #f0d4ac; background: #fff5e6; color: #874900; }
+.system-instance-row .server-control-button.force-stop { border-color: #f0c6c2; background: #fff4f2; color: #a43730; }
 .system-instance-row .server-control-button:disabled { opacity: .5; cursor: not-allowed; }
 .system-instance-state { display: block; color: var(--sm-muted); font-size: 11px; font-weight: 700; }
 .account-page, .user-edit-page, .users-page, .settings-page, .system-page, .properties-page, .advanced-properties-page { display: flex; flex-direction: column; gap: 16px; }
@@ -1203,6 +1206,7 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .server-log-checkbox { display: grid; place-items: center; padding: 10px; cursor: pointer; }
 .server-log-link { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr) 180px 100px; align-items: center; gap: 12px; padding: 12px 16px 12px 4px; color: inherit; font-size: 12px; text-decoration: none; }
 .server-log-link > span:not(.server-log-name) { color: #60788e; }
+.server-log-link > time { color: #60788e; }
 .server-log-name { overflow-wrap: anywhere; }
 .server-log-row.active .server-log-link { color: #155ba6; }
 .backup-list, .server-audit-list, .system-instance-list, .ip-ban-list { padding-right: 0; padding-left: 0; }
@@ -1274,7 +1278,7 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
   .server-log-selection-toolbar > .button { margin-left: auto; }
   .server-log-row { grid-template-columns: 38px minmax(0, 1fr); }
   .server-log-link { grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 10px 8px 10px 2px; }
-  .server-log-link > span:not(.server-log-name) { font-size: 11px; }
+  .server-log-link > span:not(.server-log-name), .server-log-link > time { font-size: 11px; }
   .server-audit-pagination { flex-wrap: wrap; }
   .server-audit-pagination .button { min-height: 36px; }
   .server-audit-row { margin-right: -14px; margin-left: -14px; padding-right: 18px; padding-left: 18px; }

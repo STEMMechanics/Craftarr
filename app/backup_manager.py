@@ -2,7 +2,7 @@ import math
 import shutil
 import zipfile
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -164,7 +164,8 @@ def list_backups(server) -> list[dict]:
             continue
 
         created = datetime.fromtimestamp(
-            stat.st_mtime
+            stat.st_mtime,
+            timezone.utc,
         )
 
         backups.append({
@@ -181,11 +182,6 @@ def list_backups(server) -> list[dict]:
 
             "created":
                 created.isoformat(),
-
-            "created_display":
-                created.strftime(
-                    "%d %b %Y, %I:%M %p"
-                ),
         })
 
     backups.sort(

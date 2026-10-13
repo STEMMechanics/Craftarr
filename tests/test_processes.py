@@ -206,6 +206,66 @@ def test_systemd_stop_falls_back_when_console_socket_is_unavailable(monkeypatch)
     assert actions == ["stop"]
 
 
+def test_force_stop_kills_and_forgets_panel_owned_process(monkeypatch):
+    class Process:
+        returncode = None
+        killed = False
+        waited = None
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        def wait(self, timeout):
+            self.waited = timeout
+            return self.returncode
+
+    process = Process()
+    monkeypatch.setattr(processes, "_systemd_config", lambda _server_id: None)
+    monkeypatch.setattr(processes, "processes", {7: process})
+    monkeypatch.setattr(processes, "process_lifecycle_states", {7: "stopping"})
+    monkeypatch.setattr(processes, "console_buffers", {})
+    monkeypatch.setattr(processes, "stats_processes", {7: object()})
+    monkeypatch.setattr(processes, "stats_process_roots", {7: 7})
+    monkeypatch.setattr(processes, "stats_process_started_at", {7: 1.0})
+
+    processes.force_stop_server(7)
+
+    assert process.killed is True
+    assert process.waited == 5
+    assert 7 not in processes.processes
+    assert 7 not in processes.process_lifecycle_states
+    assert 7 not in processes.stats_processes
+    assert 7 not in processes.stats_process_roots
+    assert 7 not in processes.stats_process_started_at
+    assert "unsaved world changes may be lost" in processes.console_buffers[7][-1]
+
+
+def test_systemd_force_stop_requests_stop_then_kills_unit(monkeypatch):
+    config = processes.ServerProcessConfig("systemd", "survival", "/srv/server", "2G", "paper.jar", "")
+    commands = []
+    results = iter([SimpleNamespace(returncode=0, stdout="", stderr="") for _ in range(2)])
+    statuses = iter([{"running": True}, {"running": True}, {"running": False}])
+    monkeypatch.setattr(processes, "_systemd_config", lambda _server_id: config)
+    monkeypatch.setattr(processes, "_systemd_status", lambda _config: next(statuses))
+    monkeypatch.setattr(
+        processes.subprocess,
+        "run",
+        lambda command, **_kwargs: (commands.append(command), next(results))[1],
+    )
+    monkeypatch.setattr(processes.time, "sleep", lambda _seconds: None)
+
+    processes.force_stop_server(1)
+
+    assert commands == [
+        ["systemctl", "stop", "--no-block", "craftarr-server@survival.service"],
+        ["systemctl", "kill", "--signal=SIGKILL", "--kill-whom=all", "craftarr-server@survival.service"],
+    ]
+
+
 def test_stop_server_and_wait_waits_for_panel_owned_process(monkeypatch):
     waited = []
     process = SimpleNamespace(wait=lambda timeout: waited.append(timeout))
