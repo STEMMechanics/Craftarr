@@ -1107,12 +1107,20 @@ function showHardwareUnavailable(message, nodeOffline = false) {
   if (javaList) javaList.innerHTML = `<div class="empty-message">${escapeHtml(display)}</div>`;
   if (instances) instances.innerHTML = `<div class="empty-message">${escapeHtml(display)}</div>`;
   const warning = document.getElementById("hardware-node-version-warning");
-  if (warning) {
-    warning.hidden = false;
-    warning.textContent = display;
-  }
+  setNodeVersionWarning(warning, display, true);
   ["cpu-value", "memory-value", "storage-value", "minecraft-running", "minecraft-players"].forEach((id) => setText(id, "—"));
   ["cpu-detail", "memory-detail", "storage-detail", "minecraft-installed"].forEach((id) => setText(id, display));
+}
+
+function setNodeVersionWarning(warning, message, visible) {
+  if (!warning) return;
+  warning.hidden = !visible;
+  const icon = document.createElement("i");
+  icon.className = "fa-solid fa-circle-exclamation";
+  icon.setAttribute("aria-hidden", "true");
+  const text = document.createElement("span");
+  text.textContent = message;
+  warning.replaceChildren(icon, text);
 }
 
 async function updateSystemStats() {
@@ -1134,10 +1142,10 @@ async function updateSystemStats() {
     const warning = document.getElementById("hardware-node-version-warning");
     if (warning) {
       const versionDiffers = !nodeVersion || nodeVersion !== localVersion;
-      warning.hidden = !versionDiffers;
-      warning.textContent = !nodeVersion
+      const message = !nodeVersion
         ? "This Node did not report its Craftarr version. Some functions may not be available on this Node."
         : `This Node runs Craftarr ${nodeVersion}; this hub runs Craftarr ${localVersion}. Some functions may not be available on this Node.`;
+      setNodeVersionWarning(warning, message, versionDiffers);
     }
 
     document.getElementById("cpu-value").textContent = stats.cpu.percent + "%";
@@ -1651,6 +1659,7 @@ let playerPage = 1;
 const PLAYER_PAGE_SIZE = 25;
 let pluginData = [];
 const selectedPluginFilenames = new Set();
+const pluginActionInProgress = new Map();
 let pluginBulkActionInProgress = false;
 let pluginMonitoringPreviousFocus = null;
 let pluginPendingRemoval = null;
@@ -1964,7 +1973,7 @@ async function updatePluginsPage(forceDuplicatePrompt = false) {
   );
 
   if (!page) {
-    return;
+    return false;
   }
 
   const serverId = page.dataset.serverId;
@@ -1972,17 +1981,18 @@ async function updatePluginsPage(forceDuplicatePrompt = false) {
   try {
     const response = await fetch(
       `/api/web/servers/${serverId}/plugins`,
+      {cache: "no-store"},
     );
     const data = await response.json();
     if (data.node_offline === true) {
       markServerNodeOffline(serverId);
-      return;
+      return false;
     }
     if (!response.ok) throw new Error(data.error || "Unable to load plugins.");
 
     const currentPage = document.querySelector(".plugins-page");
     if (!page.isConnected || currentPage?.dataset.serverId !== serverId) {
-      return;
+      return false;
     }
 
     pluginData = data.plugins || [];
@@ -2016,6 +2026,7 @@ async function updatePluginsPage(forceDuplicatePrompt = false) {
 
     renderPlugins();
     showPluginDuplicatesModal(forceDuplicatePrompt);
+    return true;
   } catch {
     const list = document.getElementById(
       "plugin-list",
@@ -2024,6 +2035,7 @@ async function updatePluginsPage(forceDuplicatePrompt = false) {
     if (list) {
       list.textContent = "Unable to load plugins.";
     }
+    return false;
   }
 }
 
@@ -2465,7 +2477,7 @@ function renderPlugins() {
   }
 
   list.innerHTML = visiblePlugins.map((plugin) => `
-    <article class="plugin-row ${canManage ? "has-plugin-select" : ""} ${plugin.enabled ? "" : "disabled"} ${duplicatePluginFilenames.has(plugin.filename) ? "duplicate" : ""}">
+    <article class="plugin-row ${canManage ? "has-plugin-select" : ""} ${plugin.enabled ? "" : "disabled"} ${duplicatePluginFilenames.has(plugin.filename) ? "duplicate" : ""} ${pluginActionInProgress.has(plugin.filename) ? "is-processing" : ""}" ${pluginActionInProgress.has(plugin.filename) ? 'aria-busy="true"' : ""}>
       ${canManage ? `<label class="plugin-select"><input type="checkbox" value="${escapeHtml(plugin.filename)}" aria-label="Select ${escapeHtml(plugin.name)}" ${selectedPluginFilenames.has(plugin.filename) ? "checked" : ""} onchange="togglePluginSelection(this)"></label>` : ""}
       <span class="plugin-status-indicator ${plugin.enabled ? "is-enabled" : "is-disabled"}" aria-hidden="true" title="${plugin.enabled ? "Enabled" : "Disabled"}"></span>
       <div class="plugin-main">
@@ -2532,9 +2544,13 @@ function clearPluginSelection() {
 async function bulkPluginAction(action) {
   const page = document.querySelector(".plugins-page[data-can-manage='true']");
   const filenames = pluginData.filter((plugin) => selectedPluginFilenames.has(plugin.filename)).map((plugin) => plugin.filename);
-  if (!page || !filenames.length || pluginBulkActionInProgress) return;
+  if (!page || !filenames.length || pluginBulkActionInProgress || pluginActionInProgress.size) return;
   if (action === "remove" && !window.confirm(`Delete ${filenames.length} selected plugin file${filenames.length === 1 ? "" : "s"}? Plugin configuration and data folders will be kept.`)) return;
   pluginBulkActionInProgress = true;
+  if (action === "enable" || action === "disable") {
+    filenames.forEach((filename) => pluginActionInProgress.set(filename, action));
+    renderPlugins();
+  }
   updateBulkPluginSelectionUI(pluginData);
   try {
     const response = await fetch(`/api/web/servers/${page.dataset.serverId}/plugins/action`, {
@@ -2553,12 +2569,21 @@ async function bulkPluginAction(action) {
   } catch (error) {
     showToast(error.message || "Unable to update selected plugins.", "error");
   } finally {
+    if (action === "enable" || action === "disable") {
+      filenames.forEach((filename) => pluginActionInProgress.delete(filename));
+    }
     pluginBulkActionInProgress = false;
     renderPlugins();
   }
 }
 
 function renderPluginActions(plugin, canViewFiles, canEditFiles) {
+  const pendingAction = pluginActionInProgress.get(plugin.filename);
+  if (pendingAction) {
+    const label = pendingAction === "enable" ? "Enabling plugin…" : "Disabling plugin…";
+    return `<div class="plugin-actions is-processing" role="status" aria-live="polite"><i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i><span>${label}</span></div>`;
+  }
+
   const folderPath = plugin.config_directory ? `plugins/${plugin.config_directory}` : "";
   const folderAction = !canViewFiles ? "" : folderPath
     ? `<button class="plugin-menu-action" type="button" onclick="this.closest('details').open=false; openPluginFolder('${escapeJs(folderPath)}')"><i class="fa-solid fa-folder-open" aria-hidden="true"></i><span>Open Folder</span></button>`
@@ -4126,46 +4151,52 @@ async function togglePlugin(
   filename,
   action,
 ) {
-  const page = document.querySelector(
-    ".plugins-page",
-  );
-
-  if (!page) {
+  const page = document.querySelector(".plugins-page");
+  if (!page || pluginBulkActionInProgress || pluginActionInProgress.has(filename)) return;
+  const plugin = pluginData.find((item) => item.filename === filename);
+  if (!plugin) {
+    await updatePluginsPage();
     return;
   }
 
-  const response = await fetch(
-    `/api/web/servers/${page.dataset.serverId}/plugins/action`,
-    {
-      method: "POST",
-
-      headers: {
-        "Content-Type": "application/json",
+  pluginActionInProgress.set(filename, action);
+  renderPlugins();
+  let actionResult = null;
+  let actionError = null;
+  let pluginsRefreshed = false;
+  try {
+    const response = await fetch(
+      `/api/web/servers/${page.dataset.serverId}/plugins/action`,
+      {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({filename, action}),
       },
-
-      body: JSON.stringify({
-        filename,
-        action,
-      }),
-    },
-  );
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    alert(
-      data.error ||
-        "Unable to change plugin",
     );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to change plugin.");
+    actionResult = data;
+    pluginRestartRequired = data.restart_required === true;
+    showPluginRestartAlert();
+  } catch (error) {
+    actionError = error;
+  } finally {
+    pluginsRefreshed = await updatePluginsPage();
+    pluginActionInProgress.delete(filename);
+    renderPlugins();
+  }
 
+  if (actionError) {
+    showToast(actionError.message || "Unable to change plugin.", "error");
     return;
   }
 
-  pluginRestartRequired = data.restart_required === true;
-
-  showPluginRestartAlert();
-
-  await updatePluginsPage();
+  const verb = action === "enable" ? "Enabled" : "Disabled";
+  if (pluginsRefreshed) {
+    showToast(`${verb} ${plugin.name}.${actionResult.action_requires_restart ? " Restart required." : ""}`, actionResult.action_requires_restart ? "warning" : "success");
+  } else {
+    showToast(`${verb} ${plugin.name}, but the plugin list could not be refreshed. Reload the page to see its current state.`, "warning");
+  }
   await refreshNotifications(false);
 }
 

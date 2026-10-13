@@ -629,6 +629,9 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .remote-node-actions .icon-button { flex: 0 0 auto; width: 38px; height: 38px; }
 .remote-node-error { color: var(--danger, #b42318); }
 .remote-node-version-warning { color: #6d4db0; }
+.node-version-warning { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 1rem; padding: 8px 12px; border: 1px solid #c4b5fd; border-radius: 12px; background: #f5f3ff; color: #4c1d95; font-size: 12px; font-weight: 400; line-height: 1.45; }
+.node-version-warning > i { flex: 0 0 auto; margin-top: 2px; font-size: 12px; }
+.node-version-warning[hidden] { display: none; }
 .server-card-status { display: inline-flex; min-height: 27px; align-self: flex-start; align-items: center; gap: 7px; margin: 0 0 8px; padding: 4px 10px; border: 1px solid #d8e5f0; border-radius: var(--sm-radius-pill); background: #f5f9fd; color: #526a80; font-size: 11px; font-weight: 700; }
 .server-card-status .server-status-dot { width: 8px; height: 8px; flex-basis: 8px; }
 .server-card-status.is-online { border-color: #a8dfbd; background: #ecf9f0; color: #17613a; }
@@ -723,6 +726,8 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .plugin-file-meta dt { flex: 0 0 auto; color: #526a80; font-weight: 600; }
 .plugin-file-meta dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--sm-text); }
 .plugin-actions { display: flex; align-items: center; gap: 6px; }
+.plugin-actions.is-processing { min-height: 44px; gap: 7px; color: var(--sm-blue-dark); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.plugin-actions.is-processing > i { font-size: 12px; }
 .plugin-more-actions > summary span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
 .plugin-more-actions { position: relative; }
 .plugin-more-actions > summary { display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid var(--sm-border); border-radius: 12px; background: #fff; color: #34536e; cursor: pointer; list-style: none; }
