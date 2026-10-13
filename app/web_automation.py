@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .database import get_db
+from .hardware import collect_server_storage
 from .models import BackupJob, PendingIdleRestart, ScheduledTask, ServerMetric, TaskRun
 from .player_manager import get_online_players
 from .web_servers import get_accessible_server
@@ -385,3 +386,16 @@ def metrics(server_id: int, request: Request, hours: int = 24, db: Session = Dep
         "cpu_percent": row.cpu_percent, "memory_bytes": row.memory_bytes,
         "player_count": row.player_count, "uptime_seconds": row.uptime_seconds,
     } for row in rows]}
+
+
+@router.get("/api/web/servers/{server_id}/storage")
+def server_storage(server_id: int, request: Request, db: Session = Depends(get_db)):
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not server or not has_permission(user, "servers.view"):
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+    try:
+        return collect_server_storage(server.directory)
+    except OSError:
+        return JSONResponse({"error": "Disk usage is unavailable for this server's storage volume"}, status_code=503)

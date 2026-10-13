@@ -217,6 +217,9 @@ def test_gateway_maps_remote_operations_and_rewrites_server_refs():
     assert _required_permissions(
         f"/api/web/servers/{node_id}:42/paper/update-status", "GET"
     ) == {"servers.view"}
+    assert _required_permissions(
+        f"/api/web/servers/{node_id}:42/storage", "GET"
+    ) == {"servers.view"}
     assert _required_permissions(f"/servers/{node_id}:42", "GET") == {"servers.view"}
 
     path = f"/api/web/servers/{node_id}:42/plugins/monitoring/global"

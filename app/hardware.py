@@ -72,3 +72,18 @@ def collect_hardware_stats(servers) -> dict:
         },
         "java_runtimes": runtimes,
     }
+
+
+def collect_server_storage(directory: str) -> dict:
+    """Return volume capacity for the filesystem that contains a server directory."""
+    disk = shutil.disk_usage(directory)
+    total = int(disk.total)
+    used = int(disk.used)
+    free = int(disk.free)
+    percent = round(used / total * 100, 1) if total else 0.0
+    return {
+        "used_bytes": used,
+        "free_bytes": free,
+        "total_bytes": total,
+        "percent": percent,
+    }

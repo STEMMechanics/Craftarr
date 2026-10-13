@@ -1,0 +1,20 @@
+<section class="dashboard-section server-storage-section" aria-labelledby="server-storage-title">
+  <div class="section-heading-row">
+    <div><h2 id="server-storage-title">Disk space</h2><p>Storage on the filesystem that holds this server.</p></div>
+  </div>
+  <article class="server-storage-card" data-server-storage data-server-id="{{ server.id }}" aria-busy="true">
+    <div class="server-storage-top">
+      <span class="metric-icon server-storage-icon"><i class="fa-solid fa-hard-drive" aria-hidden="true"></i></span>
+      <div class="server-storage-copy">
+        <strong data-storage-summary>Checking disk usage…</strong>
+        <span data-storage-status role="status" aria-live="polite">Loading storage information</span>
+      </div>
+      <button class="icon-button" type="button" onclick="loadServerStorage()" aria-label="Refresh disk usage" title="Refresh disk usage"><i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i></button>
+    </div>
+    <div class="server-storage-meter" role="meter" aria-label="Disk usage on the server's storage volume" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="Loading disk usage">
+      <span data-storage-meter-fill></span>
+    </div>
+    <div class="server-storage-details"><strong data-storage-percent>—</strong><span data-storage-free>Available space: —</span></div>
+    <p class="server-storage-note">This shows the whole volume, including files from other services.</p>
+  </article>
+</section>
