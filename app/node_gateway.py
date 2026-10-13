@@ -95,6 +95,23 @@ def _required_permissions(path: str, method: str) -> set[str] | None:
     return None
 
 
+def _upstream_timeout(path: str, method: str) -> httpx.Timeout:
+    """Allow long pauses while streaming a large backup through the hub."""
+    match = SERVER_REF.search(path)
+    suffix = path[match.end():].strip("/") if match else ""
+    if method.upper() in {"GET", "HEAD"} and suffix == "backups/download":
+        return httpx.Timeout(60.0, connect=8.0, read=600.0)
+    return httpx.Timeout(60.0, connect=8.0)
+
+
+def _proxy_response_headers(headers) -> dict[str, str]:
+    return {
+        key: value
+        for key, value in headers.items()
+        if key.lower() not in HOP_BY_HOP_HEADERS
+    }
+
+
 def _permitted(user: User, required: set[str], path: str) -> bool:
     match = SERVER_REF.search(path)
     suffix = path[match.end():].strip("/") if match else ""
@@ -315,14 +332,17 @@ async def maybe_proxy_remote_server(request: Request):
         for key, value in request.headers.items()
         if key.lower() in {
             "accept", "accept-language", "content-type", "hx-current-url", "hx-request",
-            "hx-target", "hx-trigger", "hx-trigger-name", "range", "user-agent",
+            "hx-target", "hx-trigger", "hx-trigger-name", "if-range", "range", "user-agent",
         }
     }
     headers["Authorization"] = f"Bearer {token}"
     headers["X-Craftarr-User"] = proxy_claim
     headers["X-Craftarr-Actor"] = actor_name
 
-    client = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=8.0), follow_redirects=False)
+    client = httpx.AsyncClient(
+        timeout=_upstream_timeout(request.url.path, request.method),
+        follow_redirects=False,
+    )
     try:
         outgoing = client.build_request(
             request.method,
@@ -377,11 +397,7 @@ async def maybe_proxy_remote_server(request: Request):
             headers={"Cache-Control": "no-store"},
         )
 
-    response_headers = {
-        key: value
-        for key, value in response.headers.items()
-        if key.lower() not in HOP_BY_HOP_HEADERS and key.lower() != "content-length"
-    }
+    response_headers = _proxy_response_headers(response.headers)
     response_headers["cache-control"] = "no-store"
     if "location" in response_headers:
         response_headers["location"] = _rewrite_remote_server_ids(response_headers["location"], node_id)

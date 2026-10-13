@@ -17,8 +17,10 @@ from app.models import NodeAccessToken, RemoteNode, RemoteServer, Server, User
 from app.node_gateway import (
     _permitted,
     _proxy_user_claim,
+    _proxy_response_headers,
     _required_permissions,
     _rewrite_remote_html,
+    _upstream_timeout,
 )
 from app.node_security import generate_node_token, verify_node_token
 from app.remote_nodes import RemoteNodeError, normalize_remote_url, sync_node_servers
@@ -220,6 +222,22 @@ def test_gateway_maps_remote_operations_and_rewrites_server_refs():
     assert _required_permissions(
         f"/api/web/servers/{node_id}:42/storage", "GET"
     ) == {"servers.view"}
+    assert _upstream_timeout(
+        f"/api/web/servers/{node_id}:42/backups/download", "GET"
+    ).read == 600.0
+    assert _upstream_timeout(
+        f"/api/web/servers/{node_id}:42/metrics", "GET"
+    ).read == 60.0
+    response_headers = _proxy_response_headers({
+        "content-length": "10485760",
+        "content-range": "bytes 0-10485759/10737418240",
+        "accept-ranges": "bytes",
+        "transfer-encoding": "chunked",
+    })
+    assert response_headers["content-length"] == "10485760"
+    assert response_headers["content-range"] == "bytes 0-10485759/10737418240"
+    assert response_headers["accept-ranges"] == "bytes"
+    assert "transfer-encoding" not in response_headers
     assert _required_permissions(f"/servers/{node_id}:42", "GET") == {"servers.view"}
 
     path = f"/api/web/servers/{node_id}:42/plugins/monitoring/global"
