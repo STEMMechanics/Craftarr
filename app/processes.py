@@ -529,7 +529,9 @@ def force_stop_server(server_id: int) -> bool:
 
         try:
             kill_result = subprocess.run(
-                ["systemctl", "kill", "--signal=SIGKILL", "--kill-whom=all", unit],
+                # --kill-who is accepted by older systemd releases and remains
+                # supported as an alias by newer systemctl versions.
+                ["systemctl", "kill", "--signal=SIGKILL", "--kill-who=all", unit],
                 capture_output=True,
                 text=True,
                 timeout=15,
