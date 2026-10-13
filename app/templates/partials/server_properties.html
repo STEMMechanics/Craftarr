@@ -41,6 +41,24 @@
         {% if user.can("backups.manage") %}<p class="paper-safety-note"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i> For safety, make a backup before updating. <a href="/servers/{{ server.id }}/backups" hx-get="/servers/{{ server.id }}/backups" hx-target="#page-content" hx-push-url="true">Open Backups</a></p>{% endif %}
         <p id="paper-update-message" class="paper-update-message muted-small"></p>
     </section>
+
+    <div id="paper-version-change-modal" class="modal-backdrop" hidden onclick="if (event.target === this) closePaperVersionChangeModal()">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="paper-version-change-heading" aria-describedby="paper-version-change-warning">
+            <h2 id="paper-version-change-heading">Back up before changing Minecraft version?</h2>
+            <p id="paper-version-change-warning">
+                Changing Minecraft from <strong id="paper-version-change-from"></strong> to
+                <strong id="paper-version-change-to"></strong> can upgrade world data. That upgrade
+                may not be reversible by reinstalling an older version. Create a backup before continuing.
+            </p>
+            {% if user.can("backups.manage") %}
+            <p class="modal-note"><a href="/servers/{{ server.id }}/backups" hx-get="/servers/{{ server.id }}/backups" hx-target="#page-content" hx-push-url="true">Open Backups to create one</a></p>
+            {% endif %}
+            <div class="modal-actions">
+                <button class="button" type="button" onclick="closePaperVersionChangeModal()">Cancel</button>
+                <button id="confirm-paper-version-change" class="button danger" type="button" onclick="confirmPaperVersionChange()">I have a backup, continue</button>
+            </div>
+        </div>
+    </div>
     {% endif %}
 
     <div

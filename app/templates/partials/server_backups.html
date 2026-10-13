@@ -37,8 +37,7 @@
             <i class="fa-solid fa-circle-info"></i>
 
             <span>
-                You can make a backup while the server is online.
-                Stop the server before you restore a backup.
+                You can make a backup while the server is online. Stop it before restoring a backup, then restart it to load the restored files.
             </span>
         </div>
     </div>
@@ -155,13 +154,13 @@
     hidden
 >
 
-    <div class="modal-card">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="restore-backup-heading">
 
-        <h2>
+        <h2 id="restore-backup-heading">
             Restore backup?
         </h2>
 
-        <p>
+        <p id="restore-backup-introduction">
             The current server files will be
             replaced with:
         </p>
@@ -172,14 +171,19 @@
             ></strong>
         </p>
 
-        <p class="modal-note">
+        <p id="restore-backup-preserved-note" class="modal-note">
             The backups directory itself is
             preserved.
+        </p>
+
+        <p id="restore-backup-running-note" class="modal-note" role="status" aria-live="polite" hidden>
+            Stop the server before restoring this backup. Once it is stopped, Restore will be available here. Start the server afterward to load the restored files.
         </p>
 
         <div class="modal-actions">
 
             <button
+                id="close-restore-backup"
                 class="button"
                 onclick="closeRestoreBackupModal()"
             >
@@ -187,6 +191,7 @@
             </button>
 
             <button
+                id="confirm-restore-backup"
                 class="button danger"
                 onclick="confirmRestoreBackup()"
             >
