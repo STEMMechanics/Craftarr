@@ -252,12 +252,10 @@ small, .muted-small { color: var(--sm-muted); }
 .server-control-label:hover:not(:disabled) { filter: brightness(.96); transform: none; }
 .server-control-label.start { background: var(--sm-green-dark); color: #fff; }
 .server-control-label.stop { background: #fbbf24; color: #3d2a0b; }
-.server-control-label.force-stop { background: #b42318; color: #fff; }
 .server-control-label.restart { background: var(--sm-purple-dark); color: #fff; }
 .server-control-label:disabled { opacity: .52; filter: saturate(.46); box-shadow: none; transform: none; cursor: not-allowed; }
 .server-actions .server-control-label.start:hover:not(:disabled) { background: #116b34; color: #fff; }
 .server-actions .server-control-label.stop:hover:not(:disabled) { background: #fcd34d; color: #3d2a0b; filter: none; }
-.server-actions .server-control-label.force-stop:hover:not(:disabled) { background: #912018; color: #fff; filter: none; }
 .server-actions .server-control-label.restart:hover:not(:disabled) { background: #5f30c0; color: #fff; }
 .page-content { width: auto; min-width: 0; margin: 12px 0 0 18px; padding: clamp(22px, 3vw, 38px) clamp(18px, 3vw, 42px) 44px; border-radius: var(--sm-radius-md); background: rgba(255,255,255,1); }
 #page-content:has(.players-page) { background-image: url("/static/images/server-manager/players-overview.webp"); }
@@ -873,6 +871,17 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 /* Property, settings, users and machine pages */
 .property-section { margin-bottom: 16px; padding: 19px; }
 .property-section > .card-header { font-size: 17px; }
+.server-danger-zone { overflow: hidden; padding: 0; }
+.server-danger-zone-summary { display: flex; min-height: 54px; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 19px; color: var(--sm-text); cursor: pointer; font-size: 16px; font-weight: 700; list-style: none; }
+.server-danger-zone-summary::-webkit-details-marker { display: none; }
+.server-danger-zone-summary > span { display: inline-flex; align-items: center; gap: 9px; }
+.server-danger-zone-summary > span > i { color: #b42318; }
+.server-danger-zone-chevron { color: var(--sm-muted); transition: transform .15s ease; }
+.server-danger-zone[open] .server-danger-zone-chevron { transform: rotate(180deg); }
+.server-danger-zone-content { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 16px 19px 19px; border-top: 1px solid #e6edf3; }
+.server-danger-zone-content > div { min-width: 0; }
+.server-danger-zone-content p { margin: 5px 0 0; color: var(--sm-muted); font-size: 12px; line-height: 1.5; }
+.server-danger-zone-content .button { flex: 0 0 auto; }
 .property-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; }
 .property-field { display: flex; min-width: 0; flex-direction: column; gap: 7px; }
 .property-field.full-width { grid-column: 1 / -1; }
@@ -895,7 +904,6 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .system-instance-row .server-control-button { width: 42px; height: 42px; min-height: 42px; flex: 0 0 42px; padding: 0; border-radius: 12px; background: #fff; }
 .system-instance-row .server-control-button.start { border-color: #b9e2c7; background: #e7f7ec; color: #17613a; }
 .system-instance-row .server-control-button.stop { border-color: #f0d4ac; background: #fff5e6; color: #874900; }
-.system-instance-row .server-control-button.force-stop { border-color: #f0c6c2; background: #fff4f2; color: #a43730; }
 .system-instance-row .server-control-button:disabled { opacity: .5; cursor: not-allowed; }
 .system-instance-state { display: block; color: var(--sm-muted); font-size: 11px; font-weight: 700; }
 .account-page, .user-edit-page, .users-page, .settings-page, .system-page, .properties-page, .advanced-properties-page { display: flex; flex-direction: column; gap: 16px; }
@@ -1131,6 +1139,7 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
   .file-editor-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .property-grid, .paper-management-body { grid-template-columns: 1fr; }
   .property-field.full-width, .paper-management-body > div, .paper-management-body > .button { grid-column: auto; }
+  .server-danger-zone-content { align-items: flex-start; flex-direction: column; }
   .property-name-row { align-items: stretch; flex-direction: column; }
   .stats-grid, .player-summary-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .server-log-row { grid-template-columns: minmax(0,1fr); gap: 4px; }

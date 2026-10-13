@@ -4806,12 +4806,6 @@ input[type="checkbox"] {
   color: var(--danger);
 }
 
-.server-control-button.force-stop {
-  border-color: #f0c6c2;
-  background: #fff4f2;
-  color: #a43730;
-}
-
 .server-control-button.restart {
   color: var(--accent);
 }
@@ -7492,8 +7486,6 @@ textarea::placeholder {
 .topbar-server-control.start:hover:not(:disabled) { border-color: #116d3b; background: #116d3b; color: #fff; }
 .topbar-server-control.stop { border-color: #f0c6c2; background: #fff4f2; color: #a43730; }
 .topbar-server-control.stop:hover:not(:disabled) { border-color: #e2aaa5; background: #ffebe8; color: #922b25; }
-.topbar-server-control.force-stop { border-color: #b42318; background: #b42318; color: #fff; }
-.topbar-server-control.force-stop:hover:not(:disabled) { border-color: #912018; background: #912018; color: #fff; }
 .topbar-server-control.restart { border-color: #d3deec; background: #f4f7fb; color: #385c83; }
 .topbar-server-control.restart:hover:not(:disabled) { border-color: #b9cde4; background: #eaf1f8; color: #2b4e74; }
 .topbar-server-progress { border-color: #f0d1a5; background: #fff7e8; color: #874900; cursor: default; pointer-events: none; }

@@ -232,7 +232,7 @@ def test_force_stop_kills_and_forgets_panel_owned_process(monkeypatch):
     monkeypatch.setattr(processes, "stats_process_roots", {7: 7})
     monkeypatch.setattr(processes, "stats_process_started_at", {7: 1.0})
 
-    processes.force_stop_server(7)
+    assert processes.force_stop_server(7) is True
 
     assert process.killed is True
     assert process.waited == 5
@@ -258,12 +258,33 @@ def test_systemd_force_stop_requests_stop_then_kills_unit(monkeypatch):
     )
     monkeypatch.setattr(processes.time, "sleep", lambda _seconds: None)
 
-    processes.force_stop_server(1)
+    assert processes.force_stop_server(1) is True
 
     assert commands == [
         ["systemctl", "stop", "--no-block", "craftarr-server@survival.service"],
         ["systemctl", "kill", "--signal=SIGKILL", "--kill-whom=all", "craftarr-server@survival.service"],
     ]
+
+
+def test_force_stop_is_a_noop_when_server_is_already_stopped(monkeypatch):
+    config = processes.ServerProcessConfig("systemd", "survival", "/srv/server", "2G", "paper.jar", "")
+    monkeypatch.setattr(processes, "_systemd_config", lambda _server_id: config)
+    monkeypatch.setattr(
+        processes, "_systemd_status", lambda _config: {"running": False, "active_state": "inactive"},
+    )
+
+    assert processes.force_stop_server(1) is False
+
+
+def test_force_stop_reports_unavailable_systemd_status(monkeypatch):
+    config = processes.ServerProcessConfig("systemd", "survival", "/srv/server", "2G", "paper.jar", "")
+    monkeypatch.setattr(processes, "_systemd_config", lambda _server_id: config)
+    monkeypatch.setattr(
+        processes, "_systemd_status", lambda _config: {"running": False, "active_state": "unknown"},
+    )
+
+    with pytest.raises(RuntimeError, match="Could not determine whether the server is running"):
+        processes.force_stop_server(1)
 
 
 def test_stop_server_and_wait_waits_for_panel_owned_process(monkeypatch):

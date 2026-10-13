@@ -1177,12 +1177,12 @@ async function updateSystemStats() {
           const id = String(server.id);
           const state = server.state || (server.running ? "running" : "stopped");
           const startable = state === "stopped";
-          const action = startable ? "start" : state === "stopping" ? "force-stop" : "stop";
-          const actionLabel = action === "force-stop" ? "Force stop" : startable ? "Start" : "Stop";
-          const disabled = action === "start" || action === "force-stop"
+          const action = startable ? "start" : "stop";
+          const actionLabel = startable ? "Start" : "Stop";
+          const disabled = startable
             ? ""
             : (state === "running" && server.console_available !== false ? "" : "disabled");
-          const actionIcon = action === "start" ? "play" : action === "force-stop" ? "skull-crossbones" : "stop";
+          const actionIcon = action === "start" ? "play" : "stop";
           return `
             <div class="system-instance-row">
               <div><span class="server-status-dot ${statusClass(state)}" data-server-id="${escapeHtml(id)}" aria-hidden="true"></span><strong>${escapeHtml(server.name)}</strong>
@@ -1364,7 +1364,6 @@ async function updateServerStatus() {
   const stopButton = document.getElementById("dashboard-stop");
   const topbarStart = document.getElementById("topbar-server-start");
   const topbarStop = document.getElementById("topbar-server-stop");
-  const topbarForceStop = document.getElementById("topbar-server-force-stop");
   const topbarRestart = document.getElementById("topbar-server-restart");
   const topbarProgress = document.getElementById("topbar-server-progress");
   const topbar = document.querySelector(".topbar");
@@ -1377,17 +1376,7 @@ async function updateServerStatus() {
   const setControls = (state, consoleAvailable) => {
     if (startButton) startButton.disabled = state !== "stopped";
     if (stopButton) {
-      const forceStop = state === "stopping";
-      const actionLabel = forceStop ? "Force stop" : "Stop";
-      stopButton.disabled = forceStop ? false : !consoleAvailable || state !== "running";
-      stopButton.classList.toggle("force-stop", forceStop);
-      stopButton.classList.toggle("stop", !forceStop);
-      stopButton.setAttribute("aria-label", `${actionLabel} server`);
-      stopButton.onclick = () => serverAction(forceStop ? "force-stop" : "stop");
-      const label = stopButton.querySelector("span");
-      if (label) label.textContent = actionLabel;
-      const icon = stopButton.querySelector("i");
-      if (icon) icon.className = `fa-solid fa-${forceStop ? "skull-crossbones" : "stop"}`;
+      stopButton.disabled = !consoleAvailable || state !== "running";
     }
     if (restartButton) restartButton.disabled = !consoleAvailable || state !== "running";
 
@@ -1406,17 +1395,13 @@ async function updateServerStatus() {
       topbarStop.hidden = !canOperate;
       topbarStop.disabled = !canOperate;
     }
-    if (topbarForceStop) {
-      topbarForceStop.hidden = state !== "stopping";
-      topbarForceStop.disabled = state !== "stopping";
-    }
     if (topbarRestart) {
       topbarRestart.hidden = !canOperate;
       topbarRestart.disabled = !canOperate;
     }
 
     const nodeOffline = state === "node_offline";
-    for (const control of [startButton, stopButton, restartButton, topbarForceStop]) {
+    for (const control of [startButton, stopButton, restartButton]) {
       if (control && nodeOffline) control.disabled = true;
     }
 
@@ -1433,7 +1418,7 @@ async function updateServerStatus() {
       stopButton.title = nodeOffline
         ? "Node offline"
         : state === "stopping"
-        ? "Terminate the server immediately; unsaved changes may be lost"
+        ? "Server is shutting down"
         : state === "starting"
           ? "Wait for the server to finish starting"
           : !consoleAvailable
@@ -1453,11 +1438,6 @@ async function updateServerStatus() {
     }
     if (topbarStart) topbarStart.title = nodeOffline ? "Node offline" : "Start server";
     if (topbarStop) topbarStop.title = nodeOffline ? "Node offline" : "Stop server";
-    if (topbarForceStop) {
-      topbarForceStop.title = nodeOffline
-        ? "Node offline"
-        : "Terminate the server immediately; unsaved changes may be lost";
-    }
     if (topbarRestart) topbarRestart.title = nodeOffline ? "Node offline" : "Restart server";
   };
 
@@ -1608,24 +1588,19 @@ async function updateServerDots() {
         if (label) label.textContent = serverStateLabel(state, data.console_available);
         const button = row?.querySelector(".server-control-button");
         if (button) {
-          const action = state === "stopping"
-            ? "force-stop"
-            : state === "stopped" ? "start" : "stop";
-          const actionLabel = action === "force-stop" ? "Force stop" : action === "start" ? "Start" : "Stop";
-          const actionIcon = action === "force-stop" ? "skull-crossbones" : action === "start" ? "play" : "stop";
+          const action = state === "stopped" ? "start" : "stop";
+          const actionLabel = action === "start" ? "Start" : "Stop";
+          const actionIcon = action === "start" ? "play" : "stop";
           button.dataset.serverAction = action;
           button.className = `server-control-button ${action}`;
           button.setAttribute("aria-label", `${actionLabel} ${row.querySelector("strong")?.textContent || "server"}`);
-          button.title = action === "force-stop"
-            ? "Terminate immediately; unsaved changes may be lost"
-            : `${actionLabel} server`;
+          button.title = `${actionLabel} server`;
+          button.onclick = () => systemServerAction(serverId, action, button);
           const icon = button.querySelector("i");
           if (icon) icon.className = `fa-solid fa-${actionIcon}`;
           button.disabled = state === "node_offline" || (action === "start"
             ? state !== "stopped"
-            : action === "force-stop"
-              ? state !== "stopping"
-              : data.console_available === false || state !== "running");
+            : data.console_available === false || state !== "running");
         }
       });
 
@@ -8202,16 +8177,18 @@ updateBackupJobs();
 
 async function serverAction(
   action,
+  sourceButton = null,
 ) {
   const topbar = document.querySelector(
     ".topbar",
   );
 
-  if (!topbar) {
+  if (!topbar && !sourceButton) {
     return;
   }
 
-  const serverId = topbar.dataset.serverId ||
+  const serverId = sourceButton?.closest(".properties-page[data-server-id]")?.dataset.serverId ||
+    topbar?.dataset.serverId ||
     document.querySelector(".server-overview[data-server-id]")?.dataset.serverId;
 
   if (!serverId) {
@@ -8219,7 +8196,7 @@ async function serverAction(
   }
 
   if (action === "force-stop"
-    && !window.confirm("Force stop this server now? Unsaved world changes may be lost.")) return;
+    && !window.confirm("Force stop this server immediately? Unsaved world changes may be lost. If it is already stopped, nothing will happen.")) return;
 
   const controls = [
     "dashboard-start",
@@ -8227,9 +8204,9 @@ async function serverAction(
     "dashboard-restart",
     "topbar-server-start",
     "topbar-server-stop",
-    "topbar-server-force-stop",
     "topbar-server-restart",
   ].map((id) => document.getElementById(id)).filter(Boolean);
+  if (sourceButton) controls.push(sourceButton);
   controls.forEach((button) => { button.disabled = true; });
 
   try {
@@ -8244,14 +8221,27 @@ async function serverAction(
     if (!response.ok) {
       showToast(data.error || `Unable to ${action} server`, "error");
       await updateServerStatus();
+      if (sourceButton) sourceButton.disabled = false;
       return;
+    }
+
+    if (action === "force-stop") {
+      const alreadyStopped = data.stopped === false;
+      showToast(
+        alreadyStopped ? "Server is already stopped." : "Server force-stopped.",
+        alreadyStopped ? "info" : "success",
+      );
     }
 
     // Give the process a moment to change state.
     setTimeout(
       async () => {
-        await updateServerStatus();
-        await updatePluginsPage();
+        try {
+          await updateServerStatus();
+          await updatePluginsPage();
+        } finally {
+          if (sourceButton) sourceButton.disabled = false;
+        }
       },
       500,
     );
@@ -8262,6 +8252,7 @@ async function serverAction(
     );
     showToast("Could not reach the server. Try again.", "error");
     await updateServerStatus();
+    if (sourceButton) sourceButton.disabled = false;
   }
 }
 
@@ -8686,8 +8677,6 @@ async function restartConsoleService() {
 }
 
 async function systemServerAction(serverId, action, button = null) {
-  if (action === "force-stop"
-    && !window.confirm("Force stop this server now? Unsaved world changes may be lost.")) return;
   if (button) button.disabled = true;
   try {
     const response = await fetch(`/api/web/servers/${serverId}/${action}`, {
