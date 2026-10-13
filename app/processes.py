@@ -504,6 +504,71 @@ def stop_server(
     process_lifecycle_states[server_id] = "stopping"
 
 
+def force_stop_server(server_id: int) -> None:
+    config = _systemd_config(server_id)
+    if config:
+        if not _systemd_status(config)["running"]:
+            raise RuntimeError("Server is not running")
+
+        unit = _systemd_unit_name(config)
+        try:
+            stop_result = subprocess.run(
+                ["systemctl", "stop", "--no-block", unit],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise RuntimeError(f"Could not request the server to stop: {error}") from error
+        if stop_result.returncode != 0:
+            detail = (stop_result.stderr or stop_result.stdout or "systemctl stop failed").strip()
+            raise RuntimeError(detail)
+
+        try:
+            kill_result = subprocess.run(
+                ["systemctl", "kill", "--signal=SIGKILL", "--kill-whom=all", unit],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise RuntimeError(f"Could not force-stop the server: {error}") from error
+
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if not _systemd_status(config)["running"]:
+                return
+            time.sleep(0.25)
+
+        if kill_result.returncode != 0:
+            detail = (kill_result.stderr or kill_result.stdout or "systemctl kill failed").strip()
+            raise RuntimeError(detail)
+        raise RuntimeError("The server is still shutting down")
+
+    process = processes.get(server_id)
+    if not process or process.poll() is not None:
+        raise RuntimeError("Server is not running")
+
+    console_buffers.setdefault(server_id, deque(maxlen=MAX_CONSOLE_LINES)).append(
+        "[Panel] Force-stopping server immediately; unsaved world changes may be lost."
+    )
+    try:
+        process.kill()
+    except OSError as error:
+        if process.poll() is None:
+            raise RuntimeError(f"Could not force-stop the server: {error}") from error
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("The server process did not exit after a force stop") from error
+
+    processes.pop(server_id, None)
+    process_lifecycle_states.pop(server_id, None)
+    stats_processes.pop(server_id, None)
+    stats_process_roots.pop(server_id, None)
+    stats_process_started_at.pop(server_id, None)
+
+
 def run_pre_stop_commands(server_id: int, commands: str) -> None:
     lines = [line.strip() for line in (commands or "").splitlines() if line.strip()]
     if len(lines) > 20:

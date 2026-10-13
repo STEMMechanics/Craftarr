@@ -1,4 +1,5 @@
 import gzip
+from datetime import timezone
 
 import pytest
 
@@ -26,6 +27,7 @@ def test_lists_and_reads_plain_and_compressed_logs(tmp_path):
     compressed, truncated = read_server_log(server_at(tmp_path), "2026-08-11-1.log.gz")
 
     assert {entry["name"] for entry in entries} == {"latest.log", "2026-08-11-1.log.gz"}
+    assert all(entry["modified"].tzinfo is timezone.utc for entry in entries)
     assert "All dimensions are saved" in compressed
     assert truncated is False
 

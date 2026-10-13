@@ -40,10 +40,7 @@ def logs_data(
     logs, page, total_pages = paginated_logs(server, page)
     return {
         "logs": [
-            {
-                **log,
-                "modified_display": log["modified"].strftime("%Y-%m-%d %H:%M:%S"),
-            }
+            log
             for log in logs
         ],
         "page": page,

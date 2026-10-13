@@ -882,9 +882,7 @@ function renderNotifications() {
             : String(item.kind).startsWith("backup-")
               ? "fa-box-archive"
               : "fa-puzzle-piece";
-    const time = item.checked_at && !Number.isNaN(Date.parse(item.checked_at))
-      ? new Date(item.checked_at).toLocaleString()
-      : "";
+    const time = item.checked_at ? formatBrowserTimestamp(item.checked_at) : "";
     return `<a class="notification-item${unreadClass}" href="${escapeHtml(href)}" role="listitem" data-notification-id="${escapeHtml(item.id)}">
       <span class="notification-item-icon" aria-hidden="true"><i class="fa-solid ${icon}"></i></span>
       <span class="notification-item-copy"><strong>${escapeHtml(item.title || "Update available")}</strong><small>${escapeHtml(item.message || "")}</small>${time ? `<time datetime="${escapeHtml(item.checked_at)}">${escapeHtml(time)}</time>` : ""}</span>
@@ -1171,14 +1169,17 @@ async function updateSystemStats() {
           const id = String(server.id);
           const state = server.state || (server.running ? "running" : "stopped");
           const startable = state === "stopped";
-          const action = startable ? "start" : "stop";
-          const actionLabel = startable ? "Start" : "Stop";
-          const disabled = startable ? "" : (state === "running" && server.console_available !== false ? "" : "disabled");
+          const action = startable ? "start" : state === "stopping" ? "force-stop" : "stop";
+          const actionLabel = action === "force-stop" ? "Force stop" : startable ? "Start" : "Stop";
+          const disabled = action === "start" || action === "force-stop"
+            ? ""
+            : (state === "running" && server.console_available !== false ? "" : "disabled");
+          const actionIcon = action === "start" ? "play" : action === "force-stop" ? "skull-crossbones" : "stop";
           return `
             <div class="system-instance-row">
               <div><span class="server-status-dot ${statusClass(state)}" data-server-id="${escapeHtml(id)}" aria-hidden="true"></span><strong>${escapeHtml(server.name)}</strong>
                 <small class="system-instance-state">${escapeHtml(serverStateLabel(state, server.console_available))}</small><small>Paper ${escapeHtml(server.version || "unknown")} · Java ${escapeHtml(server.java || "unknown")} · ${Number(server.players) || 0} online</small></div>
-              <button class="server-control-button ${action}" ${disabled} aria-label="${actionLabel} ${escapeHtml(server.name)}" title="${actionLabel} server" onclick="systemServerAction('${escapeJsString(id)}', '${action}', this)"><i class="fa-solid fa-${startable ? "play" : "stop"}" aria-hidden="true"></i></button>
+              <button class="server-control-button ${action}" data-server-action="${action}" ${disabled} aria-label="${actionLabel} ${escapeHtml(server.name)}" title="${actionLabel} server" onclick="systemServerAction('${escapeJsString(id)}', '${action}', this)"><i class="fa-solid fa-${actionIcon}" aria-hidden="true"></i></button>
             </div>`;
         }).join("")
         : '<div class="empty-message">No accessible Minecraft instances.</div>';
@@ -1195,7 +1196,8 @@ setInterval(updateSystemStats, 5000);
 
 document.body.addEventListener(
   "htmx:afterSwap",
-  function () {
+  function (event) {
+    localizeBrowserTimestamps(event.detail?.target || document);
     const serverPage = document.querySelector("#page-content > [data-server-id]");
     const topbar = document.querySelector(".topbar[data-server-id]");
     const pageServerId = serverPage?.dataset.serverId || "";
@@ -1354,6 +1356,7 @@ async function updateServerStatus() {
   const stopButton = document.getElementById("dashboard-stop");
   const topbarStart = document.getElementById("topbar-server-start");
   const topbarStop = document.getElementById("topbar-server-stop");
+  const topbarForceStop = document.getElementById("topbar-server-force-stop");
   const topbarRestart = document.getElementById("topbar-server-restart");
   const topbarProgress = document.getElementById("topbar-server-progress");
   const topbar = document.querySelector(".topbar");
@@ -1365,7 +1368,19 @@ async function updateServerStatus() {
 
   const setControls = (state, consoleAvailable) => {
     if (startButton) startButton.disabled = state !== "stopped";
-    if (stopButton) stopButton.disabled = !consoleAvailable || state !== "running";
+    if (stopButton) {
+      const forceStop = state === "stopping";
+      const actionLabel = forceStop ? "Force stop" : "Stop";
+      stopButton.disabled = forceStop ? false : !consoleAvailable || state !== "running";
+      stopButton.classList.toggle("force-stop", forceStop);
+      stopButton.classList.toggle("stop", !forceStop);
+      stopButton.setAttribute("aria-label", `${actionLabel} server`);
+      stopButton.onclick = () => serverAction(forceStop ? "force-stop" : "stop");
+      const label = stopButton.querySelector("span");
+      if (label) label.textContent = actionLabel;
+      const icon = stopButton.querySelector("i");
+      if (icon) icon.className = `fa-solid fa-${forceStop ? "skull-crossbones" : "stop"}`;
+    }
     if (restartButton) restartButton.disabled = !consoleAvailable || state !== "running";
 
     const canStart = state === "stopped";
@@ -1383,13 +1398,17 @@ async function updateServerStatus() {
       topbarStop.hidden = !canOperate;
       topbarStop.disabled = !canOperate;
     }
+    if (topbarForceStop) {
+      topbarForceStop.hidden = state !== "stopping";
+      topbarForceStop.disabled = state !== "stopping";
+    }
     if (topbarRestart) {
       topbarRestart.hidden = !canOperate;
       topbarRestart.disabled = !canOperate;
     }
 
     const nodeOffline = state === "node_offline";
-    for (const control of [startButton, stopButton, restartButton]) {
+    for (const control of [startButton, stopButton, restartButton, topbarForceStop]) {
       if (control && nodeOffline) control.disabled = true;
     }
 
@@ -1406,7 +1425,7 @@ async function updateServerStatus() {
       stopButton.title = nodeOffline
         ? "Node offline"
         : state === "stopping"
-        ? "Server is shutting down"
+        ? "Terminate the server immediately; unsaved changes may be lost"
         : state === "starting"
           ? "Wait for the server to finish starting"
           : !consoleAvailable
@@ -1426,12 +1445,18 @@ async function updateServerStatus() {
     }
     if (topbarStart) topbarStart.title = nodeOffline ? "Node offline" : "Start server";
     if (topbarStop) topbarStop.title = nodeOffline ? "Node offline" : "Stop server";
+    if (topbarForceStop) {
+      topbarForceStop.title = nodeOffline
+        ? "Node offline"
+        : "Terminate the server immediately; unsaved changes may be lost";
+    }
     if (topbarRestart) topbarRestart.title = nodeOffline ? "Node offline" : "Restart server";
   };
 
   try {
     const response = await fetch(
       `/api/web/servers/${serverId}/status`,
+      {cache: "no-store"},
     );
 
     if (!response.ok) {
@@ -1443,6 +1468,9 @@ async function updateServerStatus() {
     const data = await response.json();
 
     const state = normalizeServerState(data);
+    if (page?.dataset.serverId === serverId) {
+      refreshPaperUpdateAvailability(state);
+    }
     if (state === "node_offline") {
       setControls(state, false);
       setOverviewServerState(state, false);
@@ -1572,10 +1600,24 @@ async function updateServerDots() {
         if (label) label.textContent = serverStateLabel(state, data.console_available);
         const button = row?.querySelector(".server-control-button");
         if (button) {
-          const action = button.classList.contains("start") ? "start" : "stop";
+          const action = state === "stopping"
+            ? "force-stop"
+            : state === "stopped" ? "start" : "stop";
+          const actionLabel = action === "force-stop" ? "Force stop" : action === "start" ? "Start" : "Stop";
+          const actionIcon = action === "force-stop" ? "skull-crossbones" : action === "start" ? "play" : "stop";
+          button.dataset.serverAction = action;
+          button.className = `server-control-button ${action}`;
+          button.setAttribute("aria-label", `${actionLabel} ${row.querySelector("strong")?.textContent || "server"}`);
+          button.title = action === "force-stop"
+            ? "Terminate immediately; unsaved changes may be lost"
+            : `${actionLabel} server`;
+          const icon = button.querySelector("i");
+          if (icon) icon.className = `fa-solid fa-${actionIcon}`;
           button.disabled = state === "node_offline" || (action === "start"
             ? state !== "stopped"
-            : data.console_available === false || state !== "running");
+            : action === "force-stop"
+              ? state !== "stopping"
+              : data.console_available === false || state !== "running");
         }
       });
 
@@ -3488,10 +3530,7 @@ function setText(
 function formatLastOnlineDate(date) {
   const differenceMs = date.getTime() - Date.now();
   const absoluteDifferenceMs = Math.abs(differenceMs);
-  const absoluteDate = new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
+  const absoluteDate = formatBrowserTimestamp(date);
 
   if (absoluteDifferenceMs > 30 * 24 * 60 * 60 * 1000) {
     return absoluteDate;
@@ -3635,7 +3674,7 @@ function renderPlayerList() {
         : "Last online unknown";
       const lastOnlineTitle = !hasLastOnlineDate
         ? "No saved player data was found"
-        : `Last online ${new Intl.DateTimeFormat(undefined, {dateStyle: "medium", timeStyle: "short"}).format(lastOnlineDate)}`;
+        : `Last online ${formatBrowserTimestamp(lastOnlineDate)}`;
       const canManagePlayers = document.querySelector(".players-page")?.dataset.canManage === "true";
       const statusBadges = [
         player.whitelisted ? '<span class="player-state-badge is-whitelisted"><i class="fa-solid fa-check" aria-hidden="true"></i>Whitelisted</span>' : "",
@@ -5223,7 +5262,11 @@ function renderBackups(
   }
 
   list.innerHTML = backupData.map(
-    (backup) => `
+    (backup) => {
+      const filename = String(backup.filename || "");
+      const labelMatch = filename.match(/^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:-(.*))?\.zip$/i);
+      const displayName = labelMatch ? (labelMatch[1] || "Backup") : filename;
+      return `
                 <div class="backup-row">
 
                     <div class="backup-main">
@@ -5233,11 +5276,11 @@ function renderBackups(
                         <div>
 
                             <strong>
-                                ${escapeHtml(backup.filename)}
+                                ${escapeHtml(displayName)}
                             </strong>
 
                             <small>
-                                ${escapeHtml(backup.created_display)}
+                                ${escapeHtml(formatBrowserTimestamp(backup.created))}
                                 ·
                                 ${escapeHtml(backup.size_display)}
                             </small>
@@ -5278,7 +5321,8 @@ function renderBackups(
                     </div>
 
                 </div>
-            `,
+            `;
+    },
   )
     .join("");
 }
@@ -6422,8 +6466,9 @@ function createServerLogRow(log, pageElement) {
   icon.className = "fa-regular fa-file-lines";
   icon.setAttribute("aria-hidden", "true");
   name.append(icon, document.createTextNode(log.name));
-  const modified = document.createElement("span");
-  modified.textContent = log.modified_display;
+  const modified = document.createElement("time");
+  modified.dateTime = log.modified || "";
+  modified.textContent = formatBrowserTimestamp(log.modified, "seconds") || "Unknown time";
   const size = document.createElement("span");
   size.textContent = log.size_display;
   link.append(name, modified, size);
@@ -7312,7 +7357,7 @@ async function loadRemoteNodes() {
     updateOffsiteConsoleOptions();
     list.innerHTML = remoteNodeState.length ? remoteNodeState.map((node) => `
       <div class="settings-user-row remote-node-row">
-        <div><strong>${escapeHtml(node.name)}</strong><small>${escapeHtml(node.base_url)} · Craftarr ${escapeHtml(node.app_version || "version unknown")} · ${Number(node.server_count)} server${Number(node.server_count) === 1 ? "" : "s"}${node.app_version !== localVersion ? ' · <span class="remote-node-version-warning">Some functions may not be available because this Node uses a different version.</span>' : ""}${node.offline ? ' · <span class="remote-node-error">Node offline</span>' : ""}${node.last_connected_at ? ` · Last contact ${escapeHtml(new Date(node.last_connected_at).toLocaleString())}` : ""}${node.last_error && !node.offline ? ` · <span class="remote-node-error">${escapeHtml(node.last_error)}</span>` : ""}</small></div>
+        <div><strong>${escapeHtml(node.name)}</strong><small>${escapeHtml(node.base_url)} · Craftarr ${escapeHtml(node.app_version || "version unknown")} · ${Number(node.server_count)} server${Number(node.server_count) === 1 ? "" : "s"}${node.app_version !== localVersion ? ' · <span class="remote-node-version-warning">Some functions may not be available because this Node uses a different version.</span>' : ""}${node.offline ? ' · <span class="remote-node-error">Node offline</span>' : ""}${node.last_connected_at ? ` · Last contact ${escapeHtml(formatBrowserTimestamp(node.last_connected_at))}` : ""}${node.last_error && !node.offline ? ` · <span class="remote-node-error">${escapeHtml(node.last_error)}</span>` : ""}</small></div>
         <div class="remote-node-actions">
           <button class="icon-button" type="button" aria-label="Refresh ${escapeHtml(node.name)}" title="Refresh server list" onclick="refreshRemoteNode('${escapeJsString(node.node_id)}')"><i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i></button>
           <button class="button" type="button" onclick="openRemoteNodeModal('${escapeJsString(node.node_id)}')">Edit</button>
@@ -8142,12 +8187,16 @@ async function serverAction(
     return;
   }
 
+  if (action === "force-stop"
+    && !window.confirm("Force stop this server now? Unsaved world changes may be lost.")) return;
+
   const controls = [
     "dashboard-start",
     "dashboard-stop",
     "dashboard-restart",
     "topbar-server-start",
     "topbar-server-stop",
+    "topbar-server-force-stop",
     "topbar-server-restart",
   ].map((id) => document.getElementById(id)).filter(Boolean);
   controls.forEach((button) => { button.disabled = true; });
@@ -8606,6 +8655,8 @@ async function restartConsoleService() {
 }
 
 async function systemServerAction(serverId, action, button = null) {
+  if (action === "force-stop"
+    && !window.confirm("Force stop this server now? Unsaved world changes may be lost.")) return;
   if (button) button.disabled = true;
   try {
     const response = await fetch(`/api/web/servers/${serverId}/${action}`, {
@@ -8677,6 +8728,7 @@ async function loadPaperVersionStatus() {
   try {
     const response = await fetch(
       `/api/web/servers/${page.dataset.serverId}/paper`,
+      {cache: "no-store"},
     );
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Unable to check Paper");
@@ -8722,14 +8774,7 @@ async function loadPaperVersionStatus() {
     }
     populatePaperBuilds(data.builds || [], data.current_build);
     if (button) {
-      setPaperUpdateAvailability(
-        button,
-        data.running
-          ? "Stop the server before installing a Paper update."
-          : !(data.builds || []).length
-            ? "No Paper updates are available for this version."
-            : "",
-      );
+      refreshPaperUpdateAvailability(data.running ? "running" : "stopped");
     }
     return updateStatus;
   } catch (error) {
@@ -8739,30 +8784,72 @@ async function loadPaperVersionStatus() {
   }
 }
 
-function setPaperUpdateAvailability(button, reason = "") {
+function setPaperUpdateAvailability(button, reason = "", allowExplanationClick = false) {
   if (!button) return;
   button.dataset.unavailableReason = reason;
-  button.setAttribute("aria-disabled", reason ? "true" : "false");
-  button.classList.toggle("is-unavailable", Boolean(reason));
+  button.dataset.allowExplanationClick = allowExplanationClick ? "true" : "false";
+  button.setAttribute("aria-disabled", reason && !allowExplanationClick ? "true" : "false");
+  button.classList.toggle("is-unavailable", Boolean(reason) && !allowExplanationClick);
   button.title = reason;
 }
 
+function refreshPaperUpdateAvailability(state) {
+  const page = document.querySelector(".paper-management[data-server-id]");
+  const button = document.getElementById("paper-update-button");
+  if (!page || !button) return;
+
+  if (state === "running" || state === "starting" || state === "stopping") {
+    setPaperUpdateAvailability(
+      button,
+      "Stop the server before installing this update, then restart it to apply the new version.",
+      true,
+    );
+  } else if (state === "stopped") {
+    setPaperUpdateAvailability(
+      button,
+      button.dataset.hasBuilds === "true" ? "" : "No Paper builds are available for this version.",
+    );
+    const message = document.getElementById("paper-update-message");
+    if (message && /stop the server before/i.test(message.textContent)) {
+      message.textContent = "";
+      message.classList.remove("error");
+    }
+  } else {
+    setPaperUpdateAvailability(button, "Checking server status…");
+  }
+}
+
 function sortMinecraftVersions(versions) {
+  const collator = new Intl.Collator(undefined, {numeric: true, sensitivity: "base"});
+  const parse = (version) => {
+    const match = String(version).trim().match(/^(\d+(?:\.\d+)*)(.*)$/);
+    return match
+      ? {parts: match[1].split(".").map(Number), suffix: match[2]}
+      : {parts: String(version).match(/\d+/g)?.map(Number) || [], suffix: ""};
+  };
   return [...new Set(versions)].sort((left, right) => {
-    const leftParts = String(left).match(/\d+/g)?.map(Number) || [];
-    const rightParts = String(right).match(/\d+/g)?.map(Number) || [];
-    const length = Math.max(leftParts.length, rightParts.length);
+    const leftVersion = parse(left);
+    const rightVersion = parse(right);
+    const length = Math.max(leftVersion.parts.length, rightVersion.parts.length);
     for (let index = 0; index < length; index += 1) {
-      const difference = (rightParts[index] || 0) - (leftParts[index] || 0);
+      const difference = (rightVersion.parts[index] || 0) - (leftVersion.parts[index] || 0);
       if (difference) return difference;
     }
-    return String(right).localeCompare(String(left));
+    if (Boolean(leftVersion.suffix) !== Boolean(rightVersion.suffix)) {
+      return leftVersion.suffix ? 1 : -1;
+    }
+    return collator.compare(rightVersion.suffix, leftVersion.suffix)
+      || collator.compare(String(right), String(left));
   });
 }
 
 function populatePaperBuilds(builds, installedBuild = null) {
   const select = document.getElementById("paper-build-select");
   if (!select) return;
+  const button = document.getElementById("paper-update-button");
+  if (button) {
+    button.dataset.hasBuilds = builds.length ? "true" : "false";
+  }
   if (!builds.length) {
     select.innerHTML = "<option>No build data — restart the panel</option>";
     return;
@@ -8778,7 +8865,6 @@ function populatePaperBuilds(builds, installedBuild = null) {
       escapeHtml(build.id)
     }${labels.length ? ` — ${labels.join(", ")}` : ""}</option>`;
   }).join("");
-  const button = document.getElementById("paper-update-button");
   if (button && builds.length) {
     button.innerHTML = '<i class="fa-solid fa-download" aria-hidden="true"></i> Download and install';
   }
@@ -8833,18 +8919,12 @@ async function loadPaperBuilds(version) {
       `/api/web/servers/${page.dataset.serverId}/paper?version=${
         encodeURIComponent(version)
       }`,
+      {cache: "no-store"},
     );
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Unable to load builds");
     populatePaperBuilds(data.builds || [], data.current_build);
-    setPaperUpdateAvailability(
-      button,
-      data.running
-        ? "Stop the server before installing a Paper update."
-        : !data.builds?.length
-          ? "No Paper updates are available for this version."
-          : "",
-    );
+    refreshPaperUpdateAvailability(data.running ? "running" : "stopped");
   } catch (error) {
     select.innerHTML = `<option>${escapeHtml(error.message)}</option>`;
     setPaperUpdateAvailability(button, "Paper builds could not be loaded.");
@@ -8977,6 +9057,40 @@ function parseUtcTimestamp(value) {
   return new Date(hasTimezone ? timestamp : `${timestamp}Z`);
 }
 
+function formatBrowserTimestamp(value, precision = "minute") {
+  const date = value instanceof Date ? value : parseUtcTimestamp(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const options = {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  };
+  if (precision === "seconds") options.second = "2-digit";
+  return new Intl.DateTimeFormat(undefined, options).format(date);
+}
+
+function localizeBrowserTimestamps(root = document) {
+  const elements = [];
+  if (root?.matches?.("[data-browser-timestamp]")) elements.push(root);
+  elements.push(...(root?.querySelectorAll?.("[data-browser-timestamp]") || []));
+  for (const element of elements) {
+    const label = formatBrowserTimestamp(
+      element.getAttribute("datetime"),
+      element.dataset.browserTimestamp,
+    );
+    if (label) element.textContent = label;
+  }
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", () => localizeBrowserTimestamps(), { once: true });
+} else {
+  localizeBrowserTimestamps();
+}
+
 function drawMetricChart(
   canvasId,
   rows,
@@ -9054,7 +9168,7 @@ function drawMetricChart(
   canvas.title = summary;
   const describePoint = (index) => {
     const row = rows[index];
-    const recorded = row?.recorded_at ? new Date(row.recorded_at).toLocaleString() : `Reading ${index + 1}`;
+    const recorded = row?.recorded_at ? formatBrowserTimestamp(row.recorded_at, "seconds") : `Reading ${index + 1}`;
     return `${label}: ${formatValue(values[index], row)} · ${recorded}`;
   };
   canvas.onmousemove = (event) => {
@@ -9207,7 +9321,7 @@ async function loadServerSchedules() {
         } else {
           idleRestartMessage.textContent = "No players are online. Craftarr is starting the 30-second wait.";
         }
-        const requestedAt = parseUtcTimestamp(idleRestart.requested_at).toLocaleString();
+        const requestedAt = formatBrowserTimestamp(idleRestart.requested_at, "seconds");
         idleRestartDetail.textContent = `${idleRestart.last_error ? `${idleRestart.last_error} · ` : ""}Requested by ${idleRestart.requested_by} at ${requestedAt}.`;
         const cancelButton = idleRestartCard.querySelector(".card-header button");
         if (cancelButton) cancelButton.hidden = !canControl;
@@ -9238,11 +9352,9 @@ async function loadServerSchedules() {
     };
     runs.innerHTML = recentRuns.length ? recentRuns.map((run) => {
       const startedAt = parseUtcTimestamp(run.started_at);
-      const activityTimezone = localScheduleTimezone();
       return `<div class="schedule-run">
         <time datetime="${escapeHtml(run.started_at)}">
-          <strong>${escapeHtml(startedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", timeZone: activityTimezone }))}</strong>
-          <span>${escapeHtml(startedAt.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric", timeZone: activityTimezone }))}</span>
+          <strong>${escapeHtml(formatBrowserTimestamp(startedAt, "seconds"))}</strong>
         </time>
         <div class="schedule-run-detail">
           <strong>${escapeHtml(activityTitle(run))}</strong>

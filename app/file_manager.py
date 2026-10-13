@@ -2,7 +2,7 @@ import shutil
 import stat
 import zipfile
 import yaml
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pathlib import Path
 
@@ -146,7 +146,8 @@ def list_directory(
 
             "modified":
                 datetime.fromtimestamp(
-                    stat.st_mtime
+                    stat.st_mtime,
+                    timezone.utc,
                 ),
 
             "size":

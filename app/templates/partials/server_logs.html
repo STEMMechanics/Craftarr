@@ -21,7 +21,7 @@
                hx-get="/servers/{{ server.id }}/logs?file={{ log.name|urlencode }}"
                hx-target="#page-content" hx-push-url="true">
                 <span class="server-log-name"><i class="fa-regular fa-file-lines" aria-hidden="true"></i>{{ log.name }}</span>
-                <span>{{ log.modified.strftime("%Y-%m-%d %H:%M:%S") }}</span>
+                <time data-browser-timestamp="seconds" datetime="{{ log.modified.isoformat() }}">{{ log.modified.strftime("%Y-%m-%d %H:%M:%S") }} UTC</time>
                 <span>{{ log.size_display }}</span>
             </a>
         </div>

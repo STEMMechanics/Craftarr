@@ -137,13 +137,28 @@ def get_versions() -> list[str]:
         )
 
 
-    # API group ordering is not a version guarantee. Sort numerically so, for
-    # example, 1.21.10 remains newer than 1.7.10 regardless of response order.
-    return sorted(
-        set(versions),
-        key=lambda version: tuple(int(part) for part in re.findall(r"\d+", version)),
-        reverse=True,
-    )
+    # API group ordering is not a version guarantee. Compare numeric release
+    # components naturally, but place a final release ahead of prereleases of
+    # the same version (for example, 26.3 before 26.3-rc-3).
+    def sort_key(version: str) -> tuple:
+        match = re.fullmatch(r"(\d+(?:\.\d+)*)(.*)", str(version).strip())
+        if not match:
+            return (tuple(int(part) for part in re.findall(r"\d+", str(version))), True, ())
+        core, suffix = match.groups()
+        suffix_parts = tuple(
+            (1, int(part)) if part.isdigit() else (0, part.casefold())
+            for part in re.split(r"(\d+)", suffix)
+            if part
+        )
+        return (
+            tuple(int(part) for part in core.split(".")),
+            not suffix,
+            suffix_parts,
+        )
+
+    versions = sorted(set(versions), key=sort_key, reverse=True)
+    # Keep equivalent cores such as 26.3 and 26.3.0 deterministic.
+    return versions
 
 
 def get_builds(version: str) -> list[dict]:
