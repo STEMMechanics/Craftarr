@@ -262,7 +262,7 @@ def test_systemd_force_stop_requests_stop_then_kills_unit(monkeypatch):
 
     assert commands == [
         ["systemctl", "stop", "--no-block", "craftarr-server@survival.service"],
-        ["systemctl", "kill", "--signal=SIGKILL", "--kill-whom=all", "craftarr-server@survival.service"],
+        ["systemctl", "kill", "--signal=SIGKILL", "--kill-who=all", "craftarr-server@survival.service"],
     ]
 
 
