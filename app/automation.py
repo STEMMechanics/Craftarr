@@ -151,8 +151,19 @@ def can_execute_task(task, server_id: int) -> bool:
     return task.task_type not in {"command", "restart"} or bool(server_status(server_id).get("running"))
 
 
-def restart_managed_server(server) -> int | None:
+def announce_server_shutdown(server_id: int, reason: str) -> None:
+    """Write a reason to Minecraft's console log before an automated stop."""
+    try:
+        send_command(server_id, f"say Craftarr is stopping the server for {reason}.")
+    except (RuntimeError, OSError) as error:
+        # The announcement is informational; preserve the existing stop path
+        # when a legacy or unavailable console cannot accept commands.
+        logger.warning("Could not announce server %s shutdown: %s", server_id, error)
+
+
+def restart_managed_server(server, reason: str = "a scheduled restart") -> int | None:
     run_pre_stop_commands(server.id, server.stop_commands)
+    announce_server_shutdown(server.id, reason)
     pid = restart_server(
         server.id,
         server.directory,
@@ -536,7 +547,7 @@ def process_pending_idle_restarts() -> None:
                 pending = current_request
                 requested_by_user_id = pending.requested_by_user_id
                 requested_by_username = pending.requested_by_username
-                restart_managed_server(server)
+                restart_managed_server(server, "plugin updates")
                 db.delete(pending)
                 db.commit()
                 record_audit_event(
@@ -627,6 +638,7 @@ def process_pending_automatic_updates() -> None:
                         run.detail = "Waiting for players to leave; updates install after the server has been empty for 30 seconds"
                         db.commit()
                         continue
+                    announce_server_shutdown(server.id, "scheduled updates")
                     stopped_for_update = True
                     stop_server_and_wait(server.id)
 
