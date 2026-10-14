@@ -223,6 +223,15 @@ window.alert = (message) => showToast(message, "error");
 
 const nativeFetch = window.fetch.bind(window);
 window.fetch = async (...args) => {
+  // Background refreshes with local retry or fallback UI can opt out of the global toast.
+  const requestOptions = args[1] || {};
+  const quietConnectionErrors = requestOptions.quietConnectionErrors === true;
+  if (quietConnectionErrors) {
+    const nativeOptions = { ...requestOptions };
+    delete nativeOptions.quietConnectionErrors;
+    args[1] = nativeOptions;
+  }
+
   try {
     const response = await nativeFetch(...args);
     connectionFailureLatched = false;
@@ -264,12 +273,14 @@ window.fetch = async (...args) => {
     }
     return response;
   } catch (error) {
-    const now = Date.now();
-    if (!connectionFailureLatched && now - lastConnectionFailureToastAt >= 60000) {
-      connectionFailureLatched = true;
-      lastConnectionFailureToastAt = now;
-      showToast("Unable to connect to the server.", "error", 6500);
-    } else connectionFailureLatched = true;
+    if (!quietConnectionErrors) {
+      const now = Date.now();
+      if (!connectionFailureLatched && now - lastConnectionFailureToastAt >= 60000) {
+        connectionFailureLatched = true;
+        lastConnectionFailureToastAt = now;
+        showToast("Unable to connect to the server.", "error", 6500);
+      } else connectionFailureLatched = true;
+    }
     throw error;
   }
 };
@@ -807,7 +818,10 @@ async function syncNotificationReadState() {
   if (notificationReadSyncPromise) return notificationReadSyncPromise;
   notificationReadSyncPromise = (async () => {
     try {
-      const response = await fetch("/api/web/notifications/read", { cache: "no-store" });
+      const response = await fetch("/api/web/notifications/read", {
+        cache: "no-store",
+        quietConnectionErrors: true,
+      });
       if (!response.ok) return;
       const data = await response.json();
       const ids = Array.isArray(data.read_ids) ? data.read_ids.filter((id) => typeof id === "string") : [];
@@ -820,6 +834,7 @@ async function syncNotificationReadState() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ read_ids: [...notificationReadIds].slice(-200) }),
+          quietConnectionErrors: true,
         });
         if (!saveResponse.ok) return;
       }
@@ -842,6 +857,7 @@ function persistNotificationReadState() {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ read_ids: [...notificationReadIds].slice(-200) }),
+    quietConnectionErrors: true,
   }).catch(() => {});
 }
 
@@ -926,7 +942,10 @@ async function refreshNotifications(announceNew = true) {
   if (!document.getElementById("notification-list")) return;
   try {
     await syncNotificationReadState();
-    const response = await fetch("/api/web/notifications", { cache: "no-store" });
+    const response = await fetch("/api/web/notifications", {
+      cache: "no-store",
+      quietConnectionErrors: true,
+    });
     if (!response.ok) return;
     const data = await response.json();
     const next = Array.isArray(data.notifications) ? data.notifications : [];
@@ -959,7 +978,7 @@ async function refreshNotifications(announceNew = true) {
     updateNotifications = next;
     renderNotifications();
   } catch {
-    // The shared connection notice handles an unavailable notification poll.
+    // Keep the current notification state and retry on the next poll.
   }
 }
 
@@ -1450,7 +1469,7 @@ async function updateServerStatus() {
   try {
     const response = await fetch(
       `/api/web/servers/${serverId}/status`,
-      {cache: "no-store"},
+      { cache: "no-store", quietConnectionErrors: true },
     );
 
     if (!response.ok) {
@@ -1531,6 +1550,7 @@ async function updateServerDots() {
     try {
       const response = await fetch(
         `/api/web/servers/${serverId}/status`,
+        { quietConnectionErrors: true },
       );
       if (!response.ok) {
         const payload = await response.json().catch(() => null);
@@ -5238,6 +5258,7 @@ async function updateBackupsPage() {
   try {
     const response = await fetch(
       `/api/web/servers/${page.dataset.serverId}/backups`,
+      { quietConnectionErrors: true },
     );
 
     if (!response.ok) {
@@ -8070,6 +8091,7 @@ async function updateBackupJobs() {
   try {
     const response = await fetch(
       `/api/web/servers/${page.dataset.serverId}/backups/jobs`,
+      { quietConnectionErrors: true },
     );
 
     if (!response.ok) {
