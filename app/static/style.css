@@ -2180,6 +2180,140 @@ button.restart:hover {
   line-height: 1.6;
 }
 
+.code-editor-host .cm-panels {
+  background: #26272d;
+  color: #d4d8df;
+}
+
+.code-editor-host .cm-panels-bottom {
+  border-top: 1px solid #41444c;
+}
+
+.code-editor-host .cm-panel.cm-search {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) repeat(6, max-content);
+  align-items: center;
+  gap: 8px;
+  padding: 12px 44px 12px 14px;
+  background: #26272d;
+  color: #d4d8df;
+  color-scheme: dark;
+}
+
+.code-editor-host .cm-panel.cm-search > br {
+  display: none;
+}
+
+.code-editor-host .cm-panel.cm-search input.cm-textfield {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  height: 34px;
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid #50545e;
+  border-radius: 6px;
+  background: #1d1f24;
+  color: #f3f4f6;
+  font: 13px/1.2 "SFMono-Regular", Consolas, monospace;
+}
+
+.code-editor-host .cm-panel.cm-search > button {
+  display: inline-flex;
+  width: auto;
+  min-width: 0;
+  min-height: 34px;
+  margin: 0;
+  padding: 6px 10px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #50545e;
+  border-radius: 6px;
+  background: #363943;
+  color: #f3f4f6;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  box-shadow: none;
+}
+
+.code-editor-host .cm-panel.cm-search > button:hover {
+  border-color: #788493;
+  background: #424753;
+}
+
+.code-editor-host .cm-panel.cm-search > button:focus-visible,
+.code-editor-host .cm-panel.cm-search input.cm-textfield:focus-visible {
+  outline: 2px solid #72bdc9;
+  outline-offset: 1px;
+}
+
+.code-editor-host .cm-panel.cm-search > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: #d4d8df;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.code-editor-host .cm-panel.cm-search > label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  margin: 0;
+  accent-color: #72bdc9;
+}
+
+.code-editor-host .cm-panel.cm-search > button[name="close"] {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  display: grid;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  margin: 0;
+  padding: 0;
+  place-items: center;
+  border-color: transparent;
+  background: transparent;
+  color: #a9b1bc;
+  font: 20px/1 sans-serif;
+}
+
+.code-editor-host .cm-panel.cm-search > button[name="close"]:hover {
+  border-color: #50545e;
+  background: #363943;
+  color: #fff;
+}
+
+@media (max-width: 760px) {
+  .code-editor-host .cm-panel.cm-search {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    padding: 12px 42px 12px 12px;
+  }
+
+  .code-editor-host .cm-panel.cm-search input.cm-textfield {
+    grid-column: 1 / -1;
+  }
+
+  .code-editor-host .cm-panel.cm-search > button:not([name="close"]) {
+    width: 100%;
+  }
+
+  .code-editor-host .cm-panel.cm-search > label {
+    white-space: normal;
+  }
+}
+
 .editor-warning {
   display: flex;
   align-items: center;
