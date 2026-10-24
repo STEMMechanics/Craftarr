@@ -400,6 +400,67 @@ def list_plugins(server) -> list[dict]:
     )
 
 
+def list_plugin_files(server) -> list[dict]:
+    """Return the cheap part of plugin discovery for an initial page render.
+
+    Reading plugin.yml and scanning each plugin's data directory can be
+    noticeably slower than listing the JAR files themselves. The web UI uses
+    this summary to render the list immediately, then requests each plugin's
+    metadata separately.
+    """
+    directory = plugins_directory(server)
+    if not directory.exists():
+        return []
+
+    plugins = []
+    for path in directory.iterdir():
+        if not path.is_file() or not (
+            path.name.endswith(".jar")
+            or path.name.endswith(".jar.disabled")
+        ):
+            continue
+
+        try:
+            file_stat = path.stat()
+        except OSError:
+            continue
+
+        disabled = path.name.endswith(".jar.disabled")
+        display_filename = path.name[:-9] if disabled else path.name
+        display_name = re.sub(
+            r"[-_ ]v?\d.*$",
+            "",
+            display_filename[:-4],
+        )
+        plugins.append({
+            "filename": path.name,
+            "previous_version": bool(re.search(
+                r"\.(?:previous|rollback)-[0-9a-f]{12}\.jar\.disabled$",
+                path.name,
+                re.IGNORECASE,
+            )),
+            "name": display_name or display_filename,
+            "version": None,
+            "version_source": None,
+            "version_sources": {},
+            "enabled": not disabled,
+            "size": file_stat.st_size,
+            "modified_ns": str(file_stat.st_mtime_ns),
+            "config_directory": None,
+            "config_files": [],
+            "config_file_modified_ns": {},
+            "metadata_loaded": False,
+        })
+
+    return sorted(
+        plugins,
+        key=lambda plugin: (
+            plugin["name"].casefold(),
+            plugin["filename"].removesuffix(".disabled").casefold(),
+        ),
+    )
+
+
 def validate_plugin_archive(path: Path) -> None:
     if path.stat().st_size > MAX_PLUGIN_BYTES:
         raise ValueError("Plugin exceeds the configured size limit")

@@ -3,6 +3,7 @@ let connectionFailureLatched = false;
 let lastConnectionFailureToastAt = 0;
 let authRedirectInProgress = false;
 const observedServerStates = new Map();
+let topbarPlayerCountRequest = null;
 
 function redirectToLogin() {
   if (authRedirectInProgress || ["/login", "/login/tfa"].includes(window.location.pathname)) return;
@@ -1362,6 +1363,7 @@ function markServerNodeOffline(serverId) {
   }));
   const pluginCount = page.querySelector("#plugin-count");
   if (pluginCount) pluginCount.textContent = "Node offline";
+  setTopbarPlayerCount(null);
   page.querySelectorAll(".server-status-dot").forEach((dot) => {
     dot.classList.remove("is-online", "is-offline", "is-starting", "is-stopping", "is-unknown", "running");
     dot.classList.add("is-node-offline");
@@ -1383,6 +1385,45 @@ function markServerFunctionUnavailable(serverId, message) {
   notice.textContent = message || "This function is not available on the selected server Node. Some functions may require a newer Craftarr version.";
 }
 
+function setTopbarPlayerCount(value) {
+  const count = document.getElementById("topbar-player-count");
+  const link = document.getElementById("topbar-player-count-link");
+  if (!count || !link) return;
+  const numericValue = Number(value);
+  const label = Number.isFinite(numericValue)
+    ? `${numericValue} player${numericValue === 1 ? "" : "s"} online`
+    : "Players online: unavailable";
+  count.textContent = Number.isFinite(numericValue) ? String(numericValue) : "—";
+  link.title = label;
+  link.setAttribute("aria-label", label);
+}
+
+async function updateTopbarPlayerCount(serverId) {
+  const link = document.getElementById("topbar-player-count-link");
+  if (!link || !serverId || topbarPlayerCountRequest) return;
+
+  topbarPlayerCountRequest = (async () => {
+    try {
+      const response = await fetch(
+        `/api/web/servers/${serverId}/players/online-count`,
+        {cache: "no-store", quietConnectionErrors: true},
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Unable to read player count.");
+      const topbar = document.querySelector(".topbar");
+      if (topbar?.dataset.serverId === String(serverId)) {
+        setTopbarPlayerCount(data.online_count);
+      }
+    } catch {
+      const topbar = document.querySelector(".topbar");
+      if (topbar?.dataset.serverId === String(serverId)) setTopbarPlayerCount(null);
+    } finally {
+      topbarPlayerCountRequest = null;
+    }
+  })();
+  await topbarPlayerCountRequest;
+}
+
 async function updateServerStatus() {
   const startButton = document.getElementById("dashboard-start");
   const restartButton = document.getElementById("dashboard-restart");
@@ -1397,6 +1438,7 @@ async function updateServerStatus() {
   if (!serverId) {
     return;
   }
+  void updateTopbarPlayerCount(serverId);
 
   const setControls = (state, consoleAvailable) => {
     if (startButton) startButton.disabled = state !== "stopped";
@@ -1655,10 +1697,11 @@ let consoleFilters = new Set();
 let lastConsoleSignature = "";
 let playerData = null;
 let playerFilter = "all";
-let playerSort = "name-asc";
+let playerSort = "last-online-desc";
 let playerPage = 1;
 const PLAYER_PAGE_SIZE = 25;
 let pluginData = [];
+let pluginMetadataLoadGeneration = 0;
 const selectedPluginFilenames = new Set();
 const pluginActionInProgress = new Map();
 let pluginBulkActionInProgress = false;
@@ -1974,14 +2017,16 @@ async function updatePluginsPage(forceDuplicatePrompt = false) {
   );
 
   if (!page) {
+    pluginMetadataLoadGeneration += 1;
     return false;
   }
 
   const serverId = page.dataset.serverId;
+  const loadGeneration = ++pluginMetadataLoadGeneration;
 
   try {
     const response = await fetch(
-      `/api/web/servers/${serverId}/plugins`,
+      `/api/web/servers/${serverId}/plugins?defer=true`,
       {cache: "no-store"},
     );
     const data = await response.json();
@@ -1996,27 +2041,14 @@ async function updatePluginsPage(forceDuplicatePrompt = false) {
       return false;
     }
 
-    pluginData = data.plugins || [];
+    pluginData = (data.plugins || []).map((plugin) => ({
+      ...plugin,
+      metadata_loading: plugin.metadata_loaded !== true,
+      metadata_error: false,
+    }));
     const currentPluginFilenames = new Set(pluginData.map((plugin) => plugin.filename));
     for (const filename of selectedPluginFilenames) {
       if (!currentPluginFilenames.has(filename)) selectedPluginFilenames.delete(filename);
-    }
-    pluginDuplicateGroups = data.duplicates || [];
-    duplicatePluginFilenames = new Set(
-      pluginDuplicateGroups.flatMap((group) =>
-        group.plugins.map((plugin) => plugin.filename)
-      ),
-    );
-    duplicatePluginDetails = new Map();
-    for (const group of pluginDuplicateGroups) {
-      for (const plugin of group.plugins) {
-        duplicatePluginDetails.set(
-          plugin.filename,
-          group.plugins
-            .filter((candidate) => candidate.filename !== plugin.filename)
-            .map((candidate) => candidate.filename),
-        );
-      }
     }
 
     pluginRestartRequired = data.restart_required === true;
@@ -2025,8 +2057,10 @@ async function updatePluginsPage(forceDuplicatePrompt = false) {
 
     showPluginRestartAlert();
 
+    rebuildPluginDuplicates();
     renderPlugins();
     showPluginDuplicatesModal(forceDuplicatePrompt);
+    await loadPluginDetails(serverId, loadGeneration);
     return true;
   } catch {
     const list = document.getElementById(
@@ -2038,6 +2072,92 @@ async function updatePluginsPage(forceDuplicatePrompt = false) {
     }
     return false;
   }
+}
+
+function rebuildPluginDuplicates() {
+  const grouped = new Map();
+  const displayNames = new Map();
+  for (const plugin of pluginData) {
+    if (plugin.metadata_loaded !== true || plugin.enabled !== true) continue;
+    const name = String(plugin.name || "").trim();
+    const key = name.toLowerCase();
+    if (!key) continue;
+    displayNames.set(key, displayNames.get(key) || name);
+    const item = {
+      filename: plugin.filename,
+      version: plugin.version || null,
+    };
+    if (plugin.size !== undefined && plugin.size !== null) item.size = plugin.size;
+    if (plugin.modified_ns !== undefined && plugin.modified_ns !== null) item.modified_ns = plugin.modified_ns;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(item);
+  }
+
+  pluginDuplicateGroups = [...grouped.entries()]
+    .filter(([, plugins]) => plugins.length > 1)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, plugins]) => ({
+      name: displayNames.get(key),
+      plugins: plugins.sort((left, right) => left.filename.localeCompare(right.filename)),
+    }));
+
+  duplicatePluginFilenames = new Set(
+    pluginDuplicateGroups.flatMap((group) => group.plugins.map((plugin) => plugin.filename)),
+  );
+  duplicatePluginDetails = new Map();
+  for (const group of pluginDuplicateGroups) {
+    for (const plugin of group.plugins) {
+      duplicatePluginDetails.set(
+        plugin.filename,
+        group.plugins
+          .filter((candidate) => candidate.filename !== plugin.filename)
+          .map((candidate) => candidate.filename),
+      );
+    }
+  }
+}
+
+async function loadPluginDetails(serverId, loadGeneration) {
+  const filenames = pluginData.map((plugin) => plugin.filename);
+  await Promise.all(filenames.map(async (filename) => {
+    try {
+      const response = await fetch(
+        `/api/web/servers/${serverId}/plugins/detail?filename=${encodeURIComponent(filename)}`,
+        {cache: "no-store"},
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.plugin) {
+        throw new Error(data.error || "Unable to load plugin details.");
+      }
+
+      const page = document.querySelector(".plugins-page");
+      if (loadGeneration !== pluginMetadataLoadGeneration
+        || !page?.isConnected
+        || page.dataset.serverId !== String(serverId)) return;
+      const index = pluginData.findIndex((plugin) => plugin.filename === filename);
+      if (index < 0) return;
+      pluginData[index] = {
+        ...pluginData[index],
+        ...data.plugin,
+        metadata_loaded: true,
+        metadata_loading: false,
+        metadata_error: false,
+      };
+      rebuildPluginDuplicates();
+      renderPlugins();
+      showPluginDuplicatesModal();
+    } catch {
+      const page = document.querySelector(".plugins-page");
+      if (loadGeneration !== pluginMetadataLoadGeneration
+        || !page?.isConnected
+        || page.dataset.serverId !== String(serverId)) return;
+      const plugin = pluginData.find((item) => item.filename === filename);
+      if (!plugin) return;
+      plugin.metadata_loading = false;
+      plugin.metadata_error = true;
+      renderPlugins();
+    }
+  }));
 }
 
 function selectPluginJar(button) {
@@ -2463,10 +2583,10 @@ function renderPlugins() {
 
   const plugins = pluginData.filter(
     (plugin) =>
-      plugin.name
+      String(plugin.name || plugin.filename)
         .toLowerCase()
         .includes(search) ||
-      plugin.filename
+      String(plugin.filename || "")
         .toLowerCase()
         .includes(search),
   );
@@ -2507,11 +2627,13 @@ function renderPlugins() {
 
   list.innerHTML = visiblePlugins.map((plugin) => `
     <article class="plugin-row ${canManage ? "has-plugin-select" : ""} ${plugin.enabled ? "" : "disabled"} ${duplicatePluginFilenames.has(plugin.filename) ? "duplicate" : ""} ${pluginActionInProgress.has(plugin.filename) ? "is-processing" : ""}" ${pluginActionInProgress.has(plugin.filename) ? 'aria-busy="true"' : ""}>
-      ${canManage ? `<label class="plugin-select"><input type="checkbox" value="${escapeHtml(plugin.filename)}" aria-label="Select ${escapeHtml(plugin.name)}" ${selectedPluginFilenames.has(plugin.filename) ? "checked" : ""} onchange="togglePluginSelection(this)"></label>` : ""}
+      ${canManage ? `<label class="plugin-select"><input type="checkbox" value="${escapeHtml(plugin.filename)}" aria-label="Select ${escapeHtml(plugin.name || plugin.filename)}" ${selectedPluginFilenames.has(plugin.filename) ? "checked" : ""} onchange="togglePluginSelection(this)"></label>` : ""}
       <span class="plugin-status-indicator ${plugin.enabled ? "is-enabled" : "is-disabled"}" aria-hidden="true" title="${plugin.enabled ? "Enabled" : "Disabled"}"></span>
       <div class="plugin-main">
         <div class="plugin-name-line">
-          <strong>${escapeHtml(plugin.name)}</strong>
+          <strong>${escapeHtml(plugin.name || plugin.filename)}</strong>
+          ${plugin.metadata_loading ? '<small class="plugin-metadata-loading"><i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i> Loading details…</small>' : ""}
+          ${plugin.metadata_error ? '<small class="plugin-metadata-error">Details unavailable</small>' : ""}
         </div>
         ${renderPluginVersionStatus(plugin, canManage)}
         <dl class="plugin-file-meta">
@@ -2542,7 +2664,12 @@ function updateBulkPluginSelectionUI(visiblePlugins = []) {
     selectVisible.indeterminate = visibleSelected > 0 && visibleSelected < visiblePlugins.length;
     selectVisible.disabled = pluginBulkActionInProgress || visiblePlugins.length === 0;
   }
-  toolbar.querySelectorAll("button").forEach((button) => { button.disabled = pluginBulkActionInProgress || selectedCount === 0; });
+  toolbar.querySelectorAll(".plugin-bulk-action-button").forEach((button) => {
+    button.disabled = pluginBulkActionInProgress || selectedCount === 0;
+  });
+  toolbar.querySelectorAll(".plugin-selection-button").forEach((button) => {
+    button.disabled = pluginBulkActionInProgress || pluginData.length === 0;
+  });
 }
 
 function togglePluginSelection(input) {
@@ -2556,13 +2683,21 @@ function togglePluginSelection(input) {
 function selectVisiblePlugins(checked) {
   const search = (document.getElementById("plugin-search")?.value || "").trim().toLowerCase();
   for (const plugin of pluginData) {
-    if (plugin.name.toLowerCase().includes(search) || plugin.filename.toLowerCase().includes(search)) {
+    if (String(plugin.name || plugin.filename).toLowerCase().includes(search)
+      || String(plugin.filename || "").toLowerCase().includes(search)) {
       if (checked) selectedPluginFilenames.add(plugin.filename);
       else selectedPluginFilenames.delete(plugin.filename);
     }
   }
   renderPlugins();
   document.getElementById("plugin-select-visible")?.focus({preventScroll: true});
+}
+
+function selectPluginsByState(enabled) {
+  for (const plugin of pluginData) {
+    if (plugin.enabled === enabled) selectedPluginFilenames.add(plugin.filename);
+  }
+  renderPlugins();
 }
 
 function clearPluginSelection() {
@@ -2611,6 +2746,9 @@ function renderPluginActions(plugin, canViewFiles, canEditFiles) {
   if (pendingAction) {
     const label = pendingAction === "enable" ? "Enabling plugin…" : "Disabling plugin…";
     return `<div class="plugin-actions is-processing" role="status" aria-live="polite"><i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i><span>${label}</span></div>`;
+  }
+  if (plugin.metadata_loaded !== true) {
+    return `<div class="plugin-actions plugin-actions-loading" role="status"><i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i><span>${plugin.metadata_error ? "Details unavailable" : "Loading details…"}</span></div>`;
   }
 
   const folderPath = plugin.config_directory ? `plugins/${plugin.config_directory}` : "";
@@ -2672,6 +2810,9 @@ function pluginHasDownloadableUpdate(plugin) {
 }
 
 function renderPluginVersionStatus(plugin, canManage = false) {
+  if (plugin?.metadata_loaded !== true) {
+    return `<div class="plugin-version-status-row"><span class="server-inline-update-status plugin-update-status is-pending"><i class="fa-solid ${plugin?.metadata_error ? "fa-triangle-exclamation" : "fa-spinner fa-spin"}" aria-hidden="true"></i>${plugin?.metadata_error ? "Details unavailable" : "Loading details…"}</span></div>`;
+  }
   if (plugin?.enabled !== true) return "";
   const update = plugin.update;
   const updateInstalledVersion = plugin.version_source === "filename"

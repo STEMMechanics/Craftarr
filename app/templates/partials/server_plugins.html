@@ -68,12 +68,14 @@
     {% if user.can("plugins.manage") %}
     <div id="plugin-bulk-actions" class="plugin-bulk-actions" hidden>
       <label class="plugin-select-visible"><input id="plugin-select-visible" type="checkbox" onchange="selectVisiblePlugins(this.checked)"><span>Select visible</span></label>
+      <button class="button secondary plugin-selection-button" type="button" onclick="selectPluginsByState(true)">Select all enabled</button>
+      <button class="button secondary plugin-selection-button" type="button" onclick="selectPluginsByState(false)">Select all disabled</button>
       <span id="plugin-selection-count" class="muted-small">0 selected</span>
       <div class="plugin-bulk-buttons">
-        <button class="button" type="button" onclick="bulkPluginAction('enable')"><i class="fa-solid fa-toggle-on" aria-hidden="true"></i> Enable</button>
-        <button class="button" type="button" onclick="bulkPluginAction('disable')"><i class="fa-solid fa-toggle-off" aria-hidden="true"></i> Disable</button>
-        <button class="button danger" type="button" onclick="bulkPluginAction('remove')"><i class="fa-solid fa-trash" aria-hidden="true"></i> Delete</button>
-        <button class="button secondary" type="button" onclick="clearPluginSelection()">Clear</button>
+        <button class="button plugin-bulk-action-button" type="button" onclick="bulkPluginAction('enable')"><i class="fa-solid fa-toggle-on" aria-hidden="true"></i> Enable</button>
+        <button class="button plugin-bulk-action-button" type="button" onclick="bulkPluginAction('disable')"><i class="fa-solid fa-toggle-off" aria-hidden="true"></i> Disable</button>
+        <button class="button danger plugin-bulk-action-button" type="button" onclick="bulkPluginAction('remove')"><i class="fa-solid fa-trash" aria-hidden="true"></i> Delete</button>
+        <button class="button secondary plugin-bulk-action-button" type="button" onclick="clearPluginSelection()">Clear</button>
       </div>
     </div>
     {% endif %}

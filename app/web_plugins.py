@@ -30,6 +30,8 @@ from .plugin_manager import (
     disable_plugin,
     enable_plugin,
     list_plugins,
+    list_plugin_files,
+    plugin_info,
     remove_plugin,
     install_plugin_file,
     install_plugin_url,
@@ -285,6 +287,7 @@ def plugins_page(
 def plugins_data(
     server_id: int,
     request: Request,
+    defer: bool = False,
     db: Session = Depends(get_db),
 ):
 
@@ -313,6 +316,18 @@ def plugins_data(
 
     if has_permission(user, "plugins.manage"):
         normalize_previous_plugin_filenames(server)
+
+    if defer:
+        return {
+            "plugins": list_plugin_files(server),
+            "metadata_deferred": True,
+            "duplicates": [],
+            "geyser": None,
+            "restart_required": server.plugins_dirty,
+            "restart_when_empty_scheduled": db.get(PendingIdleRestart, server.id) is not None,
+            "running": running,
+        }
+
     plugins = list_plugins(server)
     from .update_monitor import plugin_results
     from .plugin_monitoring import monitoring_config
@@ -347,6 +362,52 @@ def plugins_data(
         "running":
             running,
     }
+
+
+@router.get("/api/web/servers/{server_id}/plugins/detail")
+def plugin_detail(
+    server_id: int,
+    request: Request,
+    filename: str = "",
+    db: Session = Depends(get_db),
+):
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not server or not has_permission(user, "plugins.view"):
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+
+    if has_permission(user, "plugins.manage"):
+        normalize_previous_plugin_filenames(server)
+    try:
+        path = safe_plugin_path(server, filename)
+    except ValueError:
+        return JSONResponse({"error": "Select a valid plugin file"}, status_code=400)
+    if not path.is_file():
+        return JSONResponse({"error": "Plugin file not found"}, status_code=404)
+
+    plugin = plugin_info(path)
+    from .update_monitor import plugin_results
+    from .plugin_monitoring import monitoring_config
+
+    if plugin.get("enabled") is True:
+        update = next(
+            (
+                item for item in plugin_results(db, server, [plugin])
+                if item.get("component") == plugin["filename"]
+            ),
+            None,
+        )
+        plugin["update"] = update
+        corrected_filename = (update or {}).get("suggested_filename")
+        if corrected_filename:
+            plugin["suggested_filename"] = corrected_filename
+    else:
+        _, config = monitoring_config(db, server.id, plugin["name"])
+        plugin["update"] = {"monitoring": config}
+
+    plugin["metadata_loaded"] = True
+    return {"plugin": plugin}
 
 
 @router.post("/api/web/servers/{server_id}/plugins/update")

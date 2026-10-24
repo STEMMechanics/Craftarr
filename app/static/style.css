@@ -7584,6 +7584,10 @@ textarea::placeholder {
   background: transparent;
 }
 
+.topbar-player-count { display: inline-flex; min-height: 36px; align-items: center; gap: 6px; padding: 0 5px; color: #48627a; font-size: 12px; font-weight: 700; text-decoration: none; }
+.topbar-player-count:hover { color: var(--sm-blue-dark); text-decoration: none; }
+.topbar-player-count i { color: var(--sm-blue); font-size: 13px; }
+
 .topbar-server-controls[hidden],
 .topbar-server-control[hidden] {
   display: none;

@@ -2,17 +2,23 @@
 
     <div class="files-toolbar">
 
-        <div class="file-path">
-
-            <i class="fa-regular fa-folder"></i>
-
-            <span>/</span>
-
+        <nav class="file-path" aria-label="Current folder">
+            <a class="file-path-root" href="/servers/{{ server.id }}/files"
+                hx-get="/servers/{{ server.id }}/files" hx-target="#page-content" hx-push-url="true"
+                aria-label="Server root" title="Server root">
+                <i class="fa-regular fa-folder" aria-hidden="true"></i>
+            </a>
             {% if current_path %}
-            <span>{{ current_path }}</span>
+            {% set breadcrumb = namespace(path='') %}
+            {% for segment in current_path.split('/') if segment %}
+            {% set breadcrumb.path = breadcrumb.path ~ ('/' if breadcrumb.path else '') ~ segment %}
+            <span class="file-path-separator" aria-hidden="true">/</span>
+            <a class="file-path-segment" href="/servers/{{ server.id }}/files?path={{ breadcrumb.path|urlencode }}"
+                hx-get="/servers/{{ server.id }}/files?path={{ breadcrumb.path|urlencode }}"
+                hx-target="#page-content" hx-push-url="true">{{ segment }}</a>
+            {% endfor %}
             {% endif %}
-
-        </div>
+        </nav>
 
 
         {% if user.can("files.manage") %}<div class="files-toolbar-actions">
@@ -62,8 +68,8 @@
 
         {% if parent_path is not none %}
 
-        <a class="file-row" href="/servers/{{ server.id }}/files?path={{ parent_path }}"
-            hx-get="/servers/{{ server.id }}/files?path={{ parent_path }}" hx-target="#page-content" hx-push-url="true">
+        <a class="file-row" href="/servers/{{ server.id }}/files?path={{ parent_path|urlencode }}"
+            hx-get="/servers/{{ server.id }}/files?path={{ parent_path|urlencode }}" hx-target="#page-content" hx-push-url="true">
 
             <div class="file-name">
 
@@ -94,8 +100,8 @@
                 {% if entry.is_dir %}
                 <i class="fa-solid fa-folder file-entry-icon file-folder" aria-hidden="true" data-folder-icon></i>
 
-                <a class="file-folder-target" href="/servers/{{ server.id }}/files?path={{ entry.path }}"
-                    hx-get="/servers/{{ server.id }}/files?path={{ entry.path }}" hx-target="#page-content"
+                <a class="file-folder-target" href="/servers/{{ server.id }}/files?path={{ entry.path|urlencode }}"
+                    hx-get="/servers/{{ server.id }}/files?path={{ entry.path|urlencode }}" hx-target="#page-content"
                     hx-push-url="true" data-folder-path="{{ entry.path }}" ondragover="handleFolderDragOver(event)"
                     ondragleave="handleFolderDragLeave(event)" ondrop="handleFolderDrop(event)">
                     {{ entry.name }}
