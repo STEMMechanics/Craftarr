@@ -6,7 +6,8 @@ import pytest
 
 from app.plugin_manager import (
     _validate_public_https_url, duplicate_plugin_groups, geyser_status,
-    enable_plugin, install_plugin_file, install_plugin_update, list_plugins,
+    enable_plugin, install_plugin_file, install_plugin_update, list_plugin_files,
+    list_plugins,
     PluginFileExistsError,
 )
 from app.web_plugins import plugin_action_requires_restart
@@ -82,6 +83,24 @@ def test_install_plugin_file_validates_and_installs_atomically(tmp_path):
 
     assert result["name"] == "Example"
     assert (server_root / "plugins" / "example.jar").is_file()
+
+
+def test_list_plugin_files_returns_fast_file_summaries(tmp_path):
+    plugin_directory = tmp_path / "plugins"
+    plugin_directory.mkdir()
+    (plugin_directory / "Example-1.0.jar").write_bytes(b"not inspected yet")
+    (plugin_directory / "Legacy.jar.disabled").write_bytes(b"disabled")
+
+    plugins = list_plugin_files(SimpleNamespace(directory=str(tmp_path)))
+
+    assert [plugin["filename"] for plugin in plugins] == [
+        "Example-1.0.jar",
+        "Legacy.jar.disabled",
+    ]
+    assert plugins[0]["name"] == "Example"
+    assert plugins[0]["metadata_loaded"] is False
+    assert plugins[0]["version"] is None
+    assert plugins[1]["enabled"] is False
 
 
 def test_install_plugin_file_requires_confirmation_before_replacing(tmp_path):

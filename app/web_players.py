@@ -19,6 +19,7 @@ from .player_manager import (
     ban_player,
     deop_player,
     get_player_data,
+    get_online_players,
     kick_player,
     op_player,
     pardon_player,
@@ -151,6 +152,20 @@ def players_data(
     return get_player_data(
         server
     )
+
+
+@router.get("/api/web/servers/{server_id}/players/online-count")
+def players_online_count(
+    server_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not server or not has_permission(user, "players.view"):
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+    return {"online_count": len(get_online_players(server.id))}
 
 
 @router.post(

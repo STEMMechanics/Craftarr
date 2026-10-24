@@ -1,8 +1,18 @@
 {% set topbar_server = active_server if active_server else none %}
 <div class="topbar" data-server-id="{{ topbar_server.id if topbar_server else '' }}">
   <div class="topbar-actions">
-    {% if user.can('servers.control') %}
+    {% if topbar_server and (user.can('servers.control') or user.can('players.view')) %}
     <div class="topbar-server-controls" role="group" aria-label="Selected server controls" {% if not topbar_server %}hidden{% endif %}>
+      {% if user.can('players.view') %}
+      <a id="topbar-player-count-link" class="topbar-player-count" href="/servers/{{ topbar_server.id }}/players"
+         hx-get="/servers/{{ topbar_server.id }}/players" hx-target="#page-content" hx-push-url="true"
+         aria-label="Players online: checking" title="Players online: checking">
+        <i class="fa-solid fa-users" aria-hidden="true"></i>
+        <span id="topbar-player-count">—</span>
+        <span class="visually-hidden">players online</span>
+      </a>
+      {% endif %}
+      {% if user.can('servers.control') %}
       <span id="topbar-server-status" class="topbar-server-status" role="status" aria-label="Server status: checking" title="Checking">
         <span id="topbar-server-status-dot" class="server-status-dot is-unknown" aria-hidden="true"></span>
       </span>
@@ -10,6 +20,7 @@
       <button id="topbar-server-start" class="topbar-server-control start" type="button" onclick="serverAction('start')" aria-label="Start selected server" title="Start server" hidden disabled><i class="fa-solid fa-play" aria-hidden="true"></i></button>
       <button id="topbar-server-stop" class="topbar-server-control stop" type="button" onclick="serverAction('stop')" aria-label="Stop selected server" title="Stop server" hidden disabled><i class="fa-solid fa-stop" aria-hidden="true"></i></button>
       <button id="topbar-server-restart" class="topbar-server-control restart" type="button" onclick="serverAction('restart')" aria-label="Restart selected server" title="Restart server" hidden disabled><i class="fa-solid fa-rotate-right" aria-hidden="true"></i></button>
+      {% endif %}
     </div>
     {% endif %}
 

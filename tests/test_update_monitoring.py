@@ -332,6 +332,35 @@ def test_web_permissions(db, tmp_path, monkeypatch, path, method, permission):
     assert request(url).status_code == 200
 
 
+def test_deferred_plugin_listing_loads_metadata_per_plugin(db, tmp_path, monkeypatch):
+    row = server(db, tmp_path)
+    user = SimpleNamespace(
+        enabled=True,
+        role='user',
+        access_role=None,
+        can=lambda permission: permission == 'plugins.view',
+    )
+    monkeypatch.setattr(web_plugins, 'get_accessible_server', lambda *args: (user, row))
+    monkeypatch.setattr(web_plugins, 'server_status', lambda *_args: {})
+    monkeypatch.setattr(web_plugins, 'list_plugins', lambda *_args: pytest.fail('full plugin discovery ran during deferred listing'))
+
+    app = FastAPI()
+    app.include_router(web_plugins.router)
+    app.dependency_overrides[get_db] = lambda: db
+    client = TestClient(app)
+
+    summary = client.get(f'/api/web/servers/{row.id}/plugins?defer=true')
+    assert summary.status_code == 200
+    assert summary.json()['metadata_deferred'] is True
+    assert summary.json()['plugins'][0]['metadata_loaded'] is False
+
+    detail = client.get(f'/api/web/servers/{row.id}/plugins/detail?filename=arbitrary-name.jar')
+    assert detail.status_code == 200
+    assert detail.json()['plugin']['name'] == 'ViaVersion'
+    assert detail.json()['plugin']['version'] == '5.5.0'
+    assert detail.json()['plugin']['metadata_loaded'] is True
+
+
 def test_http_timeout_redirects_and_bounded_body(monkeypatch):
     # Exercise the real transport helper with httpx MockTransport, never live HTTP.
     client = httpx.Client
