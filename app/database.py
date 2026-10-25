@@ -3,6 +3,7 @@ from .env import getenv
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
+from sqlalchemy.pool import NullPool
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 
@@ -52,6 +53,11 @@ engine = create_engine(
     connect_args={
         "check_same_thread": False,
     },
+    # The console serves browser polling, background automation, and linked
+    # Node requests concurrently. A bounded SQLite QueuePool can leave every
+    # request waiting behind a slow status or console read, so open a short
+    # lived connection per session instead.
+    poolclass=NullPool,
 )
 
 
