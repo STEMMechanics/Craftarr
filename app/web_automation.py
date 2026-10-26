@@ -316,7 +316,7 @@ def delete_schedule(server_id: int, task_id: int, request: Request, db: Session 
 
 
 @router.post("/api/web/servers/{server_id}/idle-restart")
-def schedule_idle_restart(server_id: int, request: Request, db: Session = Depends(get_db)):
+async def schedule_idle_restart(server_id: int, request: Request, db: Session = Depends(get_db)):
     user, server = get_accessible_server(server_id, request, db)
     if not user:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
@@ -325,19 +325,37 @@ def schedule_idle_restart(server_id: int, request: Request, db: Session = Depend
     from .processes import server_status
     if not server_status(server.id).get("running"):
         return JSONResponse({"error": "The server is stopped, so a player-free restart was not queued"}, status_code=409)
+
+    update_labels = []
+    try:
+        payload = await request.json()
+    except (ValueError, TypeError):
+        payload = {}
+    if isinstance(payload, dict) and isinstance(payload.get("updates"), list):
+        for value in payload["updates"]:
+            if not isinstance(value, str):
+                continue
+            label = " ".join(value.split()).strip()
+            if label:
+                update_labels.append(label)
+    reason = "to apply plugin updates"
+    if update_labels:
+        reason += ": " + ", ".join(update_labels)
+    reason = reason[:255].rstrip(" .,;")
+
     pending = db.get(PendingIdleRestart, server.id)
     if pending is None:
         pending = PendingIdleRestart(
             server_id=server.id,
             requested_by_user_id=user.id,
             requested_by_username=user.username,
-            reason="Plugin update",
+            reason=reason,
         )
         db.add(pending)
     else:
         pending.requested_by_user_id = user.id
         pending.requested_by_username = user.username
-        pending.reason = "Plugin update"
+        pending.reason = reason
         pending.requested_at = datetime.utcnow()
         pending.empty_since = None
         pending.last_error = None
@@ -345,7 +363,7 @@ def schedule_idle_restart(server_id: int, request: Request, db: Session = Depend
     from .automation import wake_idle_restart_monitor
     wake_idle_restart_monitor()
     request.state.audit_action = "Player-free restart scheduled"
-    request.state.audit_details = "Plugin update"
+    request.state.audit_details = reason
     return {"success": True, "restart_when_empty_scheduled": True}
 
 

@@ -4,6 +4,11 @@ let lastConnectionFailureToastAt = 0;
 let authRedirectInProgress = false;
 const observedServerStates = new Map();
 let topbarPlayerCountRequest = null;
+let serverStatusPending = false;
+let serverDotsPending = false;
+let consolePagePending = false;
+let overviewLogsPending = false;
+let sharedSystemOperationPending = false;
 
 function redirectToLogin() {
   if (authRedirectInProgress || ["/login", "/login/tfa"].includes(window.location.pathname)) return;
@@ -1425,6 +1430,7 @@ async function updateTopbarPlayerCount(serverId) {
 }
 
 async function updateServerStatus() {
+  if (serverStatusPending) return;
   const startButton = document.getElementById("dashboard-start");
   const restartButton = document.getElementById("dashboard-restart");
   const stopButton = document.getElementById("dashboard-stop");
@@ -1438,6 +1444,7 @@ async function updateServerStatus() {
   if (!serverId) {
     return;
   }
+  serverStatusPending = true;
   void updateTopbarPlayerCount(serverId);
 
   const setControls = (state, consoleAvailable) => {
@@ -1572,6 +1579,8 @@ async function updateServerStatus() {
     setControls("unknown", false);
     setOverviewServerState("unknown", false);
     setTopbarServerState("unknown", false);
+  } finally {
+    serverStatusPending = false;
   }
 }
 
@@ -1583,6 +1592,8 @@ setInterval(
 );
 
 async function updateServerDots() {
+  if (serverDotsPending) return;
+  serverDotsPending = true;
   const dots = [...document.querySelectorAll(
     ".server-choice .server-status-dot, .sidebar-server-status .server-status-dot, .server-card-status .server-status-dot, .system-instance-row .server-status-dot",
   )];
@@ -1682,6 +1693,7 @@ async function updateServerDots() {
       // Keep the last confirmed state when one status poll fails.
     }
   }
+  serverDotsPending = false;
 }
 
 updateServerDots();
@@ -1702,6 +1714,7 @@ let playerPage = 1;
 const PLAYER_PAGE_SIZE = 25;
 let pluginData = [];
 let pluginMetadataLoadGeneration = 0;
+const PLUGIN_DETAIL_CONCURRENCY = 4;
 const selectedPluginFilenames = new Set();
 const pluginActionInProgress = new Map();
 let pluginBulkActionInProgress = false;
@@ -2119,45 +2132,57 @@ function rebuildPluginDuplicates() {
 
 async function loadPluginDetails(serverId, loadGeneration) {
   const filenames = pluginData.map((plugin) => plugin.filename);
-  await Promise.all(filenames.map(async (filename) => {
-    try {
-      const response = await fetch(
-        `/api/web/servers/${serverId}/plugins/detail?filename=${encodeURIComponent(filename)}`,
-        {cache: "no-store"},
-      );
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.plugin) {
-        throw new Error(data.error || "Unable to load plugin details.");
-      }
+  let nextIndex = 0;
 
-      const page = document.querySelector(".plugins-page");
-      if (loadGeneration !== pluginMetadataLoadGeneration
-        || !page?.isConnected
-        || page.dataset.serverId !== String(serverId)) return;
-      const index = pluginData.findIndex((plugin) => plugin.filename === filename);
-      if (index < 0) return;
-      pluginData[index] = {
-        ...pluginData[index],
-        ...data.plugin,
-        metadata_loaded: true,
-        metadata_loading: false,
-        metadata_error: false,
-      };
-      rebuildPluginDuplicates();
-      renderPlugins();
-      showPluginDuplicatesModal();
-    } catch {
-      const page = document.querySelector(".plugins-page");
-      if (loadGeneration !== pluginMetadataLoadGeneration
-        || !page?.isConnected
-        || page.dataset.serverId !== String(serverId)) return;
-      const plugin = pluginData.find((item) => item.filename === filename);
-      if (!plugin) return;
-      plugin.metadata_loading = false;
-      plugin.metadata_error = true;
-      renderPlugins();
+  async function loadNextPluginDetail() {
+    while (nextIndex < filenames.length) {
+      if (loadGeneration !== pluginMetadataLoadGeneration) return;
+      const filename = filenames[nextIndex++];
+
+      try {
+        const response = await fetch(
+          `/api/web/servers/${serverId}/plugins/detail?filename=${encodeURIComponent(filename)}`,
+          {cache: "no-store"},
+        );
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.plugin) {
+          throw new Error(data.error || "Unable to load plugin details.");
+        }
+
+        const page = document.querySelector(".plugins-page");
+        if (loadGeneration !== pluginMetadataLoadGeneration
+          || !page?.isConnected
+          || page.dataset.serverId !== String(serverId)) return;
+        const index = pluginData.findIndex((plugin) => plugin.filename === filename);
+        if (index < 0) continue;
+        pluginData[index] = {
+          ...pluginData[index],
+          ...data.plugin,
+          metadata_loaded: true,
+          metadata_loading: false,
+          metadata_error: false,
+        };
+        rebuildPluginDuplicates();
+        renderPlugins();
+        showPluginDuplicatesModal();
+      } catch {
+        const page = document.querySelector(".plugins-page");
+        if (loadGeneration !== pluginMetadataLoadGeneration
+          || !page?.isConnected
+          || page.dataset.serverId !== String(serverId)) return;
+        const plugin = pluginData.find((item) => item.filename === filename);
+        if (!plugin) continue;
+        plugin.metadata_loading = false;
+        plugin.metadata_error = true;
+        renderPlugins();
+      }
     }
-  }));
+  }
+
+  const workerCount = Math.min(PLUGIN_DETAIL_CONCURRENCY, filenames.length);
+  await Promise.all(
+    Array.from({length: workerCount}, () => loadNextPluginDetail()),
+  );
 }
 
 function selectPluginJar(button) {
@@ -2449,6 +2474,7 @@ async function installPluginUpdates(plugins, deleteCurrentVersion, restartWhenEm
   renderPlugins();
   const total = plugins.length;
   const successes = [];
+  const successDetails = [];
   const retainedPreviousVersions = [];
   const failures = [];
   let idleRestartQueued = false;
@@ -2483,6 +2509,10 @@ async function installPluginUpdates(plugins, deleteCurrentVersion, restartWhenEm
         try { data = await response.json(); } catch { /* Use the HTTP status below. */ }
         if (!response.ok) throw new Error(data.error || "Plugin update failed");
         successes.push(plugin.name);
+        const updatedPlugin = data.plugin || {};
+        const updatedName = updatedPlugin.name || plugin.name;
+        const updatedVersion = updatedPlugin.version || plugin.update?.latest_version || "latest";
+        successDetails.push(`${updatedName} to ${updatedVersion}`);
         if (typeof data.previous_filename === "string" && data.previous_filename) {
           retainedPreviousVersions.push(data.previous_filename);
         }
@@ -2501,6 +2531,8 @@ async function installPluginUpdates(plugins, deleteCurrentVersion, restartWhenEm
       try {
         const response = await nativeFetch(`/api/web/servers/${page.dataset.serverId}/idle-restart`, {
           method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({updates: successDetails}),
         });
         if (handleAuthenticationResponse(response)) {
           progress?.remove();
@@ -3284,6 +3316,7 @@ function escapeJsString(value) {
 }
 
 async function updateConsolePage() {
+  if (consolePagePending) return;
   const page = document.querySelector(
     ".console-page",
   );
@@ -3305,6 +3338,7 @@ async function updateConsolePage() {
   const send = document.getElementById(
     "console-send",
   );
+  consolePagePending = true;
 
   try {
     const response = await fetch(
@@ -3388,6 +3422,8 @@ async function updateConsolePage() {
 
     input.disabled = true;
     send.disabled = true;
+  } finally {
+    consolePagePending = false;
   }
 }
 
@@ -3466,6 +3502,7 @@ setInterval(
 );
 
 async function updateOverviewLogs() {
+  if (overviewLogsPending) return;
   const overview = document.querySelector(
     ".server-overview",
   );
@@ -3483,6 +3520,7 @@ async function updateOverviewLogs() {
   if (!output) {
     return;
   }
+  overviewLogsPending = true;
 
   try {
     const response = await fetch(
@@ -3510,6 +3548,8 @@ async function updateOverviewLogs() {
     output.scrollTop = output.scrollHeight;
   } catch {
     output.textContent = "Unable to load recent logs.";
+  } finally {
+    overviewLogsPending = false;
   }
 }
 
@@ -8747,6 +8787,8 @@ function resumeSystemOperation() {
 }
 
 async function pollSharedSystemOperation() {
+  if (sharedSystemOperationPending) return;
+  sharedSystemOperationPending = true;
   try {
     const response = await nativeFetch("/api/web/settings/system-operation", {
       cache: "no-store",
@@ -8781,6 +8823,8 @@ async function pollSharedSystemOperation() {
     }
   } catch {
     // Connection failures are expected while the console service restarts.
+  } finally {
+    sharedSystemOperationPending = false;
   }
 }
 

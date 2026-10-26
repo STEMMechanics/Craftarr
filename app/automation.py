@@ -37,6 +37,7 @@ POLL_SECONDS = max(5, int(getenv("CRAFTARR_AUTOMATION_POLL_SECONDS", "30")))
 METRIC_SECONDS = max(15, int(getenv("CRAFTARR_METRIC_INTERVAL_SECONDS", "60")))
 METRIC_RETENTION_DAYS = max(1, int(getenv("CRAFTARR_METRIC_RETENTION_DAYS", "30")))
 IDLE_RESTART_EMPTY_SECONDS = 30
+MAX_RESTART_ANNOUNCEMENT_LENGTH = 350
 
 
 def wake_idle_restart_monitor() -> None:
@@ -151,19 +152,48 @@ def can_execute_task(task, server_id: int) -> bool:
     return task.task_type not in {"command", "restart"} or bool(server_status(server_id).get("running"))
 
 
-def announce_server_shutdown(server_id: int, reason: str) -> None:
-    """Write a reason to Minecraft's console log before an automated stop."""
+def format_restart_announcement(reason: str, requested_by: str | None = None) -> str:
+    """Build the single-line message sent through Minecraft's ``say`` command."""
+    normalized_reason = " ".join(str(reason or "").split()).rstrip(".")
+    if not normalized_reason:
+        normalized_reason = "a scheduled restart"
+
+    if normalized_reason.casefold().startswith("server restarting"):
+        message = normalized_reason
+    elif normalized_reason.casefold().startswith(("to ", "after ")):
+        message = f"Server restarting {normalized_reason}"
+    else:
+        message = f"Server restarting: {normalized_reason}"
+
+    requester = " ".join(str(requested_by or "").split()).rstrip(".")
+    if requester:
+        message += f" (requested by {requester})"
+
+    if len(message) >= MAX_RESTART_ANNOUNCEMENT_LENGTH:
+        return message[:MAX_RESTART_ANNOUNCEMENT_LENGTH - 3].rstrip() + "..."
+    return message + "."
+
+
+def announce_server_shutdown(server_id: int, message: str) -> None:
+    """Write a human-readable restart message through Minecraft's console."""
+    message = " ".join(str(message or "").split())
+    if not message:
+        return
     try:
-        send_command(server_id, f"say Craftarr is stopping the server for {reason}.")
+        send_command(server_id, f"say {message}")
     except (RuntimeError, OSError) as error:
         # The announcement is informational; preserve the existing stop path
         # when a legacy or unavailable console cannot accept commands.
-        logger.warning("Could not announce server %s shutdown: %s", server_id, error)
+        logger.warning("Could not announce server %s restart: %s", server_id, error)
 
 
-def restart_managed_server(server, reason: str = "a scheduled restart") -> int | None:
+def restart_managed_server(
+    server,
+    reason: str = "a scheduled restart",
+    requested_by: str | None = None,
+) -> int | None:
     run_pre_stop_commands(server.id, server.stop_commands)
-    announce_server_shutdown(server.id, reason)
+    announce_server_shutdown(server.id, format_restart_announcement(reason, requested_by))
     pid = restart_server(
         server.id,
         server.directory,
@@ -256,25 +286,35 @@ def apply_scheduled_updates(db, server) -> tuple[str, list[str]]:
     return detail, errors
 
 
-def scheduled_updates_available(db, server) -> tuple[bool, list[str]]:
+def scheduled_updates_available(db, server) -> tuple[bool, list[str], list[str]]:
     """Check for installable changes before stopping a running server."""
     from .plugin_manager import list_plugins
     from .paper import get_builds, inspect_paper_jar, match_paper_build
     from .update_monitor import acquire_lease, plugin_results
 
     acquired = False
-    available = False
+    available_updates = []
     errors = []
     try:
         acquire_lease(db, datetime.utcnow())
         acquired = True
         plugins = [plugin for plugin in list_plugins(server) if plugin.get("enabled") and not plugin.get("previous_version")]
+        by_filename = {plugin["filename"]: plugin for plugin in plugins}
         for result in plugin_results(db, server, plugins, fetch=True, force=True):
             if (result.get("update_available") is True
                     and isinstance(result.get("download_url"), str)
                     and result["download_url"].startswith("https://")):
-                available = True
-                break
+                plugin = by_filename.get(result.get("component"))
+                plugin_name = (
+                    result.get("plugin")
+                    or (plugin["name"] if plugin else None)
+                    or result.get("component")
+                    or "Plugin"
+                )
+                available_updates.append(
+                    f"{plugin_name}"
+                    f" to {result.get('latest_version') or 'latest'}"
+                )
 
         try:
             installed = inspect_paper_jar(Path(server.directory) / server.jar_name)
@@ -283,14 +323,15 @@ def scheduled_updates_available(db, server) -> tuple[bool, list[str]]:
             latest = stable[0] if stable else (builds[0] if builds else None)
             if not latest:
                 raise ValueError("No Paper builds are available")
-            available = available or match_paper_build(installed["sha256"], builds) != str(int(latest["id"]))
+            if match_paper_build(installed["sha256"], builds) != str(int(latest["id"])):
+                available_updates.append(f"Paper {installed['version']} build {int(latest['id'])}")
         except Exception as error:
             errors.append(f"Paper: {str(error)[:180]}")
     finally:
         if acquired:
             db.query(UpdateMonitorLease).filter_by(id=1).update({"expires_at": datetime.min})
             db.commit()
-    return available, errors
+    return bool(available_updates), available_updates, errors
 
 
 def execute_task(task_id: int, *, reschedule: bool = True) -> None:
@@ -547,7 +588,10 @@ def process_pending_idle_restarts() -> None:
                 pending = current_request
                 requested_by_user_id = pending.requested_by_user_id
                 requested_by_username = pending.requested_by_username
-                restart_managed_server(server, "plugin updates")
+                idle_reason = pending.reason or "to apply plugin updates"
+                if idle_reason.casefold() in {"plugin update", "plugin updates"}:
+                    idle_reason = "to apply plugin updates"
+                restart_managed_server(server, idle_reason, requested_by_username)
                 db.delete(pending)
                 db.commit()
                 record_audit_event(
@@ -557,7 +601,10 @@ def process_pending_idle_restarts() -> None:
                     actor_user_id=requested_by_user_id,
                     actor_username=requested_by_username,
                     action="Server restarted after players left",
-                    details="The server was restarted after it had no online players for 30 seconds following a plugin update.",
+                    details=(
+                        "The server was restarted after it had no online players for 30 seconds "
+                        f"following {idle_reason}."
+                    ),
                 )
             except Exception:
                 logger.exception("Player-free restart failed for server %s", server_id)
@@ -609,7 +656,7 @@ def process_pending_automatic_updates() -> None:
                         continue
                     if now - pending.empty_since < timedelta(seconds=IDLE_RESTART_EMPTY_SECONDS):
                         continue
-                    available, check_errors = scheduled_updates_available(db, server)
+                    available, available_updates, check_errors = scheduled_updates_available(db, server)
                     if not available:
                         detail = "No available updates"
                         if check_errors:
@@ -638,7 +685,11 @@ def process_pending_automatic_updates() -> None:
                         run.detail = "Waiting for players to leave; updates install after the server has been empty for 30 seconds"
                         db.commit()
                         continue
-                    announce_server_shutdown(server.id, "scheduled updates")
+                    update_summary = ", ".join(available_updates) or "available updates"
+                    announce_server_shutdown(
+                        server.id,
+                        format_restart_announcement(f"to apply updates: {update_summary}"),
+                    )
                     stopped_for_update = True
                     stop_server_and_wait(server.id)
 
