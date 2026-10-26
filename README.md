@@ -85,7 +85,7 @@ Contributors are authors of merged pull requests, ordered by contribution count 
 
 <!-- CONTRIBUTORS:START -->
 <table><tbody>
-<tr><td align="center" width="120"><a href="https://github.com/nomadjimbob"><img src="https://github.com/nomadjimbob.png?size=96" width="72" alt="nomadjimbob"/><br/><sub><b>nomadjimbob</b></sub><br/><sub>105 merged PRs</sub></a></td></tr>
+<tr><td align="center" width="120"><a href="https://github.com/nomadjimbob"><img src="https://github.com/nomadjimbob.png?size=96" width="72" alt="nomadjimbob"/><br/><sub><b>nomadjimbob</b></sub><br/><sub>108 merged PRs</sub></a></td></tr>
 </tbody></table>
 <!-- CONTRIBUTORS:END -->
 
