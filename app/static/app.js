@@ -2474,6 +2474,7 @@ async function installPluginUpdates(plugins, deleteCurrentVersion, restartWhenEm
   renderPlugins();
   const total = plugins.length;
   const successes = [];
+  const successDetails = [];
   const retainedPreviousVersions = [];
   const failures = [];
   let idleRestartQueued = false;
@@ -2508,6 +2509,10 @@ async function installPluginUpdates(plugins, deleteCurrentVersion, restartWhenEm
         try { data = await response.json(); } catch { /* Use the HTTP status below. */ }
         if (!response.ok) throw new Error(data.error || "Plugin update failed");
         successes.push(plugin.name);
+        const updatedPlugin = data.plugin || {};
+        const updatedName = updatedPlugin.name || plugin.name;
+        const updatedVersion = updatedPlugin.version || plugin.update?.latest_version || "latest";
+        successDetails.push(`${updatedName} to ${updatedVersion}`);
         if (typeof data.previous_filename === "string" && data.previous_filename) {
           retainedPreviousVersions.push(data.previous_filename);
         }
@@ -2526,6 +2531,8 @@ async function installPluginUpdates(plugins, deleteCurrentVersion, restartWhenEm
       try {
         const response = await nativeFetch(`/api/web/servers/${page.dataset.serverId}/idle-restart`, {
           method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({updates: successDetails}),
         });
         if (handleAuthenticationResponse(response)) {
           progress?.remove();

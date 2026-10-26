@@ -1,5 +1,5 @@
 from app import automation
-from app.automation import can_execute_task, enforce_backup_retention
+from app.automation import can_execute_task, enforce_backup_retention, format_restart_announcement
 from app.automation import next_cron_run, next_task_run, validate_cron_expression
 from datetime import datetime
 from types import SimpleNamespace
@@ -32,6 +32,13 @@ def test_command_waits_while_server_is_stopped(monkeypatch):
 
     assert can_execute_task(SimpleNamespace(task_type="command"), 12) is False
     assert can_execute_task(SimpleNamespace(task_type="backup"), 12) is True
+
+
+def test_restart_announcement_identifies_reason_and_requester():
+    assert format_restart_announcement("to apply updates: STEMCraft 1.2.3", "james") == (
+        "Server restarting to apply updates: STEMCraft 1.2.3 (requested by james)."
+    )
+    assert format_restart_announcement("a scheduled restart") == "Server restarting: a scheduled restart."
 
 
 def test_initial_metric_failure_does_not_prevent_automation_start(monkeypatch, caplog):

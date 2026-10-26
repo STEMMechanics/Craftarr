@@ -36,6 +36,7 @@ from starlette.background import BackgroundTask
 
 from .database import get_db
 from .audit import record_audit_event
+from .automation import announce_server_shutdown, format_restart_announcement
 
 from .models import (
     Server,
@@ -1378,6 +1379,10 @@ def web_restart_server(
     try:
 
         run_pre_stop_commands(server.id, server.stop_commands)
+        announce_server_shutdown(
+            server.id,
+            format_restart_announcement(f"requested by {user.username}"),
+        )
 
         pid = restart_server(
             server.id,
