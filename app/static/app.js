@@ -8978,6 +8978,51 @@ async function waitForConsoleRestart() {
   updateConsoleVersionStatus();
 }
 
+async function reinstallConsoleService() {
+  const button = document.getElementById("console-reinstall-button");
+  const version = button?.dataset.version || "the current release";
+  if (!confirm(
+    `Download and reinstall Craftarr v${version}? This will overwrite the application files, reinstall dependencies, and restart the console. A rollback backup will be created first.`,
+  )) return;
+
+  beginSystemOperation(
+    "Reinstalling Craftarr",
+    `Downloading and verifying Craftarr v${version}. Do not close this page.`,
+    "installing",
+  );
+
+  const restartButton = document.getElementById("console-restart-button");
+  if (button) button.disabled = true;
+  if (restartButton) restartButton.disabled = true;
+  setConsoleUpdateStatus("is-pending", "fa-spinner fa-spin", "Reinstalling console…");
+
+  try {
+    const response = await fetch("/api/web/settings/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "reinstall" }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Reinstall failed");
+    setConsoleUpdateStatus("is-pending", "fa-spinner fa-spin", "Reinstalled; restarting console…");
+    setSystemOperationState(
+      "Restarting Craftarr",
+      "The current release is installed. Waiting for the console service to return...",
+      "restarting",
+    );
+    if (data.rollback_id) {
+      sessionStorage.setItem("consoleRollbackId", data.rollback_id);
+      document.getElementById("console-rollback-button").hidden = false;
+    }
+    await waitForConsoleRestart();
+  } catch (error) {
+    if (button) button.disabled = false;
+    if (restartButton) restartButton.disabled = false;
+    failSystemOperation(error.message);
+    updateConsoleVersionStatus();
+  }
+}
+
 async function restartConsoleService() {
   if (!confirm("Restart Craftarr now?")) return;
 

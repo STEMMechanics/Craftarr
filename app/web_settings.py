@@ -63,6 +63,7 @@ from .server_access import apply_server_assignments, list_server_choices
 from .update_manager import (
     get_latest_release,
     install_release,
+    reinstall_release,
     rollback_release,
 )
 from .service_restart import console_restart_unavailable_reason, schedule_console_restart
@@ -1490,11 +1491,28 @@ async def install_update(request: Request, db: Session = Depends(get_db)):
     if unavailable_reason:
         return JSONResponse({"error": unavailable_reason}, status_code=409)
     data = await request.json()
-    rollback = data.get("action") == "rollback"
+    action = str(data.get("action") or "").strip().lower()
+    rollback = action == "rollback"
+    reinstall = action == "reinstall"
+    operation_kind = "rollback" if rollback else "reinstall" if reinstall else "update"
+    operation_title = (
+        "Rolling back Craftarr"
+        if rollback
+        else "Reinstalling Craftarr"
+        if reinstall
+        else "Updating Craftarr"
+    )
+    operation_message = (
+        "Restoring the verified application backup."
+        if rollback
+        else "Downloading and verifying the current release before replacing the application files."
+        if reinstall
+        else "Downloading and verifying the selected release."
+    )
     operation = begin_operation(
-        "rollback" if rollback else "update",
-        "Rolling back Craftarr" if rollback else "Updating Craftarr",
-        "Restoring the verified application backup." if rollback else "Downloading and verifying the selected release.",
+        operation_kind,
+        operation_title,
+        operation_message,
         "installing",
     )
     if operation is None:
@@ -1505,6 +1523,8 @@ async def install_update(request: Request, db: Session = Depends(get_db)):
     try:
         if rollback:
             result = rollback_release(str(data.get("rollback_id", "")))
+        elif reinstall:
+            result = reinstall_release()
         else:
             result = install_release(str(data.get("tag", "")))
         update_operation(

@@ -493,6 +493,12 @@
                             v{{ app_version }}
                         </code>
 
+                        {% if installed_release %}
+                        <span class="muted-small" title="SHA-256 of the release archive installed on this Node">
+                            Archive <code>{{ installed_release.archive_sha256[:12] }}</code>
+                        </span>
+                        {% endif %}
+
                         <span id="console-update-status" class="server-inline-update-status is-pending" role="status" aria-live="polite">
                             <i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i>
                             <span>Checking for updates…</span>
@@ -525,6 +531,9 @@
 
             {% if user.can("system.manage") %}
             <div class="settings-console-restart-row">
+                <button id="console-reinstall-button" class="button" onclick="reinstallConsoleService()" data-version="{{ app_version }}" {% if not console_restart_available %}disabled aria-describedby="console-runtime-update-note" title="{% if is_containerized %}Reinstall the container image through TrueNAS or your container manager.{% else %}Console reinstall requires a systemd service.{% endif %}"{% endif %}>
+                    <i class="fa-solid fa-download" aria-hidden="true"></i> Reinstall Console
+                </button>
                 <button id="console-restart-button" class="button" onclick="restartConsoleService()" {% if not console_restart_available %}disabled aria-describedby="console-runtime-update-note" title="{% if is_containerized %}Restart the container from TrueNAS or your container manager.{% else %}Console restart requires a systemd service.{% endif %}"{% endif %}>
                     <i class="fa-solid fa-rotate" aria-hidden="true"></i> Restart Console
                 </button>
