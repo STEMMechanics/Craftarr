@@ -226,8 +226,14 @@ sudo ./scripts/rollback.sh /var/lib/craftarr/upgrades/TIMESTAMP
 ```
 
 The in-panel updater can check for releases, install or roll back an update, and
-restart Craftarr from System Settings. A maintenance lock prevents concurrent
-changes during the operation.
+restart Craftarr from System Settings. **Reinstall Console** downloads the
+current release for the running version, verifies its checksum, replaces the
+application files, and restarts Craftarr while creating a rollback snapshot.
+The installed release archive SHA-256 is shown beside the application version
+and returned by `/api/version`, which distinguishes different artifacts that
+share the same release tag. A maintenance lock prevents concurrent changes
+during the operation. Container installations must be updated through the
+container manager.
 
 ## Uninstall
 

@@ -6,8 +6,10 @@ import pytest
 from app import update_manager
 from app.update_manager import (
     _safe_extract,
+    get_installed_release_info,
     install_release,
     normalize_version,
+    reinstall_release,
     release_asset_urls,
     rollback_release,
 )
@@ -68,6 +70,34 @@ def test_release_asset_urls_match_release_workflow_names():
         "v0.4.14/craftarr-console-0.4.14.tar.gz"
     )
     assert checksum == archive + ".sha256"
+
+
+def test_reinstall_release_uses_running_application_version(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_install_release(tag, project_root=None):
+        calls.append((tag, project_root))
+        return {"installed": tag}
+
+    monkeypatch.setattr(update_manager, "install_release", fake_install_release)
+
+    result = reinstall_release(tmp_path)
+
+    assert result == {"installed": update_manager.APP_VERSION}
+    assert calls == [(update_manager.APP_VERSION, tmp_path)]
+
+
+def test_installed_release_info_validates_archive_identity(tmp_path):
+    info_path = tmp_path / update_manager.RELEASE_INFO_FILE
+    info_path.write_text(
+        '{"archive_sha256":"' + ("a" * 64) + '","tag":"0.4.33"}',
+        encoding="utf-8",
+    )
+
+    assert get_installed_release_info(tmp_path) == {
+        "archive_sha256": "a" * 64,
+        "tag": "0.4.33",
+    }
 
 
 @pytest.mark.parametrize("tag", ["v1", "v../latest", "latest", "v1/2.0", "v1.2.3;id"])

@@ -1,5 +1,6 @@
 import hashlib
 import io
+import json
 import os
 import shutil
 import tarfile
@@ -12,7 +13,7 @@ import urllib.request
 import urllib.error
 import urllib.parse
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .version import APP_VERSION
@@ -115,6 +116,7 @@ def get_latest_release() -> dict:
 
 
 MONITORING_DEFAULTS_FILE = "plugin-monitoring.yml"
+RELEASE_INFO_FILE = ".craftarr-release.json"
 UPDATE_ITEMS = ("app", "migrations", "alembic.ini", "requirements.txt", MONITORING_DEFAULTS_FILE)
 RELEASE_TAG_PATTERN = re.compile(r"^v?[0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?$")
 ROLLBACK_ID_PATTERN = re.compile(r"^[0-9]{8}T[0-9]{6}Z$")
@@ -136,6 +138,43 @@ def _restore_items(root: Path, backup: Path) -> None:
             shutil.copytree(saved, target)
         else:
             shutil.copy2(saved, target)
+
+
+def _restore_release_info(root: Path, backup: Path) -> None:
+    saved = backup / RELEASE_INFO_FILE
+    target = root / RELEASE_INFO_FILE
+    if saved.is_file():
+        shutil.copy2(saved, target)
+    elif target.exists():
+        target.unlink()
+
+
+def get_installed_release_info(project_root: Path | None = None) -> dict | None:
+    root = (project_root or Path(__file__).resolve().parent.parent).resolve()
+    info_path = root / RELEASE_INFO_FILE
+    try:
+        info = json.loads(info_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(info, dict):
+        return None
+    if not re.fullmatch(r"v?[0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?", str(info.get("tag", ""))):
+        return None
+    if not re.fullmatch(r"[0-9a-f]{64}", str(info.get("archive_sha256", "")).lower()):
+        return None
+    return info
+
+
+def _write_release_info(root: Path, tag: str, archive_sha256: str) -> None:
+    target = root / RELEASE_INFO_FILE
+    staging = root / f".{RELEASE_INFO_FILE}.update"
+    payload = {
+        "tag": tag,
+        "archive_sha256": archive_sha256,
+        "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+    }
+    staging.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(staging, target)
 
 
 def release_asset_urls(tag: str) -> tuple[str, str]:
@@ -161,6 +200,7 @@ def rollback_release(rollback_id: str, project_root: Path | None = None) -> dict
     if not backup.is_dir():
         raise ValueError("Rollback snapshot not found")
     _restore_items(root, backup)
+    _restore_release_info(root, backup)
     subprocess.run(
         [sys.executable, "-m", "pip", "install", "--requirement", str(root / "requirements.txt")],
         check=True, timeout=600,
@@ -215,6 +255,9 @@ def install_release(tag: str, project_root: Path | None = None) -> dict:
     root = (project_root or Path(__file__).resolve().parent.parent).resolve()
     backup = root / ".updates" / datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     backup.mkdir(parents=True, exist_ok=False)
+    current_release_info = root / RELEASE_INFO_FILE
+    if current_release_info.is_file():
+        shutil.copy2(current_release_info, backup / RELEASE_INFO_FILE)
     with tempfile.TemporaryDirectory(prefix="craftarr-update-") as temp_name:
         source = _safe_extract(archive_data, Path(temp_name))
         try:
@@ -254,7 +297,19 @@ def install_release(tag: str, project_root: Path | None = None) -> dict:
                 [sys.executable, "-m", "pip", "install", "--requirement", str(root / "requirements.txt")],
                 check=True, timeout=600,
             )
+            _write_release_info(root, tag, actual)
         except Exception:
             _restore_items(root, backup)
+            _restore_release_info(root, backup)
             raise
-    return {"installed": tag, "rollback_id": backup.name, "restart_required": True}
+    return {
+        "installed": tag,
+        "archive_sha256": actual,
+        "rollback_id": backup.name,
+        "restart_required": True,
+    }
+
+
+def reinstall_release(project_root: Path | None = None) -> dict:
+    """Reinstall the release matching the running application's version."""
+    return install_release(APP_VERSION, project_root)

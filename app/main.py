@@ -92,6 +92,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from .system_operation import current_operation
+from .update_manager import get_installed_release_info
 
 from .web import router as web_router
 from .node_gateway import maybe_proxy_remote_server
@@ -365,4 +366,5 @@ def health():
 def version():
     return {
         "version": APP_VERSION,
+        "release": get_installed_release_info(),
     }

@@ -1212,7 +1212,7 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 /* Responsive polish for the Craftarr release UI. */
 .user-edit-page .card-header { justify-content: flex-start; gap: 9px; }
 .user-edit-page .card-header > span { min-width: 0; }
-.settings-console-restart-row { grid-column: 1 / -1; display: flex; justify-content: flex-end; margin-top: 4px; }
+.settings-console-restart-row { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 0.5rem; flex-wrap: wrap; margin-top: 4px; }
 .settings-collapse-toggle { display: inline-grid; width: 34px; min-width: 34px; height: 34px; min-height: 34px; flex: 0 0 34px; place-items: center; margin: 0 0 0 auto; padding: 0; border: 1px solid #dce7f0; border-radius: 9px; background: #fff; color: #45637d; cursor: pointer; }
 .settings-collapse-toggle:hover { background: #f2f8fd; color: #155ba6; }
 .settings-section.is-collapsed > :not(.card-header) { display: none !important; }
