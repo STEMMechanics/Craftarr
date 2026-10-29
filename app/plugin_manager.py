@@ -176,6 +176,85 @@ def filename_for_installed_pattern(filename: str, pattern: str, version: str) ->
     return corrected + (".disabled" if disabled else "")
 
 
+def _filename_version_token(version: str | None) -> str | None:
+    """Return the version portion that can appear in a plugin JAR filename."""
+    if not isinstance(version, str):
+        return None
+    match = re.search(r"(?i)(?<![a-z0-9])v?\d+(?:[._-][a-z0-9]+)*", version)
+    return match.group(0) if match else None
+
+
+def _plugin_build_number(*values) -> str | None:
+    """Extract a numeric build identifier from provider or plugin metadata."""
+    for value in values:
+        text = str(value or "").strip()
+        if re.fullmatch(r"\d+", text):
+            return text
+        match = re.search(r"(?i)(?:\bbuild\s*|[-+]b)(\d+)\b", text)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _versioned_download_filename(filename: str | None, plugin_name: str,
+                                 version: str | None, build: str | None) -> bool:
+    """Only trust an upstream filename when it identifies this plugin and release."""
+    if not filename or Path(filename).name != filename or not filename.lower().endswith(".jar"):
+        return False
+    normalized_name = re.sub(r"[^a-z0-9]", "", plugin_name.casefold())
+    normalized_stem = re.sub(r"[^a-z0-9]", "", Path(filename).stem.casefold())
+    if not normalized_name or not normalized_stem.startswith(normalized_name):
+        return False
+
+    stem = Path(filename).stem
+    version_token = _filename_version_token(version)
+    if version_token and re.search(
+            rf"(?i)(?<![a-z0-9]){re.escape(version_token)}(?![a-z0-9])", stem):
+        return True
+    return bool(build and re.search(rf"(?i)(?<!\d){re.escape(build)}(?!\d)", stem))
+
+
+def filename_for_plugin_version(filename: str, installed_version: str | None,
+                                updated_version: str | None) -> str | None:
+    """Replace an unambiguous installed metadata version in the JAR filename."""
+    if Path(filename).name != filename:
+        return None
+    old_version = _filename_version_token(installed_version)
+    new_version = _filename_version_token(updated_version)
+    if not old_version or not new_version or old_version.casefold() == new_version.casefold():
+        return None
+
+    disabled = filename.endswith(".jar.disabled")
+    display_filename = filename[:-9] if disabled else filename
+    candidates = [old_version]
+    # Some Jenkins artifacts encode SNAPSHOT build versions as -bNNNN in the
+    # filename while plugin.yml reports -SNAPSHOT (build NNNN).
+    if _PLUGIN_BUILD_FILENAME.search(display_filename):
+        core_version = re.match(r"(?i)v?\d+(?:\.\d+)+", old_version)
+        if core_version and core_version.group(0).casefold() != old_version.casefold():
+            candidates.append(core_version.group(0))
+
+    for old_token in candidates:
+        matches = []
+        for match in re.finditer(re.escape(old_token), display_filename, re.IGNORECASE):
+            before = display_filename[match.start() - 1] if match.start() else ""
+            after = display_filename[match.end()] if match.end() < len(display_filename) else ""
+            if (before and before.isalnum()) or (after and after.isalnum()):
+                continue
+            matches.append(match)
+        if len(matches) != 1:
+            continue
+        match = matches[0]
+        corrected = (
+            display_filename[:match.start()]
+            + new_version
+            + display_filename[match.end():]
+        )
+        if Path(corrected).name == corrected and corrected.lower().endswith(".jar"):
+            return corrected + (".disabled" if disabled else "")
+    return None
+
+
 def plugin_info(
     path: Path,
 ) -> dict:
@@ -742,14 +821,35 @@ def install_plugin_update(server, filename: str, url: str, *, delete_previous: b
         target_filename = filename
         version_token = re.sub(r"[^A-Za-z0-9.+_-]", "", expected_version or "").strip(".-_")
         current_version = _filename_plugin_version(filename.removesuffix(".disabled"), expected_name)
+        updated_version = updated_metadata.get("version")
+        build_number = _plugin_build_number(updated_version, expected_version)
         if download_rename:
             target_filename = _filename_from_download_template(download_rename, downloaded_filename, version_token)
-        elif expected_version:
-            corrected_build_filename = (
+        else:
+            configured_filename = (
                 filename_for_installed_pattern(filename, installed_pattern, version_token)
                 if installed_detection == "filename" and installed_pattern else None
-            ) or filename_for_plugin_build(filename, version_token)
-            if corrected_build_filename:
+            )
+            downloaded_target = (
+                downloaded_filename
+                if _versioned_download_filename(
+                    downloaded_filename, expected_name, updated_version or expected_version, build_number,
+                )
+                else None
+            )
+            corrected_build_filename = (
+                filename_for_plugin_build(filename, build_number) if build_number else None
+            )
+            corrected_version_filename = filename_for_plugin_version(
+                corrected_build_filename or filename, current.get("version"), updated_version,
+            )
+            if configured_filename:
+                target_filename = configured_filename
+            elif downloaded_target:
+                target_filename = downloaded_target
+            elif corrected_version_filename:
+                target_filename = corrected_version_filename
+            elif corrected_build_filename:
                 target_filename = corrected_build_filename
             elif (
                 not updated_metadata.get("version")
