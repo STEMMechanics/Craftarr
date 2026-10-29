@@ -218,9 +218,13 @@ the plugin row. Craftarr downloads to a temporary file, validates the JAR and pl
 identity. If `download_rename` is configured, Craftarr applies it to the upstream
 `Content-Disposition` filename, falling back to the final download URL's filename.
 For example, `{filename}-{version}.{extension}` turns `Geyser-Spigot.jar` into
-`Geyser-Spigot-1250.jar`. Otherwise, Craftarr uses the existing filename and, when
-`installed_detection` is `filename`, replaces the version captured by
-`installed_pattern`. The previous JAR is kept disabled unless deletion is selected.
+`Geyser-Spigot-1250.jar`. Without a rename template, Craftarr uses an upstream JAR
+filename when it clearly matches the plugin and downloaded version or build. If the
+download response does not provide one, Craftarr updates a version or recognized
+build number already present in the installed filename when the match is unambiguous.
+An explicit `installed_pattern` takes precedence. If the filename cannot be matched
+safely, Craftarr keeps the existing name. The previous JAR is kept disabled unless
+deletion is selected.
 
 Modrinth selects the newest eligible release for the installed Minecraft version,
 including an older compatible release when newer releases target other versions.
