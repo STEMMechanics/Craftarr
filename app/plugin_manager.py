@@ -190,7 +190,7 @@ def _plugin_build_number(*values) -> str | None:
         text = str(value or "").strip()
         if re.fullmatch(r"\d+", text):
             return text
-        match = re.search(r"(?i)(?:\bbuild\s*|[-+]b)(\d+)\b", text)
+        match = re.search(r"(?i)(?:\bbuild\s*|[-+]b)(\d+)(?![a-z0-9])", text)
         if match:
             return match.group(1)
     return None
