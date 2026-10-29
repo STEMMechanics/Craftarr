@@ -6,8 +6,11 @@ import shutil
 import tempfile
 import uuid
 import zipfile
-from .env import getenv
+from urllib.parse import urlencode
 
+import httpx
+
+from .env import getenv
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -35,10 +38,15 @@ from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
 from .database import get_db
+from .instance_identity import get_node_id
 from .audit import record_audit_event
+from .node_gateway import _proxy_user_claim
+from .node_security import decrypt_remote_token
+from .remote_nodes import RemoteNodeError, refresh_remote_node
 from .automation import announce_server_shutdown, format_restart_announcement
 
 from .models import (
+    RemoteNode,
     Server,
     ServerUpdateCheck,
     User,
@@ -69,6 +77,7 @@ from .processes import (
     wait_for_console_message,
     MEMORY_PATTERN,
     SERVICE_PATTERN,
+    build_java_command,
     systemd_available,
 )
 from .server_import import detect_server_directories, inspect_server_directory
@@ -377,6 +386,15 @@ def new_server_page(
         "versions":
             versions,
         "java_runtimes": java_runtime_choices(),
+        "local_node_id": get_node_id(db),
+        "remote_nodes": [
+            {
+                "node_id": node.node_id,
+                "name": node.name,
+                "offline": node.outage_started_at is not None,
+            }
+            for node in db.query(RemoteNode).order_by(RemoteNode.name).all()
+        ],
     })
 
 
@@ -386,6 +404,102 @@ def new_server_page(
         "partials/server_new.html",
         context,
     )
+
+def _create_server_on_remote_node(
+    user: User,
+    node: RemoteNode,
+    db: Session,
+    form_values: dict[str, object],
+) -> RedirectResponse:
+    try:
+        token = decrypt_remote_token(node.token_ciphertext)
+        claim = _proxy_user_claim(
+            user,
+            node.node_id,
+            [server.server_id for server in node.servers],
+            get_node_id(db),
+            db,
+        )
+        encoded_values = {
+            key: value.lower() if isinstance(value, bool) else str(value)
+            for key, value in form_values.items()
+        }
+        with httpx.Client(
+            timeout=httpx.Timeout(180.0, connect=10.0),
+            follow_redirects=False,
+        ) as client:
+            response = client.post(
+                f"{node.base_url.rstrip('/')}/servers/new",
+                content=urlencode(encoded_values),
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "X-Craftarr-User": claim,
+                    "X-Craftarr-Actor": user.username,
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+            )
+    except httpx.TimeoutException as error:
+        raise HTTPException(
+            status_code=504,
+            detail=f"Timed out while creating a server on {node.name}",
+        ) from error
+    except httpx.HTTPError as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not connect to {node.name}: {error}",
+        ) from error
+    except (RemoteNodeError, ValueError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+    if response.status_code != 303:
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        detail = None
+        if isinstance(body, dict):
+            detail = body.get("detail") or body.get("error")
+        if not detail:
+            detail = response.text[:500]
+        status_code = response.status_code if 400 <= response.status_code < 500 else 502
+        raise HTTPException(
+            status_code=status_code,
+            detail=f"{node.name}: {detail}",
+        )
+
+    location = response.headers.get("location", "")
+    match = re.fullmatch(r"/servers/([1-9][0-9]*)", location)
+    if not match:
+        raise HTTPException(
+            status_code=502,
+            detail=f"{node.name} returned an unexpected server location",
+        )
+    server_id = int(match.group(1))
+
+    try:
+        servers = refresh_remote_node(db, node)
+    except (RemoteNodeError, ValueError) as error:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"The server was created on {node.name}, but its inventory could not "
+                "be refreshed. Refresh the node inventory before opening the server."
+            ),
+        ) from error
+    if not any(server.server_id == server_id for server in servers):
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"The server was created on {node.name}, but it was missing from "
+                "the refreshed inventory."
+            ),
+        )
+
+    return RedirectResponse(
+        f"/servers/{node.node_id}:{server_id}",
+        status_code=303,
+    )
+
 
 @router.post(
     "/servers/new"
@@ -398,6 +512,10 @@ def create_server_web(
     minecraft_version: str = Form(),
 
     java_major: int = Form(),
+
+    java_args: str = Form(default=""),
+
+    node_id: str = Form(default=""),
 
     memory: str = Form(
         default="4G"
@@ -507,6 +625,48 @@ def create_server_web(
             "/dashboard"
         )
 
+    selected_node_id = node_id.strip().lower()
+    local_node_id = get_node_id(db)
+    if selected_node_id and selected_node_id != local_node_id:
+        remote_node = (
+            db.query(RemoteNode)
+            .filter(RemoteNode.node_id == selected_node_id)
+            .first()
+        )
+        if not remote_node:
+            raise HTTPException(status_code=404, detail="Selected node was not found")
+        return _create_server_on_remote_node(
+            user,
+            remote_node,
+            db,
+            {
+                "name": name,
+                "minecraft_version": minecraft_version,
+                "java_major": java_major,
+                "java_args": java_args,
+                "memory": memory,
+                "process_backend": process_backend,
+                "port": port,
+                "max_players": max_players,
+                "difficulty": difficulty,
+                "gamemode": gamemode,
+                "view_distance": view_distance,
+                "simulation_distance": simulation_distance,
+                "world_name": world_name,
+                "seed": seed,
+                "world_type": world_type,
+                "generate_structures": generate_structures,
+                "spawn_animals": spawn_animals,
+                "spawn_monsters": spawn_monsters,
+                "spawn_npcs": spawn_npcs,
+                "online_mode": online_mode,
+                "whitelist": whitelist,
+                "pvp": pvp,
+                "enable_command_blocks": enable_command_blocks,
+                "motd": motd,
+                "accept_eula": accept_eula,
+            },
+        )
 
     if not accept_eula:
 
@@ -692,6 +852,14 @@ def create_server_web(
             ),
         )
 
+    java_args = java_args.strip()
+    try:
+        if len(java_args) > 1000:
+            raise ValueError("Java startup options cannot exceed 1000 characters")
+        java_path = select_java_major(java_major)
+        build_java_command(memory, "paper.jar", java_args, memory, java_path)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
     directory.mkdir(
         parents=True
@@ -778,8 +946,6 @@ def create_server_web(
                 "Systemd services are only available on Linux hosts running systemd"
             )
 
-        java_path = select_java_major(java_major)
-
         server = Server(
             name=name,
 
@@ -805,6 +971,8 @@ def create_server_web(
                 process_backend,
 
             java_path=java_path,
+
+            java_args=java_args,
 
             port=
                 port,
