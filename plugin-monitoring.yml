@@ -52,6 +52,12 @@ plugins:
     provider: github
     project: https://github.com/IntellectualSites/PlotSquared
     notes: Public release metadata only; premium downloads and credentials are not requested.
+  spark:
+    provider: custom
+    project: https://sparkapi.lucko.me/version
+    version_pattern: '"name"\s*:\s*"([^\"]+)"'
+    download_url: https://sparkapi.lucko.me/download/bukkit
+    notes: Uses spark's official version API and Bukkit download endpoint for Paper/Spigot servers.
   Vault:
     provider: github
     project: https://github.com/MilkBowl/Vault
