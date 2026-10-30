@@ -1366,21 +1366,20 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .server-create-page .property-field small { line-height: 1.45; }
 .server-create-page .server-create-extra-options { margin: 2px 22px 20px; padding-top: 14px; border-top: 1px solid #e8eff5; }
 .server-create-page .server-create-extra-options > summary,
-.server-create-page .server-create-advanced > summary { display: flex; align-items: center; justify-content: flex-start; cursor: pointer; list-style: none; }
+.server-create-page .server-create-panel > summary { display: flex; align-items: center; cursor: pointer; list-style: none; }
 .server-create-page .server-create-extra-options > summary::-webkit-details-marker,
-.server-create-page .server-create-advanced > summary::-webkit-details-marker { display: none; }
-.server-create-page .server-create-extra-options > summary .server-create-summary-copy,
-.server-create-page .server-create-advanced > summary .server-create-summary-copy { display: flex; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: 6px; color: #245b8b; font-weight: 700; }
-.server-create-page .server-create-extra-options > summary .server-create-summary-copy { font-size: 13px; }
-.server-create-page .server-create-advanced > summary .server-create-summary-copy { font-size: 14px; }
+.server-create-page .server-create-panel > summary::-webkit-details-marker { display: none; }
+.server-create-page .server-create-extra-options > summary .server-create-summary-copy { display: flex; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: 6px; color: #245b8b; font-size: 13px; font-weight: 700; }
 .server-create-page .server-create-summary-note { color: var(--sm-muted); font-size: 11px; font-weight: 400; white-space: nowrap; }
 .server-create-page .server-create-extra-options > summary::after,
-.server-create-page .server-create-advanced > summary::after { flex: 0 0 auto; margin-left: auto; color: #5a7690; font-family: "Font Awesome 6 Free"; font-weight: 900; content: "\f077"; }
+.server-create-page .server-create-panel > summary::after { flex: 0 0 auto; margin-left: auto; color: #5a7690; font-family: "Font Awesome 6 Free"; font-weight: 900; content: "\f078"; }
 .server-create-page .server-create-extra-options[open] > summary::after,
-.server-create-page .server-create-advanced[open] > summary::after { content: "\f078"; }
+.server-create-page .server-create-panel[open] > summary::after { content: "\f077"; }
 .server-create-page .server-create-extra-options[open] > .settings-content { padding: 17px 0 0; }
-.server-create-page .server-create-advanced { display: flex; flex-direction: column; gap: 16px; }
-.server-create-page .server-create-advanced > summary { display: flex; min-height: 52px; align-items: center; gap: 14px; padding: 13px 17px; border: 1px solid #d7e6f2; border-radius: 14px; background: #f4f9fd; }
+.server-create-page .server-create-panels { display: flex; flex-direction: column; gap: 16px; }
+.server-create-page .server-create-panel { overflow: hidden; }
+.server-create-page .server-create-panel > summary { min-height: 52px; padding: 15px 22px; color: var(--sm-text); font-size: 14px; font-weight: 700; }
+.server-create-page .server-create-panel[open] > summary { border-bottom: 1px solid #e4edf5; }
 .server-create-page .server-create-actions { position: static; margin-top: 2px; padding: 16px 0 0; border-top: 1px solid #e1eaf2; background: transparent; }
 .server-create-page #create-server-button:disabled { opacity: .52; filter: saturate(.55); }
 
@@ -1390,6 +1389,7 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
   .server-create-page .overview-card > .card-header { margin: 0; padding: 13px 17px; }
   .server-create-page .settings-content { padding: 18px 17px; }
   .server-create-page .server-create-extra-options { margin-right: 17px; margin-left: 17px; }
+  .server-create-page .server-create-panel > summary { padding: 13px 17px; }
   .server-create-page .server-create-extra-options[open] > .settings-content { padding: 15px 0 0; }
   .server-create-page .server-create-actions { align-items: stretch; flex-direction: column-reverse; }
   .server-create-page .server-create-actions > .button { width: 100%; }
