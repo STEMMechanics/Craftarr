@@ -28,6 +28,15 @@
                     <input name="name" type="text" placeholder="My Minecraft Server" required autofocus>
                 </label>
                 <label class="property-field">
+                    <span>Create on</span>
+                    <select name="node_id" required>
+                        <option value="{{ local_node_id }}">This node</option>
+                        {% for node in remote_nodes %}
+                        <option value="{{ node.node_id }}" {% if node.offline %}disabled{% endif %}>{{ node.name }}{% if node.offline %} (offline){% endif %}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label class="property-field">
                     <span>Minecraft version</span>
                     <select id="create-minecraft-version" name="minecraft_version" required onchange="selectRecommendedJava()">
                         {% for version in versions %}
@@ -51,7 +60,6 @@
                         <span>Connection port</span>
                         <input id="create-server-port" name="port" type="number" value="25565" min="1" max="65535" required oninput="checkServerPortWarning(this.value)">
                         <small id="server-port-warning" class="port-conflict-warning" hidden></small>
-                        <small>Players use this number to join. Leave 25565 as it is.</small>
                     </label>
                     <label class="property-field">
                         <span>Memory</span>
@@ -61,7 +69,6 @@
                             <option value="8G">8 GB</option><option value="12G">12 GB</option>
                             <option value="16G">16 GB</option>
                         </select>
-                        <small>More players and plugins may need more memory.</small>
                     </label>
                     <label class="property-field">
                         <span>How should we run it?</span>
@@ -69,11 +76,6 @@
                             <option value="systemd" {% if systemd_available %}selected{% else %}disabled{% endif %}>Recommended (keeps running)</option>
                             <option value="subprocess" {% if not systemd_available %}selected{% endif %}>Run inside this app</option>
                         </select>
-                        {% if systemd_available %}
-                        <small>Minecraft can keep running if this app restarts.</small>
-                        {% else %}
-                        <small>This computer uses the app to run Minecraft.</small>
-                        {% endif %}
                     </label>
                     <label class="property-field">
                         <span>Java for Minecraft</span>
@@ -84,24 +86,21 @@
                             <option value="" disabled>No Java versions found</option>
                             {% endfor %}
                         </select>
-                        <small>Minecraft needs Java. We choose a version for you.</small>
+                    </label>
+                    <label class="property-field full-width">
+                        <span>Java flags</span>
+                        <input name="java_args" type="text" maxlength="1000" placeholder="-XX:+UseG1GC">
                     </label>
                 </div>
             </details>
         </section>
 
-        <details class="server-create-advanced">
-            <summary>
-                <span class="server-create-summary-copy">
-                    Change game and world settings <span class="server-create-summary-note">(optional)</span>
-                </span>
-            </summary>
+        <div class="server-create-panels">
 
-        <section class="overview-card settings-section">
 
-            <div class="card-header">
-                Gameplay
-            </div>
+        <details class="overview-card settings-section server-create-panel">
+
+            <summary>Gameplay</summary>
 
             <div class="settings-content server-create-grid">
 
@@ -219,14 +218,12 @@
 
             </div>
 
-        </section>
+        </details>
 
 
-        <section class="overview-card settings-section">
+        <details class="overview-card settings-section server-create-panel">
 
-            <div class="card-header">
-                World
-            </div>
+            <summary>World</summary>
 
             <div class="settings-content server-create-grid">
 
@@ -384,14 +381,12 @@
 
             </div>
 
-        </section>
+        </details>
 
 
-        <section class="overview-card settings-section">
+        <details class="overview-card settings-section server-create-panel">
 
-            <div class="card-header">
-                Server
-            </div>
+            <summary>Server</summary>
 
             <div class="settings-content server-create-grid">
 
@@ -510,10 +505,10 @@
 
             </div>
 
-        </section>
-
-
         </details>
+
+
+        </div>
 
         <section class="overview-card settings-section">
 

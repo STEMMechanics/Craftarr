@@ -35,7 +35,7 @@ templates = Jinja2Templates(
     directory="app/templates"
 )
 
-_NODE_SERVER_PATH = re.compile(r"^/(?:api/web/servers|servers)/\d+(?:/|$)")
+_NODE_SERVER_PATH = re.compile(r"^(?:/(?:api/web/servers|servers)/\d+(?:/|$)|/servers/new$)")
 
 
 @dataclass(frozen=True)
@@ -81,6 +81,8 @@ class GatewayUser:
 def _gateway_user(request: Request, db: Session):
     path = request.url.path
     if not _NODE_SERVER_PATH.match(path):
+        return None
+    if path == "/servers/new" and request.method.upper() != "POST":
         return None
     scheme, _, token = request.headers.get("authorization", "").partition(" ")
     if scheme.lower() != "bearer" or not verify_node_token(db, token):
