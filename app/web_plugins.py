@@ -909,13 +909,24 @@ def _check_updates(server_id, request, db, scope, permission):
 
 @router.get("/api/web/servers/{server_id}/paper/update-status")
 def paper_update_status(server_id: int, request: Request, db: Session = Depends(get_db)):
-    from .update_monitor import paper_result
+    from .update_monitor import paper_fingerprint, paper_result
     user, server = get_accessible_server(server_id, request, db)
     if not user:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     if not server or not has_permission(user, "servers.view"):
         return JSONResponse({"error": "Access denied"}, status_code=403)
-    return paper_result(db, server)
+
+    fingerprint = paper_fingerprint(server)
+    result = paper_result(db, server)
+    if result.get("fingerprint") != fingerprint:
+        result = paper_result(db, server, fetch=True)
+        row = db.get(ServerUpdateCheck, (server.id, "@paper"))
+        if row is None:
+            row = ServerUpdateCheck(server_id=server.id, component="@paper")
+            db.add(row)
+        row.payload = json.dumps(result)
+        db.commit()
+    return result
 
 
 @router.post('/api/web/servers/{server_id}/plugins/monitoring')
