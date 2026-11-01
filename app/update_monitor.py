@@ -7,7 +7,7 @@ from pathlib import Path
 from sqlalchemy.exc import IntegrityError
 
 from . import update_providers as providers
-from .models import (Server, UpstreamUpdateCache, ServerUpdateCheck,
+from .models import (DeveloperPluginUpdate, Server, UpstreamUpdateCache, ServerUpdateCheck,
                      UpdateNotification, UpdateMonitorLease, User)
 from .plugin_manager import filename_for_plugin_build, list_plugins
 from .plugin_monitoring import monitoring_config
@@ -164,6 +164,47 @@ def plugin_results(db, server, plugins=None, *, fetch=False, force=False, now=No
                 on_progress(index, total, None)
             continue
         provider, config = monitoring_config(db, server.id, plugin['name'])
+        if config.get('developer_updates_enabled') and config.get('development_branch'):
+            state = db.get(DeveloperPluginUpdate, (server.id, providers.normalize_name(plugin['name'])))
+            latest_commit = state.latest_commit if state else None
+            installed_commit = state.installed_commit if state else None
+            state_name = state.status if state else 'waiting'
+            update_available = bool(
+                latest_commit and installed_commit and latest_commit != installed_commit
+                and state_name not in {'queued', 'building', 'failed', 'check_failed', 'restart_failed'}
+            )
+            if state_name in {'queued', 'building'}:
+                status = 'Building'
+            elif state_name == 'restart_required':
+                status = 'Restart required'
+            elif state_name == 'restart_pending':
+                status = 'Restart after players leave'
+            elif state_name in {'restart_failed', 'failed', 'check_failed'}:
+                status = 'Check failed'
+            elif latest_commit and installed_commit == latest_commit:
+                status = 'Current'
+            else:
+                status = 'Not checked yet'
+            result = base_result(plugin['name'], plugin.get('version'))
+            result.update(
+                status=status,
+                update_available=update_available,
+                latest_version=latest_commit[:7] if latest_commit else None,
+                installed_version=installed_commit[:7] if installed_commit else plugin.get('version'),
+                provider='GitHub branch',
+                release_url=f"https://github.com/{config['project']}/tree/{config['development_branch']}",
+                error=state.error if state else None,
+                checked_at=state.checked_at.isoformat() + 'Z' if state and state.checked_at else None,
+                developer_update=True,
+                developer_status=state_name,
+            )
+            result['monitoring'] = config
+            result['component'] = plugin['filename']
+            result['notification_key'] = f"developer:{server.id}:{providers.normalize_name(plugin['name'])}"
+            results.append(result)
+            if on_progress:
+                on_progress(index, total, None)
+            continue
         cache = cached_releases(db, provider, now, force, fetch, seen) if provider else None
         result = compare_release(plugin['name'], plugin.get('version'), provider, cache, server.minecraft_version,
                                  filename=plugin['filename'], version_sources=plugin.get('version_sources'))

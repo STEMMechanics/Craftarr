@@ -1076,6 +1076,18 @@ document.addEventListener("keydown", (event) => {
       closePluginUpdateModal();
       return;
     }
+    const pluginBuildReportModal = document.getElementById("plugin-build-report-modal");
+    if (pluginBuildReportModal && !pluginBuildReportModal.hidden) {
+      event.preventDefault();
+      closePluginBuildReport();
+      return;
+    }
+    const pluginBuildLogModal = document.getElementById("plugin-build-log-modal");
+    if (pluginBuildLogModal && !pluginBuildLogModal.hidden) {
+      event.preventDefault();
+      closePluginBuildLog();
+      return;
+    }
     const pluginMonitoringModal = document.getElementById("plugin-monitoring-modal");
     if (pluginMonitoringModal && !pluginMonitoringModal.hidden) {
       event.preventDefault();
@@ -1719,6 +1731,12 @@ const selectedPluginFilenames = new Set();
 const pluginActionInProgress = new Map();
 let pluginBulkActionInProgress = false;
 let pluginMonitoringPreviousFocus = null;
+let pluginBuildLogPreviousFocus = null;
+let pluginBuildReportPreviousFocus = null;
+let pluginBuildLogPollTimer = null;
+let pluginBuildLogPollSequence = 0;
+const pluginBuildRowPolls = new Map();
+let pluginBuildRowPollSequence = 0;
 let pluginPendingRemoval = null;
 let pluginRemovalInProgress = false;
 let pluginPendingReplacement = null;
@@ -2658,7 +2676,7 @@ function renderPlugins() {
   }
 
   list.innerHTML = visiblePlugins.map((plugin) => `
-    <article class="plugin-row ${canManage ? "has-plugin-select" : ""} ${plugin.enabled ? "" : "disabled"} ${duplicatePluginFilenames.has(plugin.filename) ? "duplicate" : ""} ${pluginActionInProgress.has(plugin.filename) ? "is-processing" : ""}" ${pluginActionInProgress.has(plugin.filename) ? 'aria-busy="true"' : ""}>
+    <article class="plugin-row ${canManage ? "has-plugin-select" : ""} ${plugin.enabled ? "" : "disabled"} ${duplicatePluginFilenames.has(plugin.filename) ? "duplicate" : ""} ${pluginActionInProgress.has(plugin.filename) ? "is-processing" : ""}" data-plugin-filename="${escapeHtml(plugin.filename)}" ${pluginActionInProgress.has(plugin.filename) ? 'aria-busy="true"' : ""}>
       ${canManage ? `<label class="plugin-select"><input type="checkbox" value="${escapeHtml(plugin.filename)}" aria-label="Select ${escapeHtml(plugin.name || plugin.filename)}" ${selectedPluginFilenames.has(plugin.filename) ? "checked" : ""} onchange="togglePluginSelection(this)"></label>` : ""}
       <span class="plugin-status-indicator ${plugin.enabled ? "is-enabled" : "is-disabled"}" aria-hidden="true" title="${plugin.enabled ? "Enabled" : "Disabled"}"></span>
       <div class="plugin-main">
@@ -2841,6 +2859,132 @@ function pluginHasDownloadableUpdate(plugin) {
     && plugin.update.download_url.startsWith("https://");
 }
 
+function developerBuildRowStatus(state) {
+  if (!state) return "Not checked yet";
+  if (["queued", "building"].includes(state.status)) return "Building";
+  if (state.status === "restart_required") return "Restart required";
+  if (state.status === "restart_pending") return "Restart after players leave";
+  if (["failed", "check_failed", "restart_failed"].includes(state.status)) return "Check failed";
+  const latest = typeof state.latest_commit === "string" ? state.latest_commit : "";
+  const installed = typeof state.installed_commit === "string" ? state.installed_commit : "";
+  return latest && installed && latest === installed ? "Current" : "Not checked yet";
+}
+
+function updateDeveloperPluginRow(filename, state) {
+  const plugin = pluginData.find((item) => item.filename === filename);
+  if (!plugin) return false;
+  const nextState = state || {status: "waiting"};
+  const update = {...(plugin.update || {})};
+  const latest = typeof nextState.latest_commit === "string" ? nextState.latest_commit : "";
+  const installed = typeof nextState.installed_commit === "string" ? nextState.installed_commit : "";
+  update.status = developerBuildRowStatus(nextState);
+  update.update_available = Boolean(
+    latest && installed && latest !== installed
+      && !["queued", "building", "failed", "check_failed", "restart_failed"].includes(nextState.status),
+  );
+  update.latest_version = latest ? latest.slice(0, 7) : null;
+  update.installed_version = installed ? installed.slice(0, 7) : update.installed_version || plugin.version;
+  update.error = nextState.error || null;
+  update.developer_update = true;
+  update.developer_status = nextState.status || "waiting";
+  update.monitoring = {...(update.monitoring || {}), development_status: nextState};
+  plugin.update = update;
+
+  const row = [...document.querySelectorAll(".plugin-row")]
+    .find((candidate) => candidate.dataset.pluginFilename === filename);
+  const statusRow = row?.querySelector(".plugin-version-status-row");
+  if (!statusRow) return false;
+  const page = document.querySelector(".plugins-page");
+  statusRow.outerHTML = renderPluginVersionStatus(plugin, page?.dataset.canManage === "true");
+  return true;
+}
+
+function stopDeveloperPluginRowPolling(filename) {
+  const poll = pluginBuildRowPolls.get(filename);
+  if (poll?.timer) window.clearInterval(poll.timer);
+  pluginBuildRowPolls.delete(filename);
+}
+
+async function refreshDeveloperPluginRow(filename, sequence) {
+  const poll = pluginBuildRowPolls.get(filename);
+  if (!poll || poll.sequence !== sequence) return;
+  const page = document.querySelector(".plugins-page");
+  const row = [...document.querySelectorAll(".plugin-row")]
+    .find((candidate) => candidate.dataset.pluginFilename === filename);
+  if (!page || !row) {
+    stopDeveloperPluginRowPolling(filename);
+    return;
+  }
+  try {
+    const response = await nativeFetch(`/api/web/servers/${page.dataset.serverId}/plugins/developer-build?filename=${encodeURIComponent(filename)}`, {cache: "no-store"});
+    connectionFailureLatched = false;
+    if (handleAuthenticationResponse(response)) {
+      stopDeveloperPluginRowPolling(filename);
+      return;
+    }
+    const data = await response.json();
+    if (!response.ok || pluginBuildRowPolls.get(filename)?.sequence !== sequence) return;
+    const state = data.development_status;
+    updateDeveloperPluginRow(filename, state);
+    if (!state || !["queued", "building"].includes(state.status)) stopDeveloperPluginRowPolling(filename);
+  } catch {
+    // Keep the current row state when a background refresh is unavailable.
+  }
+}
+
+function startDeveloperPluginRowPolling(filename) {
+  stopDeveloperPluginRowPolling(filename);
+  const sequence = ++pluginBuildRowPollSequence;
+  pluginBuildRowPolls.set(filename, {timer: null, sequence});
+  refreshDeveloperPluginRow(filename, sequence);
+  const timer = window.setInterval(() => refreshDeveloperPluginRow(filename, sequence), 1000);
+  const poll = pluginBuildRowPolls.get(filename);
+  if (poll?.sequence === sequence) poll.timer = timer;
+}
+
+async function rebuildDeveloperPluginFromRow(filename, button) {
+  const page = document.querySelector(".plugins-page[data-server-id]");
+  if (!page || !filename || !button || button.dataset.busy === "true") return;
+  button.dataset.busy = "true";
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  try {
+    const response = await nativeFetch(`/api/web/servers/${page.dataset.serverId}/plugins/developer-build/rebuild?filename=${encodeURIComponent(filename)}`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+    });
+    connectionFailureLatched = false;
+    if (handleAuthenticationResponse(response)) return;
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to rebuild the plugin.");
+    const shortCommit = typeof data.commit === "string" ? data.commit.slice(0, 7) : "the saved commit";
+    showToast(
+      data.queued === false ? "A branch build is already running." : `Rebuild queued for ${shortCommit}.`,
+      data.queued === false ? "warning" : "success",
+    );
+    const plugin = pluginData.find((item) => item.filename === filename);
+    const previousState = plugin?.update?.monitoring?.development_status || {};
+    updateDeveloperPluginRow(filename, {
+      ...previousState,
+      status: data.queued === false && ["queued", "building"].includes(previousState.status)
+        ? previousState.status
+        : data.queued === false ? "building" : "queued",
+      latest_commit: data.commit || previousState.latest_commit,
+      error: null,
+    });
+    startDeveloperPluginRowPolling(filename);
+  } catch (failure) {
+    const message = failure instanceof TypeError
+      ? "Unable to connect to the server."
+      : failure.message || "Unable to rebuild the plugin.";
+    showToast(message, "error");
+  } finally {
+    delete button.dataset.busy;
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+  }
+}
+
 function renderPluginVersionStatus(plugin, canManage = false) {
   if (plugin?.metadata_loaded !== true) {
     return `<div class="plugin-version-status-row"><span class="server-inline-update-status plugin-update-status is-pending"><i class="fa-solid ${plugin?.metadata_error ? "fa-triangle-exclamation" : "fa-spinner fa-spin"}" aria-hidden="true"></i>${plugin?.metadata_error ? "Details unavailable" : "Loading details…"}</span></div>`;
@@ -2866,6 +3010,30 @@ function renderPluginVersionStatus(plugin, canManage = false) {
     label = update.latest_version ? `New version ${update.latest_version}` : "New version available";
     icon = "fa-circle-up";
     statusClass = "is-update";
+  } else if (update.status === "Building") {
+    label = `Building ${update.latest_version || "branch commit"}`;
+    icon = "fa-spinner fa-spin";
+    statusClass = "is-pending";
+  } else if (update.status === "Restart required") {
+    label = "Restart required";
+    icon = "fa-rotate";
+    statusClass = "is-warning";
+  } else if (update.status === "Restart after players leave") {
+    label = "Restart after players leave";
+    icon = "fa-hourglass-half";
+    statusClass = "is-pending";
+  } else if (update.developer_update && update.developer_status === "failed") {
+    label = "Build failed";
+    icon = "fa-triangle-exclamation";
+    statusClass = "is-error";
+  } else if (update.developer_update && update.developer_status === "check_failed") {
+    label = "Branch check failed";
+    icon = "fa-triangle-exclamation";
+    statusClass = "is-error";
+  } else if (update.developer_update && update.developer_status === "restart_failed") {
+    label = "Restart failed";
+    icon = "fa-triangle-exclamation";
+    statusClass = "is-error";
   } else if (update.status === "Current") {
     label = "Up to date";
     icon = "fa-circle-check";
@@ -2894,16 +3062,24 @@ function renderPluginVersionStatus(plugin, canManage = false) {
 
   const statusTitle = update.error || label;
   const statusMarkup = `<i class="fa-solid ${icon}" aria-hidden="true"></i>${escapeHtml(label)}`;
-  const statusPill = update.update_available && update.release_url?.startsWith("https://")
+  const statusPill = (update.developer_update || update.update_available) && update.release_url?.startsWith("https://")
     ? `<a class="server-inline-update-status plugin-update-status ${statusClass}" href="${escapeHtml(update.release_url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(statusTitle)}">${statusMarkup}</a>`
     : `<span class="server-inline-update-status plugin-update-status ${statusClass}" title="${escapeHtml(statusTitle)}">${statusMarkup}</span>`;
   const download = canManage && pluginHasDownloadableUpdate(plugin)
     ? `<button class="plugin-update-install" type="button" onclick="openPluginUpdateModal('${escapeHtml(escapeJs(plugin.filename))}')" aria-label="Install update for ${escapeHtml(plugin.name)} on the server" title="Install update on server" ${pluginUpdateInProgress ? "disabled" : ""}><i class="fa-solid fa-cloud-arrow-down" aria-hidden="true"></i></button>`
     : "";
-  const errorDetail = update.status === "Check failed" && update.error
-    ? `<div class="plugin-update-error"><div><strong>Reason:</strong> ${escapeHtml(update.error)}</div>${renderPluginComparisonDetails(update.comparison_details)}</div>`
+  const developerBuildBusy = update.developer_update
+    && (update.status === "Building" || ["queued", "building"].includes(update.developer_status));
+  const developerActions = canManage && update.developer_update
+    ? `<span class="plugin-developer-row-actions" role="group" aria-label="Branch build actions">
+        <button class="plugin-update-action plugin-update-log" type="button" onclick="openPluginBuildLog(${pluginData.indexOf(plugin)})" aria-label="View latest branch build log" title="View latest branch build log"><i class="fa-solid fa-terminal" aria-hidden="true"></i><span>Build log</span></button>
+        <button class="plugin-update-action plugin-update-rebuild" type="button" onclick="rebuildDeveloperPluginFromRow('${escapeHtml(escapeJs(plugin.filename))}', this)" aria-label="Rebuild branch commit" title="${developerBuildBusy ? "Build already running" : "Rebuild branch commit"}" ${developerBuildBusy ? "disabled" : ""}><i class="fa-solid fa-screwdriver-wrench" aria-hidden="true"></i></button>
+      </span>`
     : "";
-  return `<div class="plugin-version-status-row">${versionPill}${statusPill}${download}${errorDetail}</div>`;
+  const errorDetail = update.status === "Check failed" && update.error
+    ? `<div class="plugin-update-error"><div><strong>Reason:</strong> ${escapeHtml(update.error)}</div>${update.developer_update ? "" : renderPluginComparisonDetails(update.comparison_details)}</div>`
+    : "";
+  return `<div class="plugin-version-status-row">${versionPill}${statusPill}${developerActions}${download}${errorDetail}</div>`;
 }
 
 function formatPluginFileSize(size) {
@@ -8563,6 +8739,14 @@ async function updateServerProcessStats() {
       "overview-uptime",
     );
 
+    const tpsValue = document.getElementById(
+      "overview-tps-value",
+    );
+
+    const msptValue = document.getElementById(
+      "overview-mspt-value",
+    );
+
     if (!data.running) {
       if (cpuValue) {
         cpuValue.textContent = "0%";
@@ -8574,6 +8758,14 @@ async function updateServerProcessStats() {
 
       if (uptimeValue) {
         uptimeValue.textContent = "-";
+      }
+
+      if (tpsValue) {
+        tpsValue.textContent = "—";
+      }
+
+      if (msptValue) {
+        msptValue.textContent = "—";
       }
 
       return;
@@ -9549,7 +9741,12 @@ function drawMetricChart(
   const context = canvas.getContext("2d");
   context.scale(ratio, ratio);
   context.clearRect(0, 0, width, height);
-  const values = rows.map((row) => Number(value(row) || 0));
+  const points = rows
+    .map((row) => ({ row, value: value(row) }))
+    .filter((point) => point.value !== null && point.value !== undefined && Number.isFinite(Number(point.value)))
+    .map((point) => ({ row: point.row, value: Number(point.value) }));
+  const plottedRows = points.map((point) => point.row);
+  const values = points.map((point) => point.value);
   const rootStyle = getComputedStyle(document.documentElement);
   if (!values.length) {
     context.fillStyle = rootStyle.getPropertyValue("--sm-muted").trim() || "#64748b";
@@ -9565,12 +9762,14 @@ function drawMetricChart(
     (peak, point, index) => point > values[peak] ? index : peak,
     0,
   );
-  const latestText = formatValue(values.at(-1), rows.at(-1));
-  const peakText = formatValue(maximum, rows[peakIndex]);
+  const latestText = formatValue(values.at(-1), plottedRows.at(-1));
+  const peakText = formatValue(maximum, plottedRows[peakIndex]);
   const chartToken = {
     "metric-cpu": "--sm-green-dark",
     "metric-memory": "--sm-blue-dark",
     "metric-players": "--sm-orange-dark",
+    "metric-tps": "--sm-teal-dark",
+    "metric-mspt": "--sm-red-dark",
     "metric-uptime": "--sm-purple-dark",
   }[canvasId] || "--sm-blue-dark";
   const chartColor = rootStyle.getPropertyValue(chartToken).trim() || "#1866c5";
@@ -9607,7 +9806,7 @@ function drawMetricChart(
   canvas.setAttribute("aria-label", summary);
   canvas.title = summary;
   const describePoint = (index) => {
-    const row = rows[index];
+    const row = plottedRows[index];
     const recorded = row?.recorded_at ? formatBrowserTimestamp(row.recorded_at, "seconds") : `Reading ${index + 1}`;
     return `${label}: ${formatValue(values[index], row)} · ${recorded}`;
   };
@@ -9652,16 +9851,43 @@ async function loadServerMetrics() {
       (point) => `${point.toLocaleString()} ${point === 1 ? "player" : "players"}`,
     );
     drawMetricChart(
+      "metric-tps",
+      rows,
+      (row) => row.tps,
+      "TPS",
+      (point) => point.toFixed(2),
+    );
+    drawMetricChart(
+      "metric-mspt",
+      rows,
+      (row) => row.mspt,
+      "MSPT",
+      (point) => `${point.toFixed(1)} ms`,
+    );
+    drawMetricChart(
       "metric-uptime",
       rows,
       (row) => row.uptime_seconds || 0,
       "Time online",
       (point, row) => row.uptime_seconds == null ? "Offline" : formatUptime(point),
     );
+    const latest = rows.at(-1) || {};
+    const overviewTps = document.getElementById("overview-tps-value");
+    const overviewMspt = document.getElementById("overview-mspt-value");
+    if (overviewTps) {
+      overviewTps.textContent = latest.tps == null ? "—" : Number(latest.tps).toFixed(2);
+    }
+    if (overviewMspt) {
+      overviewMspt.textContent = latest.mspt == null ? "—" : `${Number(latest.mspt).toFixed(1)} ms`;
+    }
   } catch (error) {
-    ["metric-cpu", "metric-memory", "metric-players", "metric-uptime"].forEach(
+    ["metric-cpu", "metric-memory", "metric-players", "metric-tps", "metric-mspt", "metric-uptime"].forEach(
       (id) => drawMetricChart(id, [], () => 0, error.message),
     );
+    const overviewTps = document.getElementById("overview-tps-value");
+    const overviewMspt = document.getElementById("overview-mspt-value");
+    if (overviewTps) overviewTps.textContent = "—";
+    if (overviewMspt) overviewMspt.textContent = "—";
   }
 }
 
@@ -10034,6 +10260,7 @@ loadServerMetrics();
 loadServerStorage();
 loadServerSchedules();
 
+setInterval(loadServerMetrics, 60000);
 setInterval(loadServerStorage, 60000);
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) loadServerStorage();
@@ -10405,7 +10632,13 @@ function openPluginMonitoring(index) {
   modal.dataset.manualSettings = "";
   document.getElementById("plugin-monitoring-name").textContent = plugin.name;
   document.getElementById("plugin-monitoring-mode").value = selectedMode;
-  document.getElementById("plugin-monitoring-provider").value = config.provider || "github";
+  const savedDevelopmentBranch = config.development_branch || "";
+  modal.dataset.savedDevelopmentProject = config.project || "";
+  modal.dataset.savedDevelopmentBranch = savedDevelopmentBranch;
+  const savedBranchMode = Boolean(savedDevelopmentBranch) || config.provider === "github_branch";
+  document.getElementById("plugin-monitoring-provider").value = savedBranchMode
+    ? "github_branch"
+    : config.provider || "github";
   document.getElementById("plugin-monitoring-project").value = config.project || "";
   document.getElementById("plugin-monitoring-installed-detection").value = config.installed_detection || "auto";
   for (const field of ["version", "installed", "asset"]) {
@@ -10413,15 +10646,20 @@ function openPluginMonitoring(index) {
   }
   document.getElementById("plugin-monitoring-download-url").value = config.download_url || config.link_pattern || "";
   document.getElementById("plugin-monitoring-download-rename").value = config.download_rename || "";
+  document.getElementById("plugin-monitoring-development-branch").value = savedDevelopmentBranch;
+  clearPluginMonitoringBranchOptions();
+  renderPluginMonitoringDevelopmentState(config.development_status);
   document.getElementById("plugin-monitoring-expressions").open = false;
   updatePluginMonitoringFields();
   if (config.error) setPluginMonitoringFeedback(config.error, "error");
   modal.hidden = false;
+  startPluginMonitoringBuildPolling();
   document.getElementById("plugin-monitoring-mode").focus();
 }
 
 function closePluginMonitoring() {
   const modal = document.getElementById("plugin-monitoring-modal");
+  stopPluginMonitoringBuildPolling();
   if (modal) modal.hidden = true;
   const previousFocus = pluginMonitoringPreviousFocus;
   pluginMonitoringPreviousFocus = null;
@@ -10442,7 +10680,34 @@ function clearMonitoringPreview() {
   setPluginMonitoringFeedback("");
 }
 
+function clearPluginMonitoringBranchOptions() {
+  const options = document.getElementById("plugin-monitoring-branch-options");
+  if (options) options.replaceChildren();
+}
+
+function setPluginMonitoringDevelopmentStatus(message, state = "") {
+  const status = document.getElementById("plugin-monitoring-development-status");
+  if (!status) return;
+  status.textContent = message || "";
+  if (state) status.dataset.state = state;
+  else delete status.dataset.state;
+}
+
+function resetPluginMonitoringBranchStatus() {
+  stopPluginMonitoringBuildPolling();
+  const modal = document.getElementById("plugin-monitoring-modal");
+  if (modal) modal._branchEvaluationSequence = (modal._branchEvaluationSequence || 0) + 1;
+  setPluginMonitoringDevelopmentStatus("No branch build has run yet.");
+}
+
+function clearPluginMonitoringBranchState() {
+  clearPluginMonitoringBranchOptions();
+  resetPluginMonitoringBranchStatus();
+}
+
 let pluginMonitoringExpressionTimer = null;
+let pluginMonitoringBuildPollTimer = null;
+let pluginMonitoringBuildPollSequence = 0;
 
 function setPluginMonitoringFeedback(message, state = "error") {
   const feedback = document.getElementById("plugin-monitoring-error");
@@ -10452,6 +10717,306 @@ function setPluginMonitoringFeedback(message, state = "error") {
   feedback.dataset.state = state;
   feedback.setAttribute("role", state === "error" ? "alert" : "status");
   feedback.setAttribute("aria-live", state === "error" ? "assertive" : "polite");
+}
+
+function pluginDeveloperBuildLabel(status) {
+  return {
+    waiting: "Waiting for the first branch check",
+    queued: "Build queued",
+    building: "Building branch commit",
+    current: "Up to date",
+    installed: "Build installed",
+    restart_required: "Restart required",
+    restart_pending: "Waiting for players to leave before restart",
+    restarted: "Server restarted",
+    restart_failed: "Restart failed",
+    failed: "Build failed",
+    check_failed: "Branch check failed",
+  }[status] || status || "Waiting";
+}
+
+function formatPluginDeveloperBuildStatus(state) {
+  if (!state) return "No branch build has run yet.";
+  const latest = typeof state.latest_commit === "string" ? state.latest_commit.slice(0, 7) : "";
+  const installed = typeof state.installed_commit === "string" ? state.installed_commit.slice(0, 7) : "";
+  return `${pluginDeveloperBuildLabel(state.status)}${latest ? ` · latest ${latest}` : ""}${installed ? ` · installed ${installed}` : ""}${state.error ? ` · ${state.error}` : ""}`;
+}
+
+function pluginDeveloperBuildStateClass(state) {
+  if (["failed", "check_failed", "restart_failed"].includes(state?.status)) return "error";
+  if (["queued", "building"].includes(state?.status)) return "pending";
+  return "";
+}
+
+function renderPluginBuildLogDialog(state) {
+  const status = document.getElementById("plugin-build-log-status");
+  const output = document.getElementById("plugin-build-log-output");
+  const note = document.getElementById("plugin-build-log-note");
+  const reportButton = document.getElementById("plugin-build-log-report-button");
+  if (!status || !output || !note) return;
+  status.textContent = formatPluginDeveloperBuildStatus(state);
+  const stateClass = pluginDeveloperBuildStateClass(state);
+  if (stateClass) status.dataset.state = stateClass;
+  else delete status.dataset.state;
+  const log = typeof state?.build_log === "string" ? state.build_log : "";
+  const reportAvailable = Boolean(state?.build_report_available);
+  const previousScrollTop = output.scrollTop;
+  const shouldFollowTail = output.scrollHeight - output.scrollTop - output.clientHeight < 24;
+  const reportMatches = reportAvailable
+    ? [...log.matchAll(/file:\/\/\S*?problems-report\.html/gi)]
+    : [];
+  if (reportMatches.length) {
+    let renderedLog = "";
+    let cursor = 0;
+    for (const match of reportMatches) {
+      const start = match.index || 0;
+      renderedLog += escapeHtml(log.slice(cursor, start));
+      renderedLog += `<a class="plugin-build-log-report-link" href="#plugin-build-report" onclick="event.preventDefault(); openPluginBuildReport()" title="View retained Gradle problems report">${escapeHtml(match[0])}</a>`;
+      cursor = start + match[0].length;
+    }
+    output.innerHTML = renderedLog + escapeHtml(log.slice(cursor));
+  } else {
+    output.textContent = log || (state?.status === "building" || state?.status === "queued"
+      ? "Waiting for live build output…"
+      : "No build output has been recorded yet.");
+  }
+  const reportMentioned = /problems-report\.html/i.test(log);
+  note.textContent = log
+    ? reportMentioned && !reportAvailable
+      ? "Gradle wrote this report in the temporary build workspace. Rebuild to retain and view it here."
+      : state?.status === "building" || state?.status === "queued"
+        ? "Live output is refreshed automatically while the build runs."
+        : "Showing the retained tail of the latest build log."
+    : "This dialog refreshes automatically while the build runs.";
+  if (reportButton) {
+    reportButton.hidden = !reportAvailable;
+    reportButton.disabled = !reportAvailable;
+    reportButton.title = reportAvailable
+      ? "View the retained Gradle problems report"
+      : "No Gradle problems report is available";
+  }
+  output.scrollTop = shouldFollowTail ? output.scrollHeight : previousScrollTop;
+}
+
+async function copyPluginBuildLog() {
+  const output = document.getElementById("plugin-build-log-output");
+  const text = output?.textContent || "";
+  if (!text) return;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const fallback = document.createElement("textarea");
+      fallback.value = text;
+      fallback.setAttribute("readonly", "");
+      fallback.style.position = "fixed";
+      fallback.style.opacity = "0";
+      document.body.append(fallback);
+      try {
+        fallback.select();
+        if (!document.execCommand("copy")) throw new Error("Copy was rejected");
+      } finally {
+        fallback.remove();
+      }
+    }
+    showToast("Build log copied.", "success");
+  } catch {
+    showToast("Unable to copy the build log.", "error");
+  }
+}
+
+function downloadPluginBuildLog() {
+  const output = document.getElementById("plugin-build-log-output");
+  const title = document.getElementById("plugin-build-log-title")?.textContent || "plugin build log";
+  const text = output?.textContent || "";
+  const filename = `${title.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "plugin-build-log"}.log`;
+  const url = URL.createObjectURL(new Blob([text], {type: "text/plain;charset=utf-8"}));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  showToast("Build log download started.", "success");
+}
+
+function pluginBuildReportUrl(download = false) {
+  const logModal = document.getElementById("plugin-build-log-modal");
+  if (!logModal?.dataset.serverId || !logModal.dataset.filename) return "";
+  const query = `filename=${encodeURIComponent(logModal.dataset.filename)}${download ? "&download=true" : ""}`;
+  return `/api/web/servers/${logModal.dataset.serverId}/plugins/developer-build/report?${query}`;
+}
+
+function openPluginBuildReport() {
+  const logModal = document.getElementById("plugin-build-log-modal");
+  const modal = document.getElementById("plugin-build-report-modal");
+  const frame = document.getElementById("plugin-build-report-frame");
+  if (!logModal || logModal.hidden || !modal || !frame || !pluginBuildReportUrl()) return;
+  pluginBuildReportPreviousFocus = document.activeElement;
+  const title = document.getElementById("plugin-build-report-title");
+  const source = document.getElementById("plugin-build-report-source");
+  const logTitle = document.getElementById("plugin-build-log-title");
+  const logSource = document.getElementById("plugin-build-log-source");
+  if (title) title.textContent = `${logTitle?.textContent || "Plugin"} · Gradle report`;
+  if (source) source.textContent = logSource?.textContent || "";
+  const loading = document.getElementById("plugin-build-report-loading");
+  if (loading) {
+    loading.hidden = false;
+    loading.dataset.state = "loading";
+    loading.innerHTML = '<i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i><span>Loading Gradle report…</span>';
+  }
+  frame.src = pluginBuildReportUrl();
+  modal.hidden = false;
+  document.getElementById("plugin-build-report-close")?.focus();
+}
+
+function pluginBuildReportLoaded() {
+  const loading = document.getElementById("plugin-build-report-loading");
+  if (loading) loading.hidden = true;
+}
+
+function pluginBuildReportLoadFailed() {
+  const loading = document.getElementById("plugin-build-report-loading");
+  if (!loading) return;
+  loading.hidden = false;
+  loading.dataset.state = "error";
+  loading.innerHTML = '<i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><span>Unable to display the report. Use download to open the HTML file.</span>';
+}
+
+function closePluginBuildReport() {
+  const modal = document.getElementById("plugin-build-report-modal");
+  const frame = document.getElementById("plugin-build-report-frame");
+  if (frame) frame.src = "about:blank";
+  const loading = document.getElementById("plugin-build-report-loading");
+  if (loading) loading.hidden = true;
+  if (modal) modal.hidden = true;
+  const previousFocus = pluginBuildReportPreviousFocus;
+  pluginBuildReportPreviousFocus = null;
+  if (previousFocus?.isConnected) previousFocus.focus({preventScroll: true});
+  const logModal = document.getElementById("plugin-build-log-modal");
+  setPluginBuildLogScrollLock(Boolean(logModal && !logModal.hidden));
+}
+
+function downloadPluginBuildReport() {
+  const url = pluginBuildReportUrl(true);
+  if (!url) return;
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "gradle-problems-report.html";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  showToast("Gradle problems report download started.", "success");
+}
+
+function setPluginBuildLogScrollLock(locked) {
+  document.documentElement.classList.toggle("plugin-build-log-open", locked);
+  document.body?.classList.toggle("plugin-build-log-open", locked);
+}
+
+function stopPluginBuildLogPolling() {
+  if (pluginBuildLogPollTimer) window.clearInterval(pluginBuildLogPollTimer);
+  pluginBuildLogPollTimer = null;
+  pluginBuildLogPollSequence += 1;
+}
+
+async function refreshPluginBuildLog(sequence) {
+  const modal = document.getElementById("plugin-build-log-modal");
+  if (!modal || modal.hidden || sequence !== pluginBuildLogPollSequence) return;
+  const filename = modal.dataset.filename;
+  if (!filename) return;
+  try {
+    const response = await nativeFetch(`/api/web/servers/${modal.dataset.serverId}/plugins/developer-build?filename=${encodeURIComponent(filename)}`, {cache: "no-store"});
+    connectionFailureLatched = false;
+    if (handleAuthenticationResponse(response)) return;
+    const data = await response.json();
+    if (!response.ok || sequence !== pluginBuildLogPollSequence) return;
+    renderPluginBuildLogDialog(data.development_status);
+  } catch {
+    // Keep the last visible output when a background refresh is unavailable.
+  }
+}
+
+function startPluginBuildLogPolling() {
+  stopPluginBuildLogPolling();
+  const sequence = pluginBuildLogPollSequence;
+  refreshPluginBuildLog(sequence);
+  pluginBuildLogPollTimer = window.setInterval(() => refreshPluginBuildLog(sequence), 500);
+}
+
+function openPluginBuildLog(index) {
+  const plugin = pluginData[index];
+  const modal = document.getElementById("plugin-build-log-modal");
+  const page = document.querySelector(".plugins-page");
+  if (!plugin || !modal || !page) return;
+  const config = plugin.update?.monitoring || {};
+  pluginBuildLogPreviousFocus = document.activeElement;
+  modal.dataset.filename = plugin.filename;
+  modal.dataset.serverId = page.dataset.serverId;
+  document.getElementById("plugin-build-log-title").textContent = `${plugin.name} build log`;
+  document.getElementById("plugin-build-log-source").textContent = [config.project, config.development_branch].filter(Boolean).join(" · ");
+  renderPluginBuildLogDialog(config.development_status);
+  modal.hidden = false;
+  const output = document.getElementById("plugin-build-log-output");
+  if (output) output.scrollTop = output.scrollHeight;
+  setPluginBuildLogScrollLock(true);
+  startPluginBuildLogPolling();
+  document.getElementById("plugin-build-log-close")?.focus();
+}
+
+function closePluginBuildLog() {
+  const modal = document.getElementById("plugin-build-log-modal");
+  stopPluginBuildLogPolling();
+  if (modal) modal.hidden = true;
+  setPluginBuildLogScrollLock(false);
+  const previousFocus = pluginBuildLogPreviousFocus;
+  pluginBuildLogPreviousFocus = null;
+  if (previousFocus?.isConnected) previousFocus.focus({preventScroll: true});
+}
+
+function renderPluginMonitoringDevelopmentState(state) {
+  if (!state) {
+    setPluginMonitoringDevelopmentStatus("No branch build has run yet.");
+    return;
+  }
+  setPluginMonitoringDevelopmentStatus(formatPluginDeveloperBuildStatus(state), pluginDeveloperBuildStateClass(state));
+}
+
+function stopPluginMonitoringBuildPolling() {
+  if (pluginMonitoringBuildPollTimer) window.clearInterval(pluginMonitoringBuildPollTimer);
+  pluginMonitoringBuildPollTimer = null;
+  pluginMonitoringBuildPollSequence += 1;
+}
+
+async function refreshPluginMonitoringBuildStatus(sequence) {
+  const modal = document.getElementById("plugin-monitoring-modal");
+  const projectInput = document.getElementById("plugin-monitoring-project");
+  const branchInput = document.getElementById("plugin-monitoring-development-branch");
+  if (!modal || modal.hidden || sequence !== pluginMonitoringBuildPollSequence) return;
+  const filename = modal.dataset.filename;
+  if (!filename) return;
+  try {
+    const response = await nativeFetch(`/api/web/servers/${modal.dataset.serverId}/plugins/developer-build?filename=${encodeURIComponent(filename)}`, {cache: "no-store"});
+    connectionFailureLatched = false;
+    if (handleAuthenticationResponse(response)) return;
+    const data = await response.json();
+    if (!response.ok || sequence !== pluginMonitoringBuildPollSequence) return;
+    if (projectInput?.value.trim() !== data.project || branchInput?.value.trim() !== data.branch) return;
+    renderPluginMonitoringDevelopmentState(data.development_status);
+  } catch {
+    // Keep the last visible status when a background refresh is unavailable.
+  }
+}
+
+function startPluginMonitoringBuildPolling() {
+  stopPluginMonitoringBuildPolling();
+  const modal = document.getElementById("plugin-monitoring-modal");
+  if (!modal || document.getElementById("plugin-monitoring-mode")?.value !== "custom"
+      || document.getElementById("plugin-monitoring-provider")?.value !== "github_branch") return;
+  const sequence = pluginMonitoringBuildPollSequence;
+  refreshPluginMonitoringBuildStatus(sequence);
+  pluginMonitoringBuildPollTimer = window.setInterval(() => refreshPluginMonitoringBuildStatus(sequence), 2500);
 }
 
 function updatePluginMonitoringFields(providerChanged = false) {
@@ -10496,15 +11061,36 @@ function updatePluginMonitoringFields(providerChanged = false) {
     globalNotes.textContent = globalSettings.notes || "";
     globalNotes.hidden = !globalAvailable || !globalSettings.notes;
   }
+  const providerSelect = document.getElementById("plugin-monitoring-provider");
+  const provider = providerSelect.value;
+  const branchMode = provider === "github_branch";
+  const providerKind = branchMode ? "github" : provider;
+  const page = document.querySelector(".plugins-page");
+  const branchFields = document.getElementById("plugin-monitoring-development-fields");
+  const branchInput = document.getElementById("plugin-monitoring-development-branch");
+  const developerEnabled = page?.dataset.developerUpdatesEnabled === "true";
+  const branchOption = providerSelect.querySelector('option[value="github_branch"]');
+  if (branchOption) {
+    branchOption.hidden = !developerEnabled && !branchMode;
+    branchOption.disabled = !developerEnabled && !branchMode;
+  }
   const promoteButton = document.getElementById("plugin-monitoring-promote-button");
   if (promoteButton) {
-    promoteButton.hidden = !enabled;
+    promoteButton.hidden = !enabled || branchMode;
     const promoteLabel = document.getElementById("plugin-monitoring-promote-label");
     if (promoteLabel) promoteLabel.textContent = globalAvailable ? "Update global" : "Make global";
   }
-  document.getElementById("plugin-monitoring-provider").disabled = !editable;
-  const provider = document.getElementById("plugin-monitoring-provider").value;
-  const documentSource = ["jenkins", "custom"].includes(provider);
+  providerSelect.disabled = !editable;
+  if (branchFields) branchFields.hidden = !editable || !branchMode;
+  if (branchInput) {
+    branchInput.disabled = !editable || !branchMode || !developerEnabled;
+    branchInput.required = editable && branchMode && developerEnabled;
+  }
+  const branchHint = document.getElementById("plugin-monitoring-development-hint");
+  if (branchHint) branchHint.textContent = developerEnabled
+    ? "Public GitHub repositories only. Craftarr tracks commits on this branch, builds the matching plugin JAR, and installs it using the server's Developer options above."
+    : "Enable Developer options for this server before saving GitHub Branch Builds.";
+  const documentSource = ["jenkins", "custom"].includes(providerKind);
   const project = document.getElementById("plugin-monitoring-project");
   const previewButton = document.getElementById("plugin-monitoring-preview-button");
   if (providerChanged) {
@@ -10512,13 +11098,16 @@ function updatePluginMonitoringFields(providerChanged = false) {
     for (const field of ["version", "installed", "asset"]) document.getElementById(`plugin-monitoring-${field}-pattern`).value = "";
     document.getElementById("plugin-monitoring-download-url").value = "";
     document.getElementById("plugin-monitoring-installed-detection").value = "auto";
+    if (!branchMode) branchInput.value = "";
+    clearPluginMonitoringBranchState();
   }
   project.required = editable;
   project.disabled = !editable;
-  previewButton.hidden = !(enabled || (usesGlobal && globalAvailable));
-  previewButton.disabled = !(enabled || (usesGlobal && globalAvailable));
+  previewButton.hidden = branchMode || !(enabled || (usesGlobal && globalAvailable));
+  previewButton.disabled = branchMode || !(enabled || (usesGlobal && globalAvailable));
   const hints = {
     github: "Use the plugin's GitHub project page. We check its latest stable release.",
+    github_branch: "Use a public GitHub repository. Craftarr tracks commits on the selected branch and builds the plugin from source.",
     modrinth: "Use the plugin's Modrinth project page. We prefer stable Paper releases and use beta only when no stable release is available.",
     jenkins: "Use the plugin's build page. We compare successful builds automatically.",
     custom: "Use a public plugin page that shows its latest version.",
@@ -10526,35 +11115,136 @@ function updatePluginMonitoringFields(providerChanged = false) {
   project.placeholder = documentSource ? "https://example.org/releases" : "Project identifier or URL";
   document.getElementById("plugin-monitoring-hint").textContent = hints[provider];
   const version = document.getElementById("plugin-monitoring-version-pattern");
-  version.required = editable && provider === "custom";
-  document.getElementById("plugin-monitoring-version-hint").textContent = provider === "jenkins"
+  version.required = editable && !branchMode && providerKind === "custom";
+  document.getElementById("plugin-monitoring-version-hint").textContent = branchMode
+    ? "Branch builds use the commit SHA; release version expressions are not used."
+    : providerKind === "jenkins"
     ? "Usually leave this blank. Build pages are compared automatically."
     : documentSource
     ? 'Required. Match the metadata response and capture the version, for example "version"\\s*:\\s*"([^"]+)". Test shows the captured value.'
     : "Optional. Extract a comparable version from the release tag/version number, for example ^v?([0-9.]+). Test shows the tag and captured value; edits preview against the same fetched release.";
-  document.getElementById("plugin-monitoring-download-url-fields").hidden = !documentSource;
-  document.getElementById("plugin-monitoring-asset-fields").hidden = provider !== "github";
+  document.getElementById("plugin-monitoring-download-url-fields").hidden = branchMode || !documentSource;
+  document.getElementById("plugin-monitoring-asset-fields").hidden = branchMode || providerKind !== "github";
+  document.getElementById("plugin-monitoring-expressions").hidden = branchMode;
   for (const field of ["version", "installed", "asset"]) {
-    document.getElementById(`plugin-monitoring-${field}-pattern`).disabled = !editable || (field === "asset" && provider !== "github");
+    document.getElementById(`plugin-monitoring-${field}-pattern`).disabled = !editable || branchMode || (field === "asset" && providerKind !== "github");
   }
-  document.getElementById("plugin-monitoring-download-url").disabled = !editable || !documentSource;
-  document.getElementById("plugin-monitoring-download-rename").disabled = !editable;
+  document.getElementById("plugin-monitoring-download-url").disabled = !editable || branchMode || !documentSource;
+  document.getElementById("plugin-monitoring-download-rename").disabled = !editable || branchMode;
   const installedDetection = document.getElementById("plugin-monitoring-installed-detection");
   const installedPattern = document.getElementById("plugin-monitoring-installed-pattern");
-  installedDetection.disabled = !editable;
-  installedPattern.required = editable && installedDetection.value === "filename";
+  installedDetection.disabled = !editable || branchMode;
+  installedPattern.required = editable && !branchMode && installedDetection.value === "filename";
   document.getElementById("plugin-monitoring-installed-hint").textContent = installedDetection.value === "filename"
     ? "Required for filename detection. Match the full JAR filename, for example ^Geyser-(?:Spigot|Bukkit)-([0-9]+)\\.jar$."
     : installedDetection.value === "auto"
     ? "Automatic uses plugin.yml when available, otherwise paper-plugin.yml; it falls back to a filename version when metadata has no version. The expression uses the first capture group or a named “version” group."
     : "The expression applies to the version key inside " + installedDetection.value + ".";
-  document.getElementById("plugin-monitoring-asset-pattern").disabled = !editable || provider !== "github";
+  document.getElementById("plugin-monitoring-asset-pattern").disabled = !editable || branchMode || providerKind !== "github";
   clearMonitoringPreview();
+}
+
+async function loadPluginMonitoringBranches() {
+  const modal = document.getElementById("plugin-monitoring-modal");
+  const projectInput = document.getElementById("plugin-monitoring-project");
+  const options = document.getElementById("plugin-monitoring-branch-options");
+  if (!modal || !projectInput || !options) return false;
+  const project = projectInput.value.trim();
+  if (!project) {
+    setPluginMonitoringDevelopmentStatus("No branch build has run yet.");
+    return false;
+  }
+  setPluginMonitoringDevelopmentStatus("Loading GitHub branches…", "pending");
+  try {
+    const response = await nativeFetch(`/api/web/servers/${modal.dataset.serverId}/plugins/monitoring/branch-names`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({project}),
+    });
+    connectionFailureLatched = false;
+    if (handleAuthenticationResponse(response)) return false;
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to load GitHub branches.");
+    if (projectInput.value.trim() !== project) return false;
+    if (data.project && projectInput.value.trim() === project) projectInput.value = data.project;
+    options.replaceChildren();
+    for (const branch of (Array.isArray(data.branches) ? data.branches : [])) {
+      if (typeof branch !== "string") continue;
+      const option = document.createElement("option");
+      option.value = branch;
+      options.append(option);
+    }
+    const count = options.options.length;
+    setPluginMonitoringDevelopmentStatus(
+      count ? "No branch build has run yet." : "No GitHub branches were found for this repository.",
+      count ? "" : "error",
+    );
+    return true;
+  } catch (failure) {
+    const message = failure instanceof TypeError
+      ? "Unable to connect to the server."
+      : failure.message || "Unable to load GitHub branches.";
+    setPluginMonitoringDevelopmentStatus(`Branch check failed · ${message}`, "error");
+    return false;
+  }
+}
+
+async function refreshPluginMonitoringBranch() {
+  const loaded = await loadPluginMonitoringBranches();
+  const branch = document.getElementById("plugin-monitoring-development-branch")?.value.trim();
+  if (loaded && branch) await testPluginMonitoringBranch();
+}
+
+async function testPluginMonitoringBranch() {
+  const modal = document.getElementById("plugin-monitoring-modal");
+  const projectInput = document.getElementById("plugin-monitoring-project");
+  const branchInput = document.getElementById("plugin-monitoring-development-branch");
+  if (!modal || !projectInput || !branchInput) return;
+  const project = projectInput.value.trim();
+  const branch = branchInput.value.trim();
+  if (!project || !branch) {
+    resetPluginMonitoringBranchStatus();
+    return;
+  }
+  const sequence = modal._branchEvaluationSequence = (modal._branchEvaluationSequence || 0) + 1;
+  setPluginMonitoringDevelopmentStatus("Checking the latest commit on this branch…", "pending");
+  try {
+    const response = await nativeFetch(`/api/web/servers/${modal.dataset.serverId}/plugins/monitoring/branch-preview`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({project, branch}),
+    });
+    connectionFailureLatched = false;
+    if (handleAuthenticationResponse(response)) return;
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to test this GitHub branch.");
+    if (modal._branchEvaluationSequence !== sequence
+        || projectInput.value.trim() !== project || branchInput.value.trim() !== branch) return;
+    const commit = data.commit || "";
+    setPluginMonitoringDevelopmentStatus(`Latest commit: ${commit}`, "success");
+    const status = document.getElementById("plugin-monitoring-development-status");
+    if (data.url) {
+      const link = document.createElement("a");
+      link.href = data.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = "View commit";
+      status?.append(" · ", link);
+    }
+  } catch (failure) {
+    if (modal._branchEvaluationSequence !== sequence) return;
+    const message = failure instanceof TypeError
+      ? "Unable to connect to the server."
+      : failure.message || "Unable to test this GitHub branch.";
+    setPluginMonitoringDevelopmentStatus(`Branch check failed · ${message}`, "error");
+  }
 }
 
 function pluginMonitoringPayload() {
   const modal = document.getElementById("plugin-monitoring-modal");
   const mode = document.getElementById("plugin-monitoring-mode").value;
+  const selectedProvider = document.getElementById("plugin-monitoring-provider").value;
+  const branchMode = selectedProvider === "github_branch";
   let fields = {};
   if (mode === "global") {
     try { fields = JSON.parse(modal.dataset.globalSettings || "{}"); } catch { fields = {}; }
@@ -10562,19 +11252,54 @@ function pluginMonitoringPayload() {
   const fieldValue = (name, inputId) => Object.hasOwn(fields, name)
     ? fields[name]
     : document.getElementById(inputId).value;
-  const provider = fields.provider || document.getElementById("plugin-monitoring-provider").value;
+  const provider = fields.provider || (branchMode ? "github" : selectedProvider);
   return {
     filename: modal.dataset.filename,
     mode,
     provider,
     project: String(fieldValue("project", "plugin-monitoring-project")).trim(),
-    version_pattern: fieldValue("version_pattern", "plugin-monitoring-version-pattern"),
-    download_url: ["jenkins", "custom"].includes(provider) ? fieldValue("download_url", "plugin-monitoring-download-url") : "",
-    download_rename: fieldValue("download_rename", "plugin-monitoring-download-rename"),
-    installed_pattern: fieldValue("installed_pattern", "plugin-monitoring-installed-pattern"),
-    asset_pattern: provider === "github" ? fieldValue("asset_pattern", "plugin-monitoring-asset-pattern") : "",
-    installed_detection: fieldValue("installed_detection", "plugin-monitoring-installed-detection") || "auto",
+    version_pattern: branchMode ? "" : fieldValue("version_pattern", "plugin-monitoring-version-pattern"),
+    download_url: branchMode || !["jenkins", "custom"].includes(provider) ? "" : fieldValue("download_url", "plugin-monitoring-download-url"),
+    download_rename: branchMode ? "" : fieldValue("download_rename", "plugin-monitoring-download-rename"),
+    installed_pattern: branchMode ? "" : fieldValue("installed_pattern", "plugin-monitoring-installed-pattern"),
+    asset_pattern: branchMode || provider !== "github" ? "" : fieldValue("asset_pattern", "plugin-monitoring-asset-pattern"),
+    installed_detection: branchMode ? "auto" : fieldValue("installed_detection", "plugin-monitoring-installed-detection") || "auto",
+    development_branch: branchMode ? document.getElementById("plugin-monitoring-development-branch")?.value.trim() || "" : "",
   };
+}
+
+async function saveDeveloperPluginSettings(event) {
+  if (event) event.preventDefault();
+  const page = document.querySelector(".plugins-page[data-server-id]");
+  const form = document.getElementById("plugin-developer-settings-form");
+  const status = document.getElementById("plugin-developer-settings-status");
+  if (!page || !form || !status || form.dataset.saving === "true") return;
+  const controls = [...form.querySelectorAll("input, select")];
+  const settings = {
+    enabled: document.getElementById("plugin-developer-updates-enabled").checked,
+    check_interval_minutes: Number.parseInt(document.getElementById("plugin-developer-check-interval").value, 10),
+    restart_policy: document.getElementById("plugin-developer-restart-policy").value,
+  };
+  form.dataset.saving = "true";
+  controls.forEach((control) => { control.disabled = true; });
+  status.textContent = "Saving…";
+  try {
+    const response = await nativeFetch(`/api/web/servers/${page.dataset.serverId}/plugins/developer-settings`, {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(settings),
+    });
+    connectionFailureLatched = false;
+    if (handleAuthenticationResponse(response)) return;
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to save Developer options.");
+    page.dataset.developerUpdatesEnabled = String(data.enabled === true);
+    status.textContent = data.enabled ? "Developer updates are enabled." : "Developer updates are disabled.";
+    await updatePluginsPage();
+  } catch (failure) {
+    status.textContent = failure.message || "Unable to save Developer options.";
+  } finally {
+    controls.forEach((control) => { control.disabled = false; });
+    delete form.dataset.saving;
+  }
 }
 
 function previewPluginMonitoringExpressionChanged() {

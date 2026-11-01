@@ -53,6 +53,16 @@
         <div class="metric-value"><strong id="overview-memory-value" data-memory="{{ server.memory }}">—</strong><span>in use</span></div>
         <canvas id="metric-memory" height="78" role="img" aria-label="Memory use history"></canvas>
       </article>
+      <article class="metric-card metric-tps-card">
+        <div class="metric-card-heading"><span class="metric-icon"><i class="fa-solid fa-gauge-high" aria-hidden="true"></i></span><span>TPS</span></div>
+        <div class="metric-value"><strong id="overview-tps-value">—</strong><span>1 min</span></div>
+        <canvas id="metric-tps" height="78" role="img" aria-label="Ticks per second history"></canvas>
+      </article>
+      <article class="metric-card metric-mspt-card">
+        <div class="metric-card-heading"><span class="metric-icon"><i class="fa-solid fa-stopwatch" aria-hidden="true"></i></span><span>MSPT</span></div>
+        <div class="metric-value"><strong id="overview-mspt-value">—</strong><span>average</span></div>
+        <canvas id="metric-mspt" height="78" role="img" aria-label="Milliseconds per tick history"></canvas>
+      </article>
       <article class="metric-card metric-uptime-card">
         <div class="metric-card-heading"><span class="metric-icon"><i class="fa-solid fa-clock" aria-hidden="true"></i></span><span>Time online</span></div>
         <div class="metric-value"><strong id="overview-uptime">—</strong><span>this run</span></div>

@@ -22,6 +22,7 @@ from pathlib import Path
 
 MAX_PLUGIN_BYTES = int(getenv("CRAFTARR_MAX_PLUGIN_BYTES", str(128 * 1024 * 1024)))
 MAX_PLUGIN_METADATA_BYTES = 256 * 1024
+INTERNAL_PLUGIN_FILENAMES = {"craftarr-metrics.jar"}
 
 
 class PluginFileExistsError(FileExistsError):
@@ -457,6 +458,9 @@ def list_plugins(server) -> list[dict]:
         if not path.is_file():
             continue
 
+        if path.name.removesuffix(".disabled").casefold() in INTERNAL_PLUGIN_FILENAMES:
+            continue
+
         if not (
             path.name.endswith(".jar")
             or path.name.endswith(
@@ -493,6 +497,8 @@ def list_plugin_files(server) -> list[dict]:
 
     plugins = []
     for path in directory.iterdir():
+        if path.name.removesuffix(".disabled").casefold() in INTERNAL_PLUGIN_FILENAMES:
+            continue
         if not path.is_file() or not (
             path.name.endswith(".jar")
             or path.name.endswith(".jar.disabled")
@@ -909,6 +915,54 @@ def install_plugin_update(server, filename: str, url: str, *, delete_previous: b
     finally:
         if temporary_path:
             temporary_path.unlink(missing_ok=True)
+
+
+def install_plugin_build(server, filename: str, source: Path, *, expected_name: str) -> dict:
+    """Atomically install a validated local build and retain the current JAR disabled."""
+    if Path(filename).name != filename or not filename.lower().endswith(".jar"):
+        raise ValueError("Select an enabled plugin JAR")
+    current_path = safe_plugin_path(server, filename)
+    if current_path.name != filename or not current_path.is_file():
+        raise FileNotFoundError("Plugin file changed or no longer exists")
+
+    current = plugin_info(current_path)
+    if current["name"].casefold() != expected_name.casefold():
+        raise ValueError("Plugin identity changed; reload the plugin list and try again")
+    source = Path(source)
+    validate_plugin_archive(source)
+    updated_metadata = read_plugin_yml(source)
+    updated_name = updated_metadata.get("name")
+    if not updated_name or updated_name.casefold() != expected_name.casefold():
+        raise ValueError(f"Built JAR is not for {expected_name}")
+
+    directory = plugins_directory(server).resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    temporary_path = directory / f".craftarr-build-{uuid.uuid4().hex}.jar"
+    previous_path = None
+    moved_current = False
+    try:
+        shutil.copyfile(source, temporary_path)
+        validate_plugin_archive(temporary_path)
+        base_name = filename[:-4]
+        while previous_path is None or previous_path.exists():
+            previous_path = safe_plugin_path(
+                server, f"{base_name}.previous-{uuid.uuid4().hex[:12]}.jar.disabled",
+            )
+        os.replace(current_path, previous_path)
+        moved_current = True
+        os.replace(temporary_path, current_path)
+        moved_current = False
+        updated = plugin_info(current_path)
+        updated["previous_version"] = False
+        return {"plugin": updated, "previous_filename": previous_path.name}
+    except Exception:
+        if moved_current:
+            current_path.unlink(missing_ok=True)
+            if previous_path and previous_path.exists():
+                os.replace(previous_path, current_path)
+        raise
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def disable_plugin(

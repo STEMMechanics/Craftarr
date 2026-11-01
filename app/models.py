@@ -5,6 +5,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -239,6 +240,24 @@ class Server(Base):
         Boolean,
         nullable=False,
         default=False,
+    )
+
+    developer_updates_enabled = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
+
+    developer_update_interval_minutes = Column(
+        Integer,
+        nullable=False,
+        default=5,
+    )
+
+    developer_update_restart_policy = Column(
+        String(20),
+        nullable=False,
+        default="manual",
     )
 
     plugin_session_pid = Column(
@@ -556,6 +575,8 @@ class ServerMetric(Base):
     running = Column(Boolean, nullable=False)
     cpu_percent = Column(Integer, nullable=False, default=0)
     memory_bytes = Column(Integer, nullable=False, default=0)
+    tps = Column(Float, nullable=True)
+    mspt = Column(Float, nullable=True)
     player_count = Column(Integer, nullable=True)
     uptime_seconds = Column(Integer, nullable=True)
 
@@ -604,6 +625,7 @@ class PluginMonitoringSetting(Base):
     installed_pattern = Column(Text, nullable=False, default='')
     asset_pattern = Column(Text, nullable=False, default='')
     installed_detection = Column(String(32), nullable=False, default='auto')
+    development_branch = Column(String(255), nullable=False, default='')
 
     @property
     def link_pattern(self):
@@ -613,6 +635,25 @@ class PluginMonitoringSetting(Base):
     @link_pattern.setter
     def link_pattern(self, value):
         self.download_url = value
+
+
+class DeveloperPluginUpdate(Base):
+    """Latest branch build state for one plugin on one development server."""
+
+    __tablename__ = "developer_plugin_updates"
+
+    server_id = Column(Integer, ForeignKey("servers.id", ondelete="CASCADE"), primary_key=True)
+    plugin_name = Column(String(200), primary_key=True)
+    source_key = Column(String(512), nullable=False, default="")
+    latest_commit = Column(String(40), nullable=True)
+    installed_commit = Column(String(40), nullable=True)
+    status = Column(String(32), nullable=False, default="waiting")
+    error = Column(Text, nullable=True)
+    build_log = Column(Text, nullable=True)
+    build_report_html = Column(Text, nullable=True)
+    build_report_path = Column(String(1024), nullable=True)
+    checked_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
 class ServerAuditEvent(Base):

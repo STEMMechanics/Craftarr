@@ -2,6 +2,7 @@ import subprocess
 import shutil
 import socket
 import json
+import logging
 import re
 import shlex
 import sys
@@ -13,6 +14,8 @@ from .env import getenv
 from collections import deque
 from pathlib import Path
 from dataclasses import dataclass
+
+from .metrics_bridge import ensure_metrics_bridge
 
 
 processes: dict[int, subprocess.Popen] = {}
@@ -28,6 +31,7 @@ console_threads: dict[int, threading.Thread] = {}
 stats_processes: dict[int, psutil.Process] = {}
 stats_process_roots: dict[int, int] = {}
 stats_process_started_at: dict[int, float] = {}
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -372,6 +376,12 @@ def start_server(
     if config:
         if _systemd_status(config)["running"]:
             raise RuntimeError("Server is already running")
+        directory_path = Path(config.directory)
+        try:
+            server_jar = resolve_server_jar(directory_path, config.jar_name)
+            ensure_metrics_bridge(directory_path, server_jar, config.java_path)
+        except ValueError as error:
+            raise RuntimeError(str(error)) from error
         _systemctl(config, "start")
         return _systemd_status(config).get("pid")
     existing = processes.get(
@@ -392,9 +402,15 @@ def start_server(
 
     command = build_java_command(memory, jar_name, java_args, min_memory, java_path)
     try:
-        resolve_server_jar(directory_path, jar_name)
+        server_jar = resolve_server_jar(directory_path, jar_name)
     except ValueError as error:
         raise RuntimeError(str(error)) from error
+    try:
+        ensure_metrics_bridge(directory_path, server_jar, java_path)
+    except (OSError, RuntimeError) as error:
+        # Metrics are auxiliary. A Paper server must remain startable even when
+        # the local JDK or API is unavailable for compiling the bridge.
+        logger.warning("Unable to prepare Craftarr TPS/MSPT metrics for server %s: %s", server_id, error)
 
     console_buffers[server_id] = deque(
         maxlen=MAX_CONSOLE_LINES

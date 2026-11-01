@@ -402,6 +402,7 @@ def metrics(server_id: int, request: Request, hours: int = 24, db: Session = Dep
     return {"metrics": [{
         "recorded_at": _utc_iso(row.recorded_at), "running": row.running,
         "cpu_percent": row.cpu_percent, "memory_bytes": row.memory_bytes,
+        "tps": row.tps, "mspt": row.mspt,
         "player_count": row.player_count, "uptime_seconds": row.uptime_seconds,
     } for row in rows]}
 

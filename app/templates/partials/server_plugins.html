@@ -5,6 +5,7 @@
     data-can-control="{{ 'true' if user.can('servers.control') else 'false' }}"
     data-can-view-files="{{ 'true' if user.can('files.view') else 'false' }}"
     data-can-edit-files="{{ 'true' if user.can('files.manage') else 'false' }}"
+    data-developer-updates-enabled="{{ 'true' if server.developer_updates_enabled else 'false' }}"
     data-page-title="Plugins"
 >
 
@@ -107,6 +108,33 @@
         </div>
 
     </section>
+
+    {% if user.can("plugins.manage") %}
+    <details class="overview-card plugin-developer-options" {% if server.developer_updates_enabled %}open{% endif %}>
+        <summary><i class="fa-solid fa-code" aria-hidden="true"></i><span>Developer options</span><small>Branch builds are intended for development servers.</small></summary>
+        <form id="plugin-developer-settings-form" class="plugin-developer-settings" onsubmit="saveDeveloperPluginSettings(event)">
+            <label class="modal-checkbox"><input id="plugin-developer-updates-enabled" type="checkbox" onchange="saveDeveloperPluginSettings()" {% if server.developer_updates_enabled %}checked{% endif %}><span><strong>Enable GitHub branch updates for this server</strong><small>Builds run the repository's Gradle or Maven build script inside the Craftarr container. Use only trusted repositories.</small></span></label>
+            <div class="plugin-developer-option-grid">
+                <label class="plugin-developer-option">
+                    <span class="plugin-developer-option-copy"><strong>Check for branch commits</strong><small>How often Craftarr checks the selected branch.</small></span>
+                    <span class="plugin-developer-option-menu"><select id="plugin-developer-check-interval" aria-label="Check for branch commits" onchange="saveDeveloperPluginSettings()">
+                        {% for interval in [1, 5, 10, 15, 30, 60] %}<option value="{{ interval }}" {% if (server.developer_update_interval_minutes or 5) == interval %}selected{% endif %}>Every {{ interval }} minute{% if interval != 1 %}s{% endif %}</option>{% endfor %}
+                    </select></span>
+                </label>
+                <label class="plugin-developer-option">
+                    <span class="plugin-developer-option-copy"><strong>After a successful build</strong><small>Choose when the server restarts to apply the new JAR.</small></span>
+                    <span class="plugin-developer-option-menu"><select id="plugin-developer-restart-policy" aria-label="After a successful build" onchange="saveDeveloperPluginSettings()">
+                        <option value="manual" {% if server.developer_update_restart_policy == 'manual' %}selected{% endif %}>Manual restart</option>
+                        <option value="immediate" {% if server.developer_update_restart_policy == 'immediate' %}selected{% endif %}>Restart immediately</option>
+                        <option value="when_empty" {% if server.developer_update_restart_policy == 'when_empty' %}selected{% endif %}>After empty for 30 seconds</option>
+                    </select></span>
+                </label>
+            </div>
+            <p class="modal-note">The previous JAR is kept disabled after a build so you can restore it if the new plugin has problems.</p>
+            <p id="plugin-developer-settings-status" class="modal-note plugin-developer-settings-status" role="status" aria-live="polite"></p>
+        </form>
+    </details>
+    {% endif %}
 
 </div>
 
@@ -244,7 +272,7 @@
     <span class="page-kicker">Plugin settings</span>
     <h2>Check this plugin for updates</h2>
     <p id="plugin-monitoring-name"></p>
-    <p class="modal-note">Choose whether the console should look for a newer version of this plugin. It will never install one by itself.</p>
+    <p class="modal-note">Release updates stay manual. GitHub Branch Builds are available as a separate source when Developer options are enabled for this server.</p>
     <div id="plugin-monitoring-error" class="plugin-monitoring-feedback" role="alert" aria-live="assertive" hidden></div>
     <label for="plugin-monitoring-mode">Should we check for updates?</label>
     <select id="plugin-monitoring-mode" onchange="updatePluginMonitoringFields()">
@@ -260,13 +288,21 @@
       <label for="plugin-monitoring-provider">Where should we look?</label>
       <select id="plugin-monitoring-provider" onchange="updatePluginMonitoringFields(true)">
         <option value="github">GitHub Releases</option>
+        <option value="github_branch">GitHub Branch Builds</option>
         <option value="modrinth">Modrinth</option>
         <option value="jenkins">Jenkins</option>
         <option value="custom">Custom URL</option>
       </select>
       <label for="plugin-monitoring-project">Plugin page or project</label>
-      <input id="plugin-monitoring-project" type="text" maxlength="2048" autocomplete="off" oninput="clearMonitoringPreview()">
+      <input id="plugin-monitoring-project" type="text" maxlength="2048" autocomplete="off" oninput="clearMonitoringPreview(); clearPluginMonitoringBranchState()" onchange="refreshPluginMonitoringBranch()">
       <p id="plugin-monitoring-hint" class="modal-note"></p>
+      <div id="plugin-monitoring-development-fields" hidden>
+        <label for="plugin-monitoring-development-branch">Branch to build</label>
+        <input id="plugin-monitoring-development-branch" type="text" maxlength="255" autocomplete="off" list="plugin-monitoring-branch-options" placeholder="main" oninput="updatePluginMonitoringFields(); resetPluginMonitoringBranchStatus()" onchange="testPluginMonitoringBranch()">
+        <datalist id="plugin-monitoring-branch-options"></datalist>
+        <p id="plugin-monitoring-development-hint" class="modal-note">Public GitHub repositories only. Craftarr tracks commits on this branch, builds the matching plugin JAR, and installs it using the server's Developer options above.</p>
+        <p id="plugin-monitoring-development-status" class="modal-note" role="status" aria-live="polite"></p>
+      </div>
       <details id="plugin-monitoring-expressions" class="plugin-monitoring-advanced">
         <summary>Advanced settings</summary>
         <div class="plugin-monitoring-advanced-content">
@@ -315,5 +351,46 @@
       </div>
     </div>
   </form>
+</div>
+<div id="plugin-build-log-modal" class="modal-backdrop" hidden>
+  <div class="modal-card plugin-build-log-modal-card" role="dialog" aria-modal="true" aria-labelledby="plugin-build-log-title">
+    <span class="page-kicker">GitHub Branch Build</span>
+    <h2 id="plugin-build-log-title">Build log</h2>
+    <p id="plugin-build-log-source" class="modal-note"></p>
+    <p id="plugin-build-log-status" class="modal-note" role="status" aria-live="polite">No branch build has run yet.</p>
+    <div class="plugin-build-log-toolbar" role="toolbar" aria-label="Build log actions">
+      <span>Live output</span>
+      <div class="plugin-build-log-toolbar-actions">
+        <button id="plugin-build-log-report-button" class="plugin-build-log-report-button" type="button" onclick="openPluginBuildReport()" hidden><i class="fa-solid fa-file-lines" aria-hidden="true"></i><span>View report</span></button>
+        <div class="plugin-build-log-icon-actions">
+        <button class="plugin-build-log-icon-button" type="button" onclick="copyPluginBuildLog()" aria-label="Copy build log" title="Copy build log"><i class="fa-solid fa-copy" aria-hidden="true"></i></button>
+        <button class="plugin-build-log-icon-button" type="button" onclick="downloadPluginBuildLog()" aria-label="Download build log" title="Download build log"><i class="fa-solid fa-download" aria-hidden="true"></i></button>
+        </div>
+      </div>
+    </div>
+    <pre id="plugin-build-log-output" class="plugin-build-log-output">No build output has been recorded yet.</pre>
+    <small id="plugin-build-log-note" class="plugin-build-log-note"></small>
+    <div class="modal-actions">
+      <button id="plugin-build-log-close" class="button" type="button" onclick="closePluginBuildLog()">Close</button>
+    </div>
+  </div>
+</div>
+<div id="plugin-build-report-modal" class="modal-backdrop" hidden>
+  <div class="modal-card plugin-build-report-modal-card" role="dialog" aria-modal="true" aria-labelledby="plugin-build-report-title">
+    <span class="page-kicker">Gradle diagnostics</span>
+    <h2 id="plugin-build-report-title">Gradle problems report</h2>
+    <p id="plugin-build-report-source" class="modal-note"></p>
+    <div class="plugin-build-report-toolbar" role="toolbar" aria-label="Gradle report actions">
+      <span>Retained from the failed build</span>
+      <button class="plugin-build-log-icon-button" type="button" onclick="downloadPluginBuildReport()" aria-label="Download Gradle problems report" title="Download Gradle problems report"><i class="fa-solid fa-download" aria-hidden="true"></i></button>
+    </div>
+    <div class="plugin-build-report-frame-wrap">
+      <div id="plugin-build-report-loading" class="plugin-build-report-loading" role="status" aria-live="polite"><i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i><span>Loading Gradle report…</span></div>
+      <iframe id="plugin-build-report-frame" class="plugin-build-report-frame" title="Gradle problems report" sandbox="allow-scripts" onload="pluginBuildReportLoaded()" onerror="pluginBuildReportLoadFailed()"></iframe>
+    </div>
+    <div class="modal-actions">
+      <button id="plugin-build-report-close" class="button" type="button" onclick="closePluginBuildReport()">Close</button>
+    </div>
+  </div>
 </div>
 {% endif %}

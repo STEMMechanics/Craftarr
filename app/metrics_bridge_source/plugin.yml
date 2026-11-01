@@ -1,0 +1,6 @@
+name: CraftarrMetrics
+version: 1.0.0
+main: com.stemmechanics.craftarr.metrics.CraftarrMetricsPlugin
+api-version: '1.13'
+description: Quiet Paper performance metrics bridge for Craftarr
+softdepend: [spark]
