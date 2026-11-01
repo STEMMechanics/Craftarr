@@ -7675,7 +7675,8 @@ textarea::placeholder {
 .server-live-pill.is-node-offline { border-color: #c4b5fd; background: #f5f3ff; color: #5b21b6; }
 .server-live-pill.is-node-offline .server-live-dot { background: #8b5cf6; }
 .server-node-offline-notice { margin: 0 0 18px; padding: 12px 15px; border: 1px solid #c4b5fd; border-radius: 12px; background: #f5f3ff; color: #5b21b6; font-size: 13px; font-weight: 700; }
-.server-function-unavailable-notice { margin: 0 0 18px; padding: 12px 15px; border: 1px solid #f0d49c; border-radius: 12px; background: #fff9ec; color: #74410a; font-size: 13px; font-weight: 600; }
+.server-function-unavailable-notice { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 18px; padding: 12px 15px; border: 1px solid #efd0cc; border-radius: 12px; background: #fff8f7; color: #823e39; font-size: 13px; font-weight: 600; }
+.server-function-unavailable-notice > i { flex: 0 0 auto; margin-top: 3px; color: var(--sm-red-dark); }
 .node-offline-empty { margin: 18px 0; padding: 18px; border: 1px solid #ddd6fe; border-radius: 12px; background: #f5f3ff; color: #5b21b6; font-weight: 600; }
 .node-offline-disabled { opacity: .5; pointer-events: none; }
 

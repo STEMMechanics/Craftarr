@@ -15,6 +15,8 @@ from app.instance_identity import get_node_id, server_reference
 from app.main import app
 from app.models import NodeAccessToken, RemoteNode, RemoteServer, Server, User
 from app.node_gateway import (
+    _function_unavailable_response,
+    _inject_remote_version_notice,
     _permitted,
     _proxy_user_claim,
     _proxy_response_headers,
@@ -260,6 +262,58 @@ def test_gateway_maps_remote_operations_and_rewrites_server_refs():
         f'<a href="/servers/{node_id}:42">Open</a> '
         f'data-server-id="{node_id}:42" active_server_id={node_id}:42'
     ).encode()
+
+
+def test_function_unavailable_api_response_is_structured_for_the_hub():
+    node_id = str(uuid.uuid4())
+    path = f"/api/web/servers/{node_id}:42/plugins/developer-build/rebuild"
+    request = Request({
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "https",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 1234),
+        "server": ("craftarr.example.test", 443),
+        "session": {},
+    })
+
+    response = _function_unavailable_response(request, node_id, 42, "0.4.36")
+    payload = json.loads(response.body)
+
+    assert response.status_code == 501
+    assert payload["function_unavailable"] is True
+    assert payload["node_version"] == "0.4.36"
+    assert payload["app_version"] != payload["node_version"]
+    assert "not available" in payload["error"]
+
+
+def test_remote_version_notice_has_warning_markup():
+    request = Request({
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "https",
+        "path": "/servers/example",
+        "raw_path": b"/servers/example",
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 1234),
+        "server": ("craftarr.example.test", 443),
+        "session": {},
+    })
+
+    body = b'<div id="page-content"><main>Server</main></div>'
+    rendered = _inject_remote_version_notice(body, "0.4.36", request)
+
+    assert b'class="node-version-warning"' in rendered
+    assert b'fa-circle-exclamation' in rendered
+    assert b"Craftarr 0.4.36" in rendered
 
 
 def test_proxy_claim_carries_only_the_hub_users_server_menu(db):
