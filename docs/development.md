@@ -7,6 +7,14 @@
 - Java installed locally only when running a managed Minecraft server
 - Node.js and npm only when rebuilding the bundled CodeMirror editor
 
+Craftarr's TPS/MSPT history uses a small Paper API bridge. On the first start
+of a managed server, Craftarr compiles the bridge against that server's local
+Paper API and installs it as `plugins/craftarr-metrics.jar`. The bridge writes
+an atomic local snapshot and never sends a metrics command through the server
+console. A JDK is therefore required for the first bridge build; if Paper's
+API or a compiler is unavailable, the server still starts and the TPS/MSPT
+charts remain unavailable.
+
 Craftarr targets PaperMC on Minecraft Java Edition. macOS is supported for local
 development. Production installation currently targets Ubuntu 22.04+ and Oracle
 Linux 8+; Windows is not supported.

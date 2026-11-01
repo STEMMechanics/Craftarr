@@ -16,6 +16,7 @@ from .backup_manager import list_backups, delete_backup
 from .database import SessionLocal
 from .models import BackupJob, PendingAutomaticUpdate, PendingIdleRestart, ScheduledTask, Server, ServerMetric, ServerUpdateCheck, TaskRun, UpdateMonitorLease
 from .player_manager import get_online_players
+from .metrics_bridge import read_metrics_snapshot
 from .processes import (
     register_server, restart_server, run_pre_stop_commands, send_command,
     start_server, stop_server_and_wait,
@@ -503,6 +504,7 @@ def collect_metrics() -> None:
             register_server(server)
             status = server_status(server.id)
             stats = server_process_stats(server.id)
+            performance = read_metrics_snapshot(server.directory) if status.get("running") else None
             uptime = None
             pid = status.get("pid")
             if status.get("running") and pid:
@@ -516,6 +518,8 @@ def collect_metrics() -> None:
                 running=bool(status.get("running")),
                 cpu_percent=int(round(stats.get("cpu_percent", 0))),
                 memory_bytes=int(stats.get("memory_used", 0)),
+                tps=performance.get("tps") if performance else None,
+                mspt=performance.get("mspt") if performance else None,
                 player_count=len(get_online_players(server.id)),
                 uptime_seconds=uptime,
             ))

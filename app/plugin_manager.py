@@ -22,6 +22,7 @@ from pathlib import Path
 
 MAX_PLUGIN_BYTES = int(getenv("CRAFTARR_MAX_PLUGIN_BYTES", str(128 * 1024 * 1024)))
 MAX_PLUGIN_METADATA_BYTES = 256 * 1024
+INTERNAL_PLUGIN_FILENAMES = {"craftarr-metrics.jar"}
 
 
 class PluginFileExistsError(FileExistsError):
@@ -457,6 +458,9 @@ def list_plugins(server) -> list[dict]:
         if not path.is_file():
             continue
 
+        if path.name.removesuffix(".disabled").casefold() in INTERNAL_PLUGIN_FILENAMES:
+            continue
+
         if not (
             path.name.endswith(".jar")
             or path.name.endswith(
@@ -493,6 +497,8 @@ def list_plugin_files(server) -> list[dict]:
 
     plugins = []
     for path in directory.iterdir():
+        if path.name.removesuffix(".disabled").casefold() in INTERNAL_PLUGIN_FILENAMES:
+            continue
         if not path.is_file() or not (
             path.name.endswith(".jar")
             or path.name.endswith(".jar.disabled")

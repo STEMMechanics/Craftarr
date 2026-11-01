@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -5,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
-from app.models import Server, User
+from app.models import Server, ServerMetric, User
 from app import web_automation, web_servers
 
 
@@ -21,6 +23,18 @@ def test_server_home_and_performance_pages_render_storage_panel(monkeypatch, tmp
     user = User(username="maker", password_hash="test", role="admin", enabled=True)
     server = Server(name="Build Lab", directory=str(tmp_path / "server"), service_name="build-lab")
     db.add_all([user, server])
+    db.commit()
+    db.add(ServerMetric(
+        server_id=server.id,
+        recorded_at=datetime.utcnow(),
+        running=True,
+        cpu_percent=12,
+        memory_bytes=128,
+        tps=19.85,
+        mspt=24.5,
+        player_count=2,
+        uptime_seconds=3600,
+    ))
     db.commit()
 
     app = FastAPI()
@@ -41,6 +55,8 @@ def test_server_home_and_performance_pages_render_storage_panel(monkeypatch, tmp
         assert full_page.status_code == 200
         assert 'class="server-performance-page"' in full_page.text
         assert 'id="metric-cpu"' in full_page.text
+        assert 'id="metric-tps"' in full_page.text
+        assert 'id="metric-mspt"' in full_page.text
         assert 'data-server-storage' in full_page.text
         assert "This shows the whole volume" in full_page.text
         assert "Craftarr" in full_page.text
@@ -51,6 +67,11 @@ def test_server_home_and_performance_pages_render_storage_panel(monkeypatch, tmp
         assert partial_page.status_code == 200
         assert "<!DOCTYPE html>" not in partial_page.text
         assert 'data-server-id="1"' in partial_page.text
+
+        metrics = client.get(f"/api/web/servers/{server.id}/metrics?hours=1")
+        assert metrics.status_code == 200
+        assert metrics.json()["metrics"][-1]["tps"] == 19.85
+        assert metrics.json()["metrics"][-1]["mspt"] == 24.5
 
         monkeypatch.setattr(
             web_automation,

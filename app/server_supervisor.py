@@ -14,6 +14,7 @@ from pathlib import Path
 from .processes import build_java_command, resolve_server_jar
 from .processes import SYSTEMD_PLAYERS_QUERY
 from .processes import SERVER_READY_PATTERN
+from .metrics_bridge import ensure_metrics_bridge
 
 
 JOIN_PATTERN = re.compile(r": ([A-Za-z0-9_]{1,16}) joined the game")
@@ -117,7 +118,8 @@ def _serve_commands(
 
 def supervise(directory: str, socket_path: str, memory: str, min_memory: str, jar_name: str, java_args: str, java_path: str = "java") -> int:
     root = Path(directory).resolve()
-    resolve_server_jar(root, jar_name)
+    server_jar = resolve_server_jar(root, jar_name)
+    ensure_metrics_bridge(root, server_jar, java_path)
     endpoint = Path(socket_path)
     endpoint.parent.mkdir(parents=True, exist_ok=True)
     status_path = endpoint.with_suffix(".status")

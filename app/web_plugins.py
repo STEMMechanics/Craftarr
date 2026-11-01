@@ -1043,6 +1043,160 @@ async def save_plugin_monitoring(server_id: int, request: Request, db: Session =
         db.commit()
 
 
+@router.post('/api/web/servers/{server_id}/plugins/monitoring/branch-names')
+async def list_plugin_monitoring_branches(server_id: int, request: Request, db: Session = Depends(get_db)):
+    from starlette.concurrency import run_in_threadpool
+    from .developer_plugin_updates import list_branch_names
+    from .plugin_monitoring import custom_provider
+
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({'error': 'Not authenticated'}, status_code=401)
+    if not server or not has_permission(user, 'plugins.manage'):
+        return JSONResponse({'error': 'Access denied'}, status_code=403)
+    if not server.developer_updates_enabled:
+        return JSONResponse({'error': 'Enable Developer options for this server before loading branches'}, status_code=400)
+    try:
+        data = await request.json()
+        if not isinstance(data, dict) or not isinstance(data.get('project', ''), str):
+            raise ValueError('Enter a GitHub repository')
+        project = custom_provider('github', data.get('project', '')).project
+        branches = await run_in_threadpool(list_branch_names, project)
+        return {'project': project, 'branches': branches}
+    except ValueError as error:
+        return JSONResponse({'error': str(error)}, status_code=400)
+    except Exception as error:
+        logger.warning('Unable to load GitHub branches for server %s: %s', server_id, error)
+        return JSONResponse({'error': f'Unable to load GitHub branches: {str(error)[:500]}'}, status_code=502)
+
+
+@router.post('/api/web/servers/{server_id}/plugins/monitoring/branch-preview')
+async def preview_plugin_monitoring_branch(server_id: int, request: Request, db: Session = Depends(get_db)):
+    from starlette.concurrency import run_in_threadpool
+    from .developer_plugin_updates import latest_branch_commit
+    from .plugin_monitoring import custom_provider, validate_development_branch
+
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({'error': 'Not authenticated'}, status_code=401)
+    if not server or not has_permission(user, 'plugins.manage'):
+        return JSONResponse({'error': 'Access denied'}, status_code=403)
+    if not server.developer_updates_enabled:
+        return JSONResponse({'error': 'Enable Developer options for this server before testing a branch'}, status_code=400)
+    try:
+        data = await request.json()
+        if not isinstance(data, dict):
+            raise ValueError('Invalid branch settings')
+        if not isinstance(data.get('project', ''), str):
+            raise ValueError('Enter a GitHub repository')
+        project = custom_provider('github', data.get('project', '')).project
+        branch = validate_development_branch(data.get('branch', ''))
+        if not branch:
+            raise ValueError('Enter a GitHub branch')
+        commit = await run_in_threadpool(latest_branch_commit, project, branch)
+        return {
+            'project': project,
+            'branch': branch,
+            'commit': commit,
+            'short_commit': commit[:7],
+            'url': f'https://github.com/{project}/commit/{commit}',
+        }
+    except ValueError as error:
+        return JSONResponse({'error': str(error)}, status_code=400)
+    except Exception as error:
+        logger.warning('Unable to test GitHub branch for server %s: %s', server_id, error)
+        return JSONResponse({'error': str(error)[:500] or 'Unable to test the GitHub branch'}, status_code=502)
+
+
+@router.get('/api/web/servers/{server_id}/plugins/developer-build')
+def developer_plugin_build_status(server_id: int, filename: str, request: Request, db: Session = Depends(get_db)):
+    from .plugin_monitoring import monitoring_config
+
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({'error': 'Not authenticated'}, status_code=401)
+    if not server or not has_permission(user, 'plugins.manage'):
+        return JSONResponse({'error': 'Access denied'}, status_code=403)
+    plugin = next((item for item in list_plugins(server) if item['filename'] == filename), None)
+    if not plugin:
+        return JSONResponse({'error': 'Installed plugin not found; reload the Plugins page'}, status_code=404)
+    _, config = monitoring_config(db, server.id, plugin['name'])
+    return {
+        'project': config.get('project', ''),
+        'branch': config.get('development_branch', ''),
+        'development_status': config.get('development_status'),
+    }
+
+
+@router.get('/api/web/servers/{server_id}/plugins/developer-build/report')
+def developer_plugin_build_report(server_id: int, filename: str, request: Request, download: bool = False, db: Session = Depends(get_db)):
+    from .models import DeveloperPluginUpdate, PluginMonitoringSetting
+    from .update_providers import normalize_name
+
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({'error': 'Not authenticated'}, status_code=401)
+    if not server or not has_permission(user, 'plugins.manage'):
+        return JSONResponse({'error': 'Access denied'}, status_code=403)
+    plugin = next((item for item in list_plugins(server) if item['filename'] == filename), None)
+    if not plugin:
+        return JSONResponse({'error': 'Installed plugin not found; reload the Plugins page'}, status_code=404)
+    plugin_name = normalize_name(plugin['name'])
+    setting = db.get(PluginMonitoringSetting, (server.id, plugin_name))
+    state = db.get(DeveloperPluginUpdate, (server.id, plugin_name))
+    source_key = f'{setting.project.lower()}#{setting.development_branch}' if setting and setting.development_branch else None
+    if not state or not state.build_report_html or not source_key or state.source_key != source_key:
+        return JSONResponse({'error': 'No retained Gradle problems report is available'}, status_code=404)
+
+    headers = {
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'SAMEORIGIN',
+    }
+    if download:
+        headers['Content-Disposition'] = 'attachment; filename="gradle-problems-report.html"'
+    else:
+        # Build reports come from the checked-out repository. Keep the report
+        # isolated from Craftarr even when it contains scripts or links.
+        headers['Content-Security-Policy'] = (
+            "sandbox allow-scripts; default-src 'none'; "
+            "script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+            "img-src data: blob:; font-src data:; connect-src 'none'; "
+            "frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; "
+            "frame-ancestors 'self'"
+        )
+    return HTMLResponse(content=state.build_report_html, headers=headers)
+
+
+@router.post('/api/web/servers/{server_id}/plugins/developer-build/rebuild')
+def rebuild_developer_plugin_build(server_id: int, filename: str, request: Request, db: Session = Depends(get_db)):
+    from .developer_plugin_updates import queue_developer_plugin_rebuild
+    from .models import PluginMonitoringSetting
+    from .update_providers import normalize_name
+
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({'error': 'Not authenticated'}, status_code=401)
+    if not server or not has_permission(user, 'plugins.manage'):
+        return JSONResponse({'error': 'Access denied'}, status_code=403)
+    plugin = next((item for item in list_plugins(server) if item['filename'] == filename), None)
+    if not plugin:
+        return JSONResponse({'error': 'Installed plugin not found; reload the Plugins page'}, status_code=404)
+    if not server.developer_updates_enabled:
+        return JSONResponse({'error': 'Enable Developer options for this server before rebuilding'}, status_code=400)
+    setting = db.get(PluginMonitoringSetting, (server.id, normalize_name(plugin['name'])))
+    if not setting or not setting.development_branch:
+        return JSONResponse({'error': 'Save a GitHub branch before rebuilding'}, status_code=400)
+    try:
+        commit, queued = queue_developer_plugin_rebuild(db, server, setting, plugin)
+        return {'success': True, 'queued': queued, 'commit': commit}
+    except ValueError as error:
+        return JSONResponse({'error': str(error)}, status_code=400)
+    except Exception as error:
+        logger.warning('Unable to queue development plugin rebuild for server %s: %s', server_id, error)
+        return JSONResponse({'error': str(error)[:500] or 'Unable to rebuild the plugin'}, status_code=502)
+
+
 @router.post('/api/web/servers/{server_id}/plugins/monitoring/global')
 async def promote_plugin_monitoring(server_id: int, request: Request, db: Session = Depends(get_db)):
     from datetime import datetime

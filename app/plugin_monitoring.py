@@ -116,7 +116,11 @@ def monitoring_config(db, server_id, name):
         'latest_commit': state.latest_commit,
         'installed_commit': state.installed_commit,
         'error': state.error,
+        'build_log': state.build_log,
+        'build_report_available': bool(state.build_report_html),
+        'build_report_path': state.build_report_path,
         'checked_at': state.checked_at.isoformat() + 'Z' if state.checked_at else None,
+        'updated_at': state.updated_at.isoformat() + 'Z' if state.updated_at else None,
     } if state and source_key == state.source_key else None)
     provider = None
     if selection == 'custom':

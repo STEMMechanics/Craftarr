@@ -5,6 +5,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -574,6 +575,8 @@ class ServerMetric(Base):
     running = Column(Boolean, nullable=False)
     cpu_percent = Column(Integer, nullable=False, default=0)
     memory_bytes = Column(Integer, nullable=False, default=0)
+    tps = Column(Float, nullable=True)
+    mspt = Column(Float, nullable=True)
     player_count = Column(Integer, nullable=True)
     uptime_seconds = Column(Integer, nullable=True)
 
@@ -647,6 +650,8 @@ class DeveloperPluginUpdate(Base):
     status = Column(String(32), nullable=False, default="waiting")
     error = Column(Text, nullable=True)
     build_log = Column(Text, nullable=True)
+    build_report_html = Column(Text, nullable=True)
+    build_report_path = Column(String(1024), nullable=True)
     checked_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
