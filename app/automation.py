@@ -802,6 +802,11 @@ def _automation_loop() -> None:
         except Exception:
             logger.warning("Scheduled update monitoring failed")
         try:
+            from .developer_plugin_updates import run_scheduled_developer_updates
+            run_scheduled_developer_updates()
+        except Exception:
+            logger.exception("Scheduled development plugin updates failed")
+        try:
             from .remote_nodes import run_linked_plugin_settings_sync
             run_linked_plugin_settings_sync()
         except Exception:

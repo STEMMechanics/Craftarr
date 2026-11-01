@@ -875,6 +875,21 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .monitoring-preview-action { display: inline-flex; min-height: 32px; align-items: center; gap: 7px; padding: 5px 9px; border: 1px solid #c9ddf0; border-radius: 9px; background: #fff; color: var(--sm-blue-dark); font-size: 11px; font-weight: 700; text-decoration: none; }
 .monitoring-preview-no-link, .monitoring-preview-error { color: #526a80; font-size: 11px; }
 .monitoring-preview-error { color: var(--sm-red-dark); }
+.plugin-developer-options { margin: 12px 0 18px; padding: 0; overflow: hidden; }
+.plugin-developer-options > summary { display: flex; min-height: 50px; align-items: center; gap: 10px; padding: 12px 16px; color: var(--sm-blue-dark); font-weight: 700; cursor: pointer; list-style: none; }
+.plugin-developer-options > summary::-webkit-details-marker { display: none; }
+.plugin-developer-options > summary::after { margin-left: auto; color: var(--sm-muted); font-family: "Font Awesome 6 Free"; font-size: 11px; font-weight: 900; content: "\f078"; }
+.plugin-developer-options[open] > summary::after { content: "\f077"; }
+.plugin-developer-options > summary small { color: var(--sm-muted); font-size: 11px; font-weight: 500; }
+.plugin-developer-settings { display: grid; gap: 8px; padding: 0 16px 16px; border-top: 1px solid var(--sm-border); }
+.plugin-developer-settings > label:not(.modal-checkbox) { margin: 8px 0 0; color: var(--sm-text); font-size: 12px; font-weight: 700; }
+.plugin-developer-settings > select { width: 100%; box-sizing: border-box; }
+.plugin-developer-settings .modal-checkbox { margin: 12px 0 4px; }
+.plugin-developer-settings-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.plugin-developer-settings-actions > span { color: var(--sm-muted); font-size: 12px; }
+#plugin-monitoring-development-fields { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--sm-border); border-radius: 12px; background: var(--sm-surface-soft); }
+#plugin-monitoring-development-fields[hidden] { display: none; }
+#plugin-monitoring-development-status { overflow-wrap: anywhere; }
 .plugin-monitoring-repository-content { grid-template-columns: minmax(0, 1fr); }
 .plugin-monitoring-repository-content textarea { width: 100%; min-height: 420px; resize: vertical; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .plugin-monitoring-repository-actions { display: flex; flex-wrap: wrap; gap: 9px; }

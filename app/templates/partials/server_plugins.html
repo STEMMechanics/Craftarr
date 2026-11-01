@@ -5,6 +5,7 @@
     data-can-control="{{ 'true' if user.can('servers.control') else 'false' }}"
     data-can-view-files="{{ 'true' if user.can('files.view') else 'false' }}"
     data-can-edit-files="{{ 'true' if user.can('files.manage') else 'false' }}"
+    data-developer-updates-enabled="{{ 'true' if server.developer_updates_enabled else 'false' }}"
     data-page-title="Plugins"
 >
 
@@ -14,6 +15,27 @@
             <p>Add game features here. Enable or disable them below.</p>
         </div>
     </section>
+
+    {% if user.can("plugins.manage") %}
+    <details class="overview-card plugin-developer-options" {% if server.developer_updates_enabled %}open{% endif %}>
+        <summary><i class="fa-solid fa-code" aria-hidden="true"></i><span>Developer options</span><small>Branch builds are intended for development servers.</small></summary>
+        <form id="plugin-developer-settings-form" class="plugin-developer-settings" onsubmit="saveDeveloperPluginSettings(event)">
+            <label class="modal-checkbox"><input id="plugin-developer-updates-enabled" type="checkbox" {% if server.developer_updates_enabled %}checked{% endif %}><span><strong>Enable GitHub branch updates for this server</strong><small>Builds run the repository's Gradle or Maven build script inside the Craftarr container. Use only trusted repositories.</small></span></label>
+            <label for="plugin-developer-check-interval">Check for branch commits</label>
+            <select id="plugin-developer-check-interval">
+                {% for interval in [1, 5, 10, 15, 30, 60] %}<option value="{{ interval }}" {% if (server.developer_update_interval_minutes or 5) == interval %}selected{% endif %}>Every {{ interval }} minute{% if interval != 1 %}s{% endif %}</option>{% endfor %}
+            </select>
+            <label for="plugin-developer-restart-policy">After a successful build</label>
+            <select id="plugin-developer-restart-policy">
+                <option value="manual" {% if server.developer_update_restart_policy == 'manual' %}selected{% endif %}>Install and wait for a manual restart</option>
+                <option value="immediate" {% if server.developer_update_restart_policy == 'immediate' %}selected{% endif %}>Restart immediately</option>
+                <option value="when_empty" {% if server.developer_update_restart_policy == 'when_empty' %}selected{% endif %}>Restart after the server is empty for 30 seconds</option>
+            </select>
+            <p class="modal-note">The previous JAR is kept disabled after a build so you can restore it if the new plugin has problems.</p>
+            <div class="plugin-developer-settings-actions"><span id="plugin-developer-settings-status" role="status" aria-live="polite"></span><button class="button" type="submit">Save developer options</button></div>
+        </form>
+    </details>
+    {% endif %}
 
     <div
         id="plugin-restart-alert"
@@ -244,7 +266,7 @@
     <span class="page-kicker">Plugin settings</span>
     <h2>Check this plugin for updates</h2>
     <p id="plugin-monitoring-name"></p>
-    <p class="modal-note">Choose whether the console should look for a newer version of this plugin. It will never install one by itself.</p>
+    <p class="modal-note">Release updates stay manual. A GitHub branch is built and installed automatically only when Developer options are enabled for this server.</p>
     <div id="plugin-monitoring-error" class="plugin-monitoring-feedback" role="alert" aria-live="assertive" hidden></div>
     <label for="plugin-monitoring-mode">Should we check for updates?</label>
     <select id="plugin-monitoring-mode" onchange="updatePluginMonitoringFields()">
@@ -267,6 +289,12 @@
       <label for="plugin-monitoring-project">Plugin page or project</label>
       <input id="plugin-monitoring-project" type="text" maxlength="2048" autocomplete="off" oninput="clearMonitoringPreview()">
       <p id="plugin-monitoring-hint" class="modal-note"></p>
+      <div id="plugin-monitoring-development-fields" hidden>
+        <label for="plugin-monitoring-development-branch">GitHub branch (optional)</label>
+        <input id="plugin-monitoring-development-branch" type="text" maxlength="255" autocomplete="off" placeholder="main" oninput="updatePluginMonitoringFields()">
+        <p class="modal-note">Public GitHub repositories only. Craftarr checks this branch, builds the matching plugin JAR, and installs it using the server's Developer options above. Leave blank to use GitHub Releases.</p>
+        <p id="plugin-monitoring-development-status" class="modal-note" role="status" aria-live="polite"></p>
+      </div>
       <details id="plugin-monitoring-expressions" class="plugin-monitoring-advanced">
         <summary>Advanced settings</summary>
         <div class="plugin-monitoring-advanced-content">

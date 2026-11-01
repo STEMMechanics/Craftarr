@@ -55,6 +55,28 @@ Changing settings requires existing `plugins.manage` permission and access to th
 server. Viewing results requires `plugins.view`. Settings cannot be saved during
 an active check or preview; retry after it finishes.
 
+## Development branch builds
+
+On a development server's Plugins page, open **Developer options** to enable branch
+updates, choose a commit check interval, and choose whether successful builds wait
+for a manual restart, restart immediately, or restart after the server has been
+empty for 30 seconds. This setting is off by default and applies to one server.
+
+After enabling it, open **Update settings** for a plugin, select its GitHub project,
+and enter a branch. Craftarr checks the branch at the selected interval. A changed
+commit is cloned and pinned to its full SHA, then built with the repository's
+Gradle or Maven wrapper. Craftarr installs the result only when exactly one output
+JAR contains a plugin descriptor matching the installed plugin. The previous JAR
+is kept disabled. Build or download failures leave the installed JAR in place and
+are shown with the branch status. Selecting a manual restart installs the new JAR
+and marks the server as needing a restart.
+
+The Docker image includes Java, Git, Maven, Gradle, and unzip. Repository wrappers
+take precedence so a project can use its pinned tool version. In Docker, repository
+build scripts run as the unprivileged `craftarr-builder` user with a reduced
+environment. Public GitHub repositories are supported; private repositories and
+custom build commands are not currently configured here.
+
 ## Shared settings repository
 
 Administrators with `settings.manage` can edit the YAML, download it for sharing,

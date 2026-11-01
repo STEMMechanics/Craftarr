@@ -785,6 +785,28 @@ async def check_single_plugin_update(server_id: int, request: Request, db: Sessi
     if installed.get("enabled") is not True:
         return {"skipped": True}
 
+    from .plugin_monitoring import monitoring_config
+    _, developer_config = monitoring_config(db, server.id, installed["name"])
+    if server.developer_updates_enabled and developer_config.get("development_branch"):
+        from .models import DeveloperPluginUpdate
+        from .update_providers import normalize_name
+        state = db.get(DeveloperPluginUpdate, (server.id, normalize_name(installed["name"])))
+        if not state or state.status not in {"queued", "building"}:
+            if state:
+                state.checked_at = datetime.min
+                if state.status in {"failed", "check_failed"}:
+                    state.status = "waiting"
+                    state.latest_commit = None
+                    state.error = None
+                db.commit()
+            from .developer_plugin_updates import run_scheduled_developer_updates
+            run_scheduled_developer_updates()
+        update = next(
+            (item for item in plugin_results(db, server, [installed]) if item.get("component") == filename),
+            None,
+        )
+        return {"update": update}
+
     try:
         acquire_lease(db, datetime.utcnow())
     except CheckInProgress as error:
@@ -837,6 +859,41 @@ def plugin_update_progress(server_id: int, request: Request, db: Session = Depen
         return {"status": "idle", "completed": 0, "total": 0}
 
 
+@router.post("/api/web/servers/{server_id}/plugins/developer-settings")
+async def save_developer_plugin_settings(server_id: int, request: Request, db: Session = Depends(get_db)):
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not server or not has_permission(user, "plugins.manage"):
+        return JSONResponse({"error": "Administrator access required"}, status_code=403)
+    try:
+        data = await request.json()
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "Invalid developer settings"}, status_code=400)
+    if not isinstance(data, dict) or type(data.get("enabled")) is not bool:
+        return JSONResponse({"error": "Choose whether Developer options are enabled"}, status_code=400)
+    interval = data.get("check_interval_minutes")
+    restart_policy = data.get("restart_policy")
+    if type(interval) is not int or interval not in {1, 5, 10, 15, 30, 60}:
+        return JSONResponse({"error": "Choose a supported branch check interval"}, status_code=400)
+    if restart_policy not in {"manual", "immediate", "when_empty"}:
+        return JSONResponse({"error": "Choose a supported restart policy"}, status_code=400)
+    server.developer_updates_enabled = data["enabled"]
+    server.developer_update_interval_minutes = interval
+    server.developer_update_restart_policy = restart_policy
+    db.commit()
+    request.state.audit_details = (
+        f"Developer plugin updates {'enabled' if server.developer_updates_enabled else 'disabled'}; "
+        f"check every {interval} minute(s); restart policy {restart_policy}"
+    )
+    return {
+        "success": True,
+        "enabled": server.developer_updates_enabled,
+        "check_interval_minutes": interval,
+        "restart_policy": restart_policy,
+    }
+
+
 def _run_plugin_update_check(server_id: int, job_id: str):
     from .update_monitor import CheckInProgress, check_updates
 
@@ -864,6 +921,22 @@ def _run_plugin_update_check(server_id: int, job_id: str):
         if server is None:
             save_progress(status="failed", error="Server is no longer available.")
             return
+
+        if server.developer_updates_enabled:
+            from .models import DeveloperPluginUpdate, PluginMonitoringSetting
+            for setting in db.query(PluginMonitoringSetting).filter_by(server_id=server.id).all():
+                if not setting.development_branch:
+                    continue
+                state = db.get(DeveloperPluginUpdate, (server.id, setting.plugin_name))
+                if state and state.status not in {"queued", "building"}:
+                    state.checked_at = datetime.min
+                    if state.status in {"failed", "check_failed"}:
+                        state.status = "waiting"
+                        state.latest_commit = None
+                        state.error = None
+            db.commit()
+            from .developer_plugin_updates import run_scheduled_developer_updates
+            run_scheduled_developer_updates()
 
         def report_plugin(completed, total, name):
             save_progress(completed=completed, total=total, current_plugin=name)
@@ -959,7 +1032,8 @@ async def save_plugin_monitoring(server_id: int, request: Request, db: Session =
                                data.get('provider', ''), data.get('project', ''),
                                data.get('version_pattern', ''), monitoring_download_url(data),
                                data.get('installed_pattern', ''), data.get('asset_pattern', ''),
-                               data.get('installed_detection', 'auto'), data.get('download_rename', ''))
+                               data.get('installed_detection', 'auto'), data.get('download_rename', ''),
+                               development_branch=data.get('development_branch', ''))
         return {'success': True}
     except ValueError as error:
         return JSONResponse({'error': str(error)}, status_code=400)

@@ -2866,6 +2866,18 @@ function renderPluginVersionStatus(plugin, canManage = false) {
     label = update.latest_version ? `New version ${update.latest_version}` : "New version available";
     icon = "fa-circle-up";
     statusClass = "is-update";
+  } else if (update.status === "Building") {
+    label = `Building ${update.latest_version || "branch commit"}`;
+    icon = "fa-hammer";
+    statusClass = "is-pending";
+  } else if (update.status === "Restart required") {
+    label = "Restart required";
+    icon = "fa-rotate";
+    statusClass = "is-warning";
+  } else if (update.status === "Restart after players leave") {
+    label = "Restart after players leave";
+    icon = "fa-hourglass-half";
+    statusClass = "is-pending";
   } else if (update.status === "Current") {
     label = "Up to date";
     icon = "fa-circle-check";
@@ -2894,14 +2906,14 @@ function renderPluginVersionStatus(plugin, canManage = false) {
 
   const statusTitle = update.error || label;
   const statusMarkup = `<i class="fa-solid ${icon}" aria-hidden="true"></i>${escapeHtml(label)}`;
-  const statusPill = update.update_available && update.release_url?.startsWith("https://")
+  const statusPill = (update.developer_update || update.update_available) && update.release_url?.startsWith("https://")
     ? `<a class="server-inline-update-status plugin-update-status ${statusClass}" href="${escapeHtml(update.release_url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(statusTitle)}">${statusMarkup}</a>`
     : `<span class="server-inline-update-status plugin-update-status ${statusClass}" title="${escapeHtml(statusTitle)}">${statusMarkup}</span>`;
   const download = canManage && pluginHasDownloadableUpdate(plugin)
     ? `<button class="plugin-update-install" type="button" onclick="openPluginUpdateModal('${escapeHtml(escapeJs(plugin.filename))}')" aria-label="Install update for ${escapeHtml(plugin.name)} on the server" title="Install update on server" ${pluginUpdateInProgress ? "disabled" : ""}><i class="fa-solid fa-cloud-arrow-down" aria-hidden="true"></i></button>`
     : "";
   const errorDetail = update.status === "Check failed" && update.error
-    ? `<div class="plugin-update-error"><div><strong>Reason:</strong> ${escapeHtml(update.error)}</div>${renderPluginComparisonDetails(update.comparison_details)}</div>`
+    ? `<div class="plugin-update-error"><div><strong>Reason:</strong> ${escapeHtml(update.error)}</div>${update.developer_update ? "" : renderPluginComparisonDetails(update.comparison_details)}</div>`
     : "";
   return `<div class="plugin-version-status-row">${versionPill}${statusPill}${download}${errorDetail}</div>`;
 }
@@ -10413,6 +10425,27 @@ function openPluginMonitoring(index) {
   }
   document.getElementById("plugin-monitoring-download-url").value = config.download_url || config.link_pattern || "";
   document.getElementById("plugin-monitoring-download-rename").value = config.download_rename || "";
+  document.getElementById("plugin-monitoring-development-branch").value = config.development_branch || "";
+  const developmentStatus = document.getElementById("plugin-monitoring-development-status");
+  if (developmentStatus) {
+    const state = config.development_status;
+    const labels = {
+      waiting: "Waiting for the first branch check",
+      queued: "Build queued",
+      building: "Building branch commit",
+      current: "Up to date",
+      installed: "Build installed",
+      restart_required: "Restart required",
+      restart_pending: "Waiting for players to leave before restart",
+      restarted: "Server restarted",
+      restart_failed: "Restart failed",
+      failed: "Build failed",
+      check_failed: "Branch check failed",
+    };
+    developmentStatus.textContent = state
+      ? `${labels[state.status] || state.status || "Waiting"}${state.latest_commit ? ` · latest ${state.latest_commit.slice(0, 7)}` : ""}${state.installed_commit ? ` · installed ${state.installed_commit.slice(0, 7)}` : ""}${state.error ? ` · ${state.error}` : ""}`
+      : "No branch build has run yet.";
+  }
   document.getElementById("plugin-monitoring-expressions").open = false;
   updatePluginMonitoringFields();
   if (config.error) setPluginMonitoringFeedback(config.error, "error");
@@ -10498,12 +10531,19 @@ function updatePluginMonitoringFields(providerChanged = false) {
   }
   const promoteButton = document.getElementById("plugin-monitoring-promote-button");
   if (promoteButton) {
-    promoteButton.hidden = !enabled;
+    promoteButton.hidden = !enabled || Boolean(document.getElementById("plugin-monitoring-development-branch")?.value.trim());
     const promoteLabel = document.getElementById("plugin-monitoring-promote-label");
     if (promoteLabel) promoteLabel.textContent = globalAvailable ? "Update global" : "Make global";
   }
   document.getElementById("plugin-monitoring-provider").disabled = !editable;
   const provider = document.getElementById("plugin-monitoring-provider").value;
+  const page = document.querySelector(".plugins-page");
+  const branchFields = document.getElementById("plugin-monitoring-development-fields");
+  const branchInput = document.getElementById("plugin-monitoring-development-branch");
+  const developerEnabled = page?.dataset.developerUpdatesEnabled === "true";
+  if (branchFields) branchFields.hidden = !editable || provider !== "github" || !developerEnabled;
+  if (branchInput) branchInput.disabled = !editable || provider !== "github" || !developerEnabled;
+  const branchConfigured = Boolean(developerEnabled && provider === "github" && branchInput?.value.trim());
   const documentSource = ["jenkins", "custom"].includes(provider);
   const project = document.getElementById("plugin-monitoring-project");
   const previewButton = document.getElementById("plugin-monitoring-preview-button");
@@ -10515,10 +10555,12 @@ function updatePluginMonitoringFields(providerChanged = false) {
   }
   project.required = editable;
   project.disabled = !editable;
-  previewButton.hidden = !(enabled || (usesGlobal && globalAvailable));
-  previewButton.disabled = !(enabled || (usesGlobal && globalAvailable));
+  previewButton.hidden = branchConfigured || !(enabled || (usesGlobal && globalAvailable));
+  previewButton.disabled = branchConfigured || !(enabled || (usesGlobal && globalAvailable));
   const hints = {
-    github: "Use the plugin's GitHub project page. We check its latest stable release.",
+    github: branchConfigured
+      ? "This GitHub branch replaces release monitoring for this plugin. The build and restart policy comes from Developer options."
+      : "Use the plugin's GitHub project page. We check its latest stable release.",
     modrinth: "Use the plugin's Modrinth project page. We prefer stable Paper releases and use beta only when no stable release is available.",
     jenkins: "Use the plugin's build page. We compare successful builds automatically.",
     custom: "Use a public plugin page that shows its latest version.",
@@ -10533,7 +10575,8 @@ function updatePluginMonitoringFields(providerChanged = false) {
     ? 'Required. Match the metadata response and capture the version, for example "version"\\s*:\\s*"([^"]+)". Test shows the captured value.'
     : "Optional. Extract a comparable version from the release tag/version number, for example ^v?([0-9.]+). Test shows the tag and captured value; edits preview against the same fetched release.";
   document.getElementById("plugin-monitoring-download-url-fields").hidden = !documentSource;
-  document.getElementById("plugin-monitoring-asset-fields").hidden = provider !== "github";
+  document.getElementById("plugin-monitoring-asset-fields").hidden = provider !== "github" || branchConfigured;
+  document.getElementById("plugin-monitoring-expressions").hidden = branchConfigured;
   for (const field of ["version", "installed", "asset"]) {
     document.getElementById(`plugin-monitoring-${field}-pattern`).disabled = !editable || (field === "asset" && provider !== "github");
   }
@@ -10574,7 +10617,40 @@ function pluginMonitoringPayload() {
     installed_pattern: fieldValue("installed_pattern", "plugin-monitoring-installed-pattern"),
     asset_pattern: provider === "github" ? fieldValue("asset_pattern", "plugin-monitoring-asset-pattern") : "",
     installed_detection: fieldValue("installed_detection", "plugin-monitoring-installed-detection") || "auto",
+    development_branch: provider === "github" ? document.getElementById("plugin-monitoring-development-branch")?.value.trim() || "" : "",
   };
+}
+
+async function saveDeveloperPluginSettings(event) {
+  event.preventDefault();
+  const page = document.querySelector(".plugins-page[data-server-id]");
+  const form = document.getElementById("plugin-developer-settings-form");
+  const status = document.getElementById("plugin-developer-settings-status");
+  const button = form?.querySelector('[type="submit"]');
+  if (!page || !form || !button || !status) return;
+  const settings = {
+    enabled: document.getElementById("plugin-developer-updates-enabled").checked,
+    check_interval_minutes: Number.parseInt(document.getElementById("plugin-developer-check-interval").value, 10),
+    restart_policy: document.getElementById("plugin-developer-restart-policy").value,
+  };
+  button.disabled = true;
+  status.textContent = "Saving…";
+  try {
+    const response = await nativeFetch(`/api/web/servers/${page.dataset.serverId}/plugins/developer-settings`, {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(settings),
+    });
+    connectionFailureLatched = false;
+    if (handleAuthenticationResponse(response)) return;
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to save Developer options.");
+    page.dataset.developerUpdatesEnabled = String(data.enabled === true);
+    status.textContent = data.enabled ? "Developer updates are enabled." : "Developer updates are disabled.";
+    await updatePluginsPage();
+  } catch (failure) {
+    status.textContent = failure.message || "Unable to save Developer options.";
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function previewPluginMonitoringExpressionChanged() {
