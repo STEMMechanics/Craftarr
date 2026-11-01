@@ -214,6 +214,16 @@ function showFormError(form, message, fieldName = null) {
   showToast(message, "error");
 }
 
+const DEFAULT_FUNCTION_UNAVAILABLE_MESSAGE = "This function is not available on the selected server Node. Some functions may require a newer Craftarr version.";
+
+function handleFunctionUnavailableData(serverId, data, notify = false) {
+  if (data?.function_unavailable !== true) return false;
+  const message = data.error || DEFAULT_FUNCTION_UNAVAILABLE_MESSAGE;
+  markServerFunctionUnavailable(serverId, message);
+  if (notify) showToast(message, "error", 6500);
+  return true;
+}
+
 document.addEventListener("invalid", (event) => {
   const field = event.target;
   if (!(field instanceof HTMLInputElement || field instanceof HTMLSelectElement || field instanceof HTMLTextAreaElement)) return;
@@ -256,7 +266,7 @@ window.fetch = async (...args) => {
         if (data?.node_offline === true) {
           markServerNodeOffline(serverId);
         } else if (data?.function_unavailable === true) {
-          markServerFunctionUnavailable(serverId, data.error);
+          handleFunctionUnavailableData(serverId, data, !new Set(["GET", "HEAD", "OPTIONS"]).has(method));
         }
       }).catch(() => {});
     }
@@ -1162,7 +1172,12 @@ function showHardwareUnavailable(message, nodeOffline = false) {
 function setNodeVersionWarning(warning, message, visible) {
   if (!warning) return;
   warning.hidden = !visible;
-  warning.textContent = message;
+  const icon = document.createElement("i");
+  icon.className = "fa-solid fa-circle-exclamation";
+  icon.setAttribute("aria-hidden", "true");
+  const text = document.createElement("span");
+  text.textContent = message;
+  warning.replaceChildren(icon, text);
 }
 
 async function updateSystemStats() {
@@ -1395,11 +1410,16 @@ function markServerFunctionUnavailable(serverId, message) {
   if (!notice) {
     notice = document.createElement("div");
     notice.className = "server-function-unavailable-notice";
-    notice.setAttribute("role", "status");
-    notice.setAttribute("aria-live", "polite");
+    notice.setAttribute("role", "alert");
+    notice.setAttribute("aria-live", "assertive");
     page.prepend(notice);
   }
-  notice.textContent = message || "This function is not available on the selected server Node. Some functions may require a newer Craftarr version.";
+  const icon = document.createElement("i");
+  icon.className = "fa-solid fa-circle-exclamation";
+  icon.setAttribute("aria-hidden", "true");
+  const text = document.createElement("span");
+  text.textContent = message || DEFAULT_FUNCTION_UNAVAILABLE_MESSAGE;
+  notice.replaceChildren(icon, text);
 }
 
 function setTopbarPlayerCount(value) {
@@ -2671,11 +2691,8 @@ function renderPlugins() {
     list.innerHTML = `<div class="empty-message">
                 ${search ? "No plugin found. Try another name." : "No plugins yet. Choose a plugin file above."}
             </div>`;
-
-    return;
-  }
-
-  list.innerHTML = visiblePlugins.map((plugin) => `
+  } else {
+    list.innerHTML = visiblePlugins.map((plugin) => `
     <article class="plugin-row ${canManage ? "has-plugin-select" : ""} ${plugin.enabled ? "" : "disabled"} ${duplicatePluginFilenames.has(plugin.filename) ? "duplicate" : ""} ${pluginActionInProgress.has(plugin.filename) ? "is-processing" : ""}" data-plugin-filename="${escapeHtml(plugin.filename)}" ${pluginActionInProgress.has(plugin.filename) ? 'aria-busy="true"' : ""}>
       ${canManage ? `<label class="plugin-select"><input type="checkbox" value="${escapeHtml(plugin.filename)}" aria-label="Select ${escapeHtml(plugin.name || plugin.filename)}" ${selectedPluginFilenames.has(plugin.filename) ? "checked" : ""} onchange="togglePluginSelection(this)"></label>` : ""}
       <span class="plugin-status-indicator ${plugin.enabled ? "is-enabled" : "is-disabled"}" aria-hidden="true" title="${plugin.enabled ? "Enabled" : "Disabled"}"></span>
@@ -2697,7 +2714,10 @@ function renderPlugins() {
       ${canManage ? renderPluginActions(plugin, canViewFiles, canEditFiles) : ""}
     </article>
   `)
-    .join("");
+      .join("");
+  }
+
+  syncDeveloperPluginRowPolling();
 }
 
 function updateBulkPluginSelectionUI(visiblePlugins = []) {
@@ -2923,7 +2943,11 @@ async function refreshDeveloperPluginRow(filename, sequence) {
       return;
     }
     const data = await response.json();
-    if (!response.ok || pluginBuildRowPolls.get(filename)?.sequence !== sequence) return;
+    if (pluginBuildRowPolls.get(filename)?.sequence !== sequence) return;
+    if (!response.ok) {
+      if (handleFunctionUnavailableData(page.dataset.serverId, data, true)) stopDeveloperPluginRowPolling(filename);
+      return;
+    }
     const state = data.development_status;
     updateDeveloperPluginRow(filename, state);
     if (!state || !["queued", "building"].includes(state.status)) stopDeveloperPluginRowPolling(filename);
@@ -2942,6 +2966,24 @@ function startDeveloperPluginRowPolling(filename) {
   if (poll?.sequence === sequence) poll.timer = timer;
 }
 
+function syncDeveloperPluginRowPolling() {
+  const activeFilenames = new Set();
+  for (const plugin of pluginData) {
+    const state = plugin.update?.monitoring?.development_status;
+    if (!state || !["queued", "building"].includes(state.status)) continue;
+    const row = [...document.querySelectorAll(".plugin-row")]
+      .find((candidate) => candidate.dataset.pluginFilename === plugin.filename);
+    if (!row) continue;
+    activeFilenames.add(plugin.filename);
+    if (!pluginBuildRowPolls.has(plugin.filename)) {
+      startDeveloperPluginRowPolling(plugin.filename);
+    }
+  }
+  for (const filename of pluginBuildRowPolls.keys()) {
+    if (!activeFilenames.has(filename)) stopDeveloperPluginRowPolling(filename);
+  }
+}
+
 async function rebuildDeveloperPluginFromRow(filename, button) {
   const page = document.querySelector(".plugins-page[data-server-id]");
   if (!page || !filename || !button || button.dataset.busy === "true") return;
@@ -2956,7 +2998,10 @@ async function rebuildDeveloperPluginFromRow(filename, button) {
     connectionFailureLatched = false;
     if (handleAuthenticationResponse(response)) return;
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Unable to rebuild the plugin.");
+    if (!response.ok) {
+      handleFunctionUnavailableData(page.dataset.serverId, data, true);
+      throw new Error(data.error || "Unable to rebuild the plugin.");
+    }
     const shortCommit = typeof data.commit === "string" ? data.commit.slice(0, 7) : "the saved commit";
     showToast(
       data.queued === false ? "A branch build is already running." : `Rebuild queued for ${shortCommit}.`,
@@ -10931,7 +10976,11 @@ async function refreshPluginBuildLog(sequence) {
     connectionFailureLatched = false;
     if (handleAuthenticationResponse(response)) return;
     const data = await response.json();
-    if (!response.ok || sequence !== pluginBuildLogPollSequence) return;
+    if (sequence !== pluginBuildLogPollSequence) return;
+    if (!response.ok) {
+      if (handleFunctionUnavailableData(modal.dataset.serverId, data, true)) stopPluginBuildLogPolling();
+      return;
+    }
     renderPluginBuildLogDialog(data.development_status);
   } catch {
     // Keep the last visible output when a background refresh is unavailable.
@@ -11001,7 +11050,11 @@ async function refreshPluginMonitoringBuildStatus(sequence) {
     connectionFailureLatched = false;
     if (handleAuthenticationResponse(response)) return;
     const data = await response.json();
-    if (!response.ok || sequence !== pluginMonitoringBuildPollSequence) return;
+    if (sequence !== pluginMonitoringBuildPollSequence) return;
+    if (!response.ok) {
+      if (handleFunctionUnavailableData(modal.dataset.serverId, data, true)) stopPluginMonitoringBuildPolling();
+      return;
+    }
     if (projectInput?.value.trim() !== data.project || branchInput?.value.trim() !== data.branch) return;
     renderPluginMonitoringDevelopmentState(data.development_status);
   } catch {

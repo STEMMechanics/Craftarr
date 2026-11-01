@@ -1,5 +1,5 @@
-<section class="remote-node-message{% if function_unavailable %} function-unavailable{% else %} node-offline-page{% endif %}" data-server-id="{{ server.id }}" data-page-title="{{ page_title }}" role="status" aria-live="polite">
-  <div class="remote-node-message-icon" aria-hidden="true"><i class="fa-solid {% if function_unavailable %}fa-circle-question{% else %}fa-cloud-bolt{% endif %}"></i></div>
+<section class="remote-node-message{% if function_unavailable %} function-unavailable{% else %} node-offline-page{% endif %}" data-server-id="{{ server.id }}" data-page-title="{{ page_title }}" role="{{ 'alert' if function_unavailable else 'status' }}" aria-live="{{ 'assertive' if function_unavailable else 'polite' }}">
+  <div class="remote-node-message-icon" aria-hidden="true"><i class="fa-solid {% if function_unavailable %}fa-circle-exclamation{% else %}fa-cloud-bolt{% endif %}"></i></div>
   <div>
     <p class="page-kicker">{{ node.name }}</p>
     <h1>{{ server.name }}</h1>

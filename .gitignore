@@ -71,6 +71,7 @@ backups/
 # ============================================
 
 minecraft-servers/
+minecraft-servers-preview/
 
 # Paper / Minecraft runtime files
 paper.jar
