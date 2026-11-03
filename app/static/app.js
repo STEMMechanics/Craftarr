@@ -1775,6 +1775,7 @@ let pluginBuildLogPreviousFocus = null;
 let pluginBuildReportPreviousFocus = null;
 let pluginBuildLogPollTimer = null;
 let pluginBuildLogPollSequence = 0;
+let pluginBuildLogPollController = null;
 const pluginBuildRowPolls = new Map();
 let pluginBuildRowPollSequence = 0;
 let pluginPendingRemoval = null;
@@ -2948,6 +2949,8 @@ function stopDeveloperPluginRowPolling(filename) {
 async function refreshDeveloperPluginRow(filename, sequence) {
   const poll = pluginBuildRowPolls.get(filename);
   if (!poll || poll.sequence !== sequence) return;
+  if (poll.inFlight) return;
+  poll.inFlight = true;
   const page = document.querySelector(".plugins-page");
   const row = [...document.querySelectorAll(".plugin-row")]
     .find((candidate) => candidate.dataset.pluginFilename === filename);
@@ -2965,6 +2968,11 @@ async function refreshDeveloperPluginRow(filename, sequence) {
     const data = await response.json();
     if (pluginBuildRowPolls.get(filename)?.sequence !== sequence) return;
     if (!response.ok) {
+      if (data.node_offline === true) {
+        markServerNodeOffline(page.dataset.serverId);
+        stopDeveloperPluginRowPolling(filename);
+        return;
+      }
       if (handleFunctionUnavailableData(page.dataset.serverId, data, true)) stopDeveloperPluginRowPolling(filename);
       return;
     }
@@ -2973,6 +2981,9 @@ async function refreshDeveloperPluginRow(filename, sequence) {
     if (!state || !["queued", "building"].includes(state.status)) stopDeveloperPluginRowPolling(filename);
   } catch {
     // Keep the current row state when a background refresh is unavailable.
+  } finally {
+    const currentPoll = pluginBuildRowPolls.get(filename);
+    if (currentPoll?.sequence === sequence) currentPoll.inFlight = false;
   }
 }
 
@@ -2981,7 +2992,7 @@ function startDeveloperPluginRowPolling(filename) {
   if (!plugin || plugin.enabled !== true || plugin.previous_version === true) return;
   stopDeveloperPluginRowPolling(filename);
   const sequence = ++pluginBuildRowPollSequence;
-  pluginBuildRowPolls.set(filename, {timer: null, sequence});
+  pluginBuildRowPolls.set(filename, {timer: null, sequence, inFlight: false});
   refreshDeveloperPluginRow(filename, sequence);
   const timer = window.setInterval(() => refreshDeveloperPluginRow(filename, sequence), 1000);
   const poll = pluginBuildRowPolls.get(filename);
@@ -3034,6 +3045,11 @@ async function rebuildDeveloperPluginFromRow(filename, button) {
     const previousState = plugin?.update?.monitoring?.development_status || {};
     updateDeveloperPluginRow(filename, {
       ...previousState,
+      ...(data.queued === false ? {} : {
+        build_log: null,
+        build_report_available: false,
+        build_report_path: null,
+      }),
       status: data.queued === false && ["queued", "building"].includes(previousState.status)
         ? previousState.status
         : data.queued === false ? "building" : "queued",
@@ -11113,27 +11129,45 @@ function setPluginBuildLogScrollLock(locked) {
 function stopPluginBuildLogPolling() {
   if (pluginBuildLogPollTimer) window.clearInterval(pluginBuildLogPollTimer);
   pluginBuildLogPollTimer = null;
+  if (pluginBuildLogPollController) pluginBuildLogPollController.abort();
+  pluginBuildLogPollController = null;
   pluginBuildLogPollSequence += 1;
 }
 
 async function refreshPluginBuildLog(sequence) {
   const modal = document.getElementById("plugin-build-log-modal");
   if (!modal || modal.hidden || sequence !== pluginBuildLogPollSequence) return;
+  if (pluginBuildLogPollController?.sequence === sequence) return;
   const filename = modal.dataset.filename;
   if (!filename) return;
+  const controller = new AbortController();
+  const request = {controller, sequence};
+  pluginBuildLogPollController = request;
+  const timeout = window.setTimeout(() => controller.abort(), SERVER_STATUS_REQUEST_TIMEOUT_MS);
   try {
-    const response = await nativeFetch(`/api/web/servers/${modal.dataset.serverId}/plugins/developer-build?filename=${encodeURIComponent(filename)}`, {cache: "no-store"});
+    const response = await nativeFetch(
+      `/api/web/servers/${modal.dataset.serverId}/plugins/developer-build?filename=${encodeURIComponent(filename)}`,
+      {cache: "no-store", signal: controller.signal},
+    );
     connectionFailureLatched = false;
     if (handleAuthenticationResponse(response)) return;
     const data = await response.json();
     if (sequence !== pluginBuildLogPollSequence) return;
     if (!response.ok) {
+      if (data.node_offline === true) {
+        markServerNodeOffline(modal.dataset.serverId);
+        stopPluginBuildLogPolling();
+        return;
+      }
       if (handleFunctionUnavailableData(modal.dataset.serverId, data, true)) stopPluginBuildLogPolling();
       return;
     }
     renderPluginBuildLogDialog(data.development_status);
   } catch {
     // Keep the last visible output when a background refresh is unavailable.
+  } finally {
+    window.clearTimeout(timeout);
+    if (pluginBuildLogPollController === request) pluginBuildLogPollController = null;
   }
 }
 
