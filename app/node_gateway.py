@@ -33,6 +33,7 @@ HOP_BY_HOP_HEADERS = {
     "te", "trailers", "transfer-encoding", "upgrade", "host", "set-cookie",
 }
 REMOTE_NODE_FAILURE_STATUSES = {502, 503, 504, 520, 521, 522, 523, 524, 525, 526}
+REMOTE_NODE_STATUS_PATHS = {"status", "process-stats", "metrics", "storage"}
 
 
 @dataclass(frozen=True)
@@ -98,11 +99,13 @@ def _required_permissions(path: str, method: str) -> set[str] | None:
 
 
 def _upstream_timeout(path: str, method: str) -> httpx.Timeout:
-    """Allow long pauses while streaming a large backup through the hub."""
+    """Keep health checks responsive while allowing large backups to stream."""
     match = SERVER_REF.search(path)
     suffix = path[match.end():].strip("/") if match else ""
     if method.upper() in {"GET", "HEAD"} and suffix == "backups/download":
         return httpx.Timeout(60.0, connect=8.0, read=600.0)
+    if method.upper() in {"GET", "HEAD"} and suffix in REMOTE_NODE_STATUS_PATHS:
+        return httpx.Timeout(8.0, connect=4.0)
     return httpx.Timeout(60.0, connect=8.0)
 
 
