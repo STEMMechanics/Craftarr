@@ -1,5 +1,10 @@
 from app import automation
-from app.automation import can_execute_task, enforce_backup_retention, format_restart_announcement
+from app.automation import (
+    _parse_console_metrics,
+    can_execute_task,
+    enforce_backup_retention,
+    format_restart_announcement,
+)
 from app.automation import next_cron_run, next_task_run, validate_cron_expression
 from datetime import datetime
 from types import SimpleNamespace
@@ -9,6 +14,35 @@ from app.web_automation import _utc_iso
 
 def test_web_timestamps_are_explicitly_utc():
     assert _utc_iso(datetime(2026, 8, 10, 6, 15)) == "2026-08-10T06:15:00Z"
+
+
+def test_paper_console_metrics_parser_reads_tps_and_one_minute_mspt():
+    ansi = chr(27)
+    lines = [
+        f"{ansi}[33mTPS from last 1m, 5m, 15m: {ansi}[92m20.0, {ansi}[92m20.0, {ansi}[92m20.0",
+        f"{ansi}[33mServer tick times (avg/min/max) from last 5s, 10s, 1m: {ansi}[0m",
+        f"{ansi}[33m◴ {ansi}[92m0.6{ansi}[37m/{ansi}[92m0.2{ansi}[37m/{ansi}[92m1.3, "
+        f"{ansi}[92m0.7{ansi}[37m/{ansi}[92m0.2{ansi}[37m/{ansi}[92m3.8, "
+        f"{ansi}[92m1.1{ansi}[37m/{ansi}[92m0.2{ansi}[37m/{ansi}[93m49.1",
+    ]
+
+    assert _parse_console_metrics(lines) == {"tps": 20.0, "mspt": 1.1}
+
+
+def test_console_metric_fallback_queries_only_missing_values(monkeypatch):
+    cursors = iter([("subprocess", 4), ("subprocess", 5)])
+    outputs = {
+        ("subprocess", 4): ["TPS from last 1m, 5m, 15m: 19.98, 19.99, 20.0"],
+        ("subprocess", 5): ["MSPT from last 1m: 23.4, 24.1, 25.0"],
+    }
+    commands = []
+    monkeypatch.setattr(automation, "console_cursor", lambda _server_id: next(cursors))
+    monkeypatch.setattr(automation, "send_command", lambda _server_id, command: commands.append(command))
+    monkeypatch.setattr(automation, "wait_for_console_message", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(automation, "console_lines_since", lambda _server_id, cursor: outputs[cursor])
+
+    assert automation._read_console_metrics(7, {"tps", "mspt"}) == {"tps": 19.98, "mspt": 23.4}
+    assert commands == ["tps", "mspt"]
 
 
 def test_backup_retention_deletes_only_backups_beyond_limit(monkeypatch):

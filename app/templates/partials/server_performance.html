@@ -21,6 +21,6 @@
       <article class="performance-chart-card metric-mspt-card"><div class="performance-chart-heading"><span class="metric-icon"><i class="fa-solid fa-stopwatch" aria-hidden="true"></i></span><div><h2>MSPT</h2><p>Average milliseconds per tick</p></div></div><canvas id="metric-mspt" height="180" role="img" aria-label="Milliseconds per tick over time"></canvas></article>
       <article class="performance-chart-card metric-uptime-card"><div class="performance-chart-heading"><span class="metric-icon"><i class="fa-solid fa-clock" aria-hidden="true"></i></span><div><h2>Time online</h2><p>How long each server run lasted</p></div></div><canvas id="metric-uptime" height="180" role="img" aria-label="Server uptime over time"></canvas></article>
     </div>
-    <div class="performance-chart-note"><i class="fa-solid fa-circle-info" aria-hidden="true"></i><span>Latest and peak values appear below each chart. TPS/MSPT are sampled through Paper's API without console commands. Point to a line to see when a reading was recorded.</span></div>
+    <div class="performance-chart-note"><i class="fa-solid fa-circle-info" aria-hidden="true"></i><span>Latest and peak values appear below each chart. TPS/MSPT use Paper's API bridge, with a read-only command fallback while an existing server is waiting to load the bridge. Point to a line to see when a reading was recorded.</span></div>
   </section>
 </div>
