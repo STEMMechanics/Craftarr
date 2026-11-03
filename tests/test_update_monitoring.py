@@ -361,6 +361,64 @@ def test_deferred_plugin_listing_loads_metadata_per_plugin(db, tmp_path, monkeyp
     assert detail.json()['plugin']['metadata_loaded'] is True
 
 
+def test_developer_build_status_uses_cheap_plugin_listing(db, tmp_path, monkeypatch):
+    row = server(db, tmp_path)
+    user = SimpleNamespace(
+        enabled=True,
+        role='admin',
+        access_role=None,
+        can=lambda permission: permission == 'plugins.manage',
+    )
+    monkeypatch.setattr(web_plugins, 'get_accessible_server', lambda *args: (user, row))
+    monkeypatch.setattr(web_plugins, 'list_plugins', lambda *_args: pytest.fail('full plugin discovery ran during build polling'))
+    monkeypatch.setattr(web_plugins, 'list_plugin_files', lambda *_args: [{
+        'filename': 'arbitrary-name.jar',
+        'name': 'ViaVersion',
+        'enabled': True,
+        'previous_version': False,
+    }])
+
+    app = FastAPI()
+    app.include_router(web_plugins.router)
+    app.dependency_overrides[get_db] = lambda: db
+    response = TestClient(app).get(
+        f'/api/web/servers/{row.id}/plugins/developer-build?filename=arbitrary-name.jar'
+    )
+
+    assert response.status_code == 200
+    assert response.json()['project'] == 'viaversion/viaversion'
+
+
+def test_developer_build_status_drops_retained_previous_plugin_poll(db, tmp_path, monkeypatch):
+    from app import plugin_monitoring
+
+    row = server(db, tmp_path)
+    user = SimpleNamespace(
+        enabled=True,
+        role='admin',
+        access_role=None,
+        can=lambda permission: permission == 'plugins.manage',
+    )
+    monkeypatch.setattr(web_plugins, 'get_accessible_server', lambda *args: (user, row))
+    monkeypatch.setattr(web_plugins, 'list_plugin_files', lambda *_args: [{
+        'filename': 'arbitrary-name.previous-0123456789ab.jar.disabled',
+        'name': 'ViaVersion',
+        'enabled': False,
+        'previous_version': True,
+    }])
+    monkeypatch.setattr(plugin_monitoring, 'monitoring_config', lambda *_args: pytest.fail('retained plugin should not load build state'))
+
+    app = FastAPI()
+    app.include_router(web_plugins.router)
+    app.dependency_overrides[get_db] = lambda: db
+    response = TestClient(app).get(
+        f'/api/web/servers/{row.id}/plugins/developer-build?filename=arbitrary-name.previous-0123456789ab.jar.disabled'
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {'project': '', 'branch': '', 'development_status': None}
+
+
 def test_http_timeout_redirects_and_bounded_body(monkeypatch):
     # Exercise the real transport helper with httpx MockTransport, never live HTTP.
     client = httpx.Client

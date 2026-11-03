@@ -33,8 +33,8 @@ from .update_providers import normalize_name
 
 logger = logging.getLogger(__name__)
 BUILD_TIMEOUT_SECONDS = max(60, int(os.environ.get("CRAFTARR_PLUGIN_BUILD_TIMEOUT_SECONDS", "900")))
-BUILD_MAX_MEMORY_MB = max(512, int(os.environ.get("CRAFTARR_PLUGIN_BUILD_MAX_MEMORY_MB", "1024")))
-BUILD_MAX_WORKERS = max(1, min(4, int(os.environ.get("CRAFTARR_PLUGIN_BUILD_MAX_WORKERS", "2"))))
+BUILD_MAX_MEMORY_MB = max(512, int(os.environ.get("CRAFTARR_PLUGIN_BUILD_MAX_MEMORY_MB", "768")))
+BUILD_MAX_WORKERS = max(1, min(4, int(os.environ.get("CRAFTARR_PLUGIN_BUILD_MAX_WORKERS", "1"))))
 BUILD_NICE = max(0, min(19, int(os.environ.get("CRAFTARR_PLUGIN_BUILD_NICE", "10"))))
 MAX_BUILD_LOG_BYTES = 16000
 MAX_BUILD_REPORT_BYTES = 2 * 1024 * 1024
@@ -669,11 +669,28 @@ def run_scheduled_developer_updates() -> None:
                 if not active_matches:
                     continue
                 plugin = active_matches[0]
+                key = (server.id, normalize_name(setting.plugin_name))
                 with _active_jobs_lock:
-                    if (server.id, normalize_name(setting.plugin_name)) in _active_jobs:
-                        continue
+                    job_active = key in _active_jobs
+                if job_active:
+                    continue
                 state = db.get(DeveloperPluginUpdate, (server.id, setting.plugin_name))
                 if state and state.source_key == f"{setting.project.lower()}#{branch}":
+                    if state.status in {"queued", "building"}:
+                        # A process restart or worker crash can leave a durable
+                        # state behind after the in-memory job has disappeared.
+                        # Do not leave the UI showing Building forever; retry
+                        # the same commit on the next pass immediately.
+                        logger.warning(
+                            "Recovering interrupted development plugin build for server %s plugin %s",
+                            server.id,
+                            setting.plugin_name,
+                        )
+                        state.status = "waiting"
+                        state.error = "The previous branch build was interrupted; retrying."
+                        state.checked_at = None
+                        state.updated_at = now
+                        db.commit()
                     if state.checked_at and now - state.checked_at < timedelta(minutes=interval):
                         continue
                     if state.status == "failed" and state.latest_commit and state.latest_commit != state.installed_commit:

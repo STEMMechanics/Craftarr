@@ -6,6 +6,7 @@ const observedServerStates = new Map();
 let topbarPlayerCountRequest = null;
 let serverStatusPending = false;
 let serverDotsPending = false;
+const SERVER_STATUS_REQUEST_TIMEOUT_MS = 10000;
 let consolePagePending = false;
 let overviewLogsPending = false;
 let sharedSystemOperationPending = false;
@@ -1461,6 +1462,26 @@ async function updateTopbarPlayerCount(serverId) {
   await topbarPlayerCountRequest;
 }
 
+async function fetchServerStatus(serverId) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(
+    () => controller.abort(),
+    SERVER_STATUS_REQUEST_TIMEOUT_MS,
+  );
+  try {
+    return await fetch(
+      `/api/web/servers/${serverId}/status`,
+      {
+        cache: "no-store",
+        quietConnectionErrors: true,
+        signal: controller.signal,
+      },
+    );
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 async function updateServerStatus() {
   if (serverStatusPending) return;
   const startButton = document.getElementById("dashboard-start");
@@ -1548,10 +1569,7 @@ async function updateServerStatus() {
   };
 
   try {
-    const response = await fetch(
-      `/api/web/servers/${serverId}/status`,
-      { cache: "no-store", quietConnectionErrors: true },
-    );
+    const response = await fetchServerStatus(serverId);
 
     if (!response.ok) {
       throw new Error(
@@ -1631,101 +1649,103 @@ async function updateServerDots() {
   )];
   const serverIds = [...new Set(dots.map((dot) => dot.dataset.serverId).filter(Boolean))];
 
-  for (const serverId of serverIds) {
-    try {
-      const response = await fetch(
-        `/api/web/servers/${serverId}/status`,
-        { quietConnectionErrors: true },
-      );
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        const reason = payload?.error || payload?.detail || `HTTP ${response.status}`;
+  try {
+    await Promise.all(serverIds.map(async (serverId) => {
+      try {
+        const response = await fetchServerStatus(serverId);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const responseState = normalizeServerState(data);
+          if (responseState !== "node_offline") {
+            const reason = data?.error || data?.detail || `HTTP ${response.status}`;
+            const classes = ["is-online", "is-offline", "is-starting", "is-stopping", "is-node-offline", "is-unknown"];
+            const message = `Status unavailable: ${reason}`;
+
+            dots
+              .filter((dot) => dot.dataset.serverId === serverId)
+              .forEach((dot) => {
+                dot.classList.remove(...classes, "running");
+                dot.classList.add("is-unknown");
+                dot.title = message;
+              });
+
+            document.querySelectorAll(".server-card-status")
+              .forEach((status) => {
+                if (status.dataset.serverId !== serverId) return;
+                status.classList.remove(...classes);
+                status.classList.add("is-unknown");
+                status.title = message;
+                const label = status.querySelector(".server-card-status-text");
+                if (label) label.textContent = "Unavailable";
+              });
+
+            document.querySelectorAll(".server-status-text")
+              .forEach((label) => {
+                if (label.dataset.serverId !== serverId) return;
+                label.textContent = "Unavailable";
+                label.title = message;
+              });
+            return;
+          }
+        }
+        const state = normalizeServerState(data);
+        if (state === "unknown") return;
         const classes = ["is-online", "is-offline", "is-starting", "is-stopping", "is-node-offline", "is-unknown"];
-        const message = `Status unavailable: ${reason}`;
 
         dots
           .filter((dot) => dot.dataset.serverId === serverId)
           .forEach((dot) => {
             dot.classList.remove(...classes, "running");
-            dot.classList.add("is-unknown");
-            dot.title = message;
+            dot.classList.add(statusClass(state));
+            dot.classList.toggle("running", state === "running");
           });
 
-        document.querySelectorAll(".server-card-status")
-          .forEach((status) => {
-            if (status.dataset.serverId !== serverId) return;
-            status.classList.remove(...classes);
-            status.classList.add("is-unknown");
-            status.title = message;
-            const label = status.querySelector(".server-card-status-text");
-            if (label) label.textContent = "Unavailable";
-          });
-
-        document.querySelectorAll(".server-status-text")
-          .forEach((label) => {
-            if (label.dataset.serverId !== serverId) return;
-            label.textContent = "Unavailable";
-            label.title = message;
-          });
-        continue;
-      }
-      const data = await response.json();
-      const state = normalizeServerState(data);
-      if (state === "unknown") continue;
-      const classes = ["is-online", "is-offline", "is-starting", "is-stopping", "is-node-offline", "is-unknown"];
-
-      dots
-        .filter((dot) => dot.dataset.serverId === serverId)
-        .forEach((dot) => {
-          dot.classList.remove(...classes, "running");
-          dot.classList.add(statusClass(state));
-          dot.classList.toggle("running", state === "running");
+        document.querySelectorAll(
+          `.server-card-status[data-server-id="${serverId}"]`,
+        ).forEach((status) => {
+          status.classList.remove(...classes);
+          status.classList.add(statusClass(state));
+          const label = status.querySelector(".server-card-status-text");
+          if (label) label.textContent = serverStateLabel(state, data.console_available);
         });
 
-      document.querySelectorAll(
-        `.server-card-status[data-server-id="${serverId}"]`,
-      ).forEach((status) => {
-        status.classList.remove(...classes);
-        status.classList.add(statusClass(state));
-        const label = status.querySelector(".server-card-status-text");
-        if (label) label.textContent = serverStateLabel(state, data.console_available);
-      });
+        document.querySelectorAll(
+          `.system-instance-row [data-server-id="${serverId}"].server-status-dot`,
+        ).forEach((dot) => {
+          const row = dot.closest(".system-instance-row");
+          const label = row?.querySelector(".system-instance-state");
+          if (label) label.textContent = serverStateLabel(state, data.console_available);
+          const button = row?.querySelector(".server-control-button");
+          if (button) {
+            const action = state === "stopped" ? "start" : "stop";
+            const actionLabel = action === "start" ? "Start" : "Stop";
+            const actionIcon = action === "start" ? "play" : "stop";
+            button.dataset.serverAction = action;
+            button.className = `server-control-button ${action}`;
+            button.setAttribute("aria-label", `${actionLabel} ${row.querySelector("strong")?.textContent || "server"}`);
+            button.title = `${actionLabel} server`;
+            button.onclick = () => systemServerAction(serverId, action, button);
+            const icon = button.querySelector("i");
+            if (icon) icon.className = `fa-solid fa-${actionIcon}`;
+            button.disabled = state === "node_offline" || (action === "start"
+              ? state !== "stopped"
+              : data.console_available === false || state !== "running");
+          }
+        });
 
-      document.querySelectorAll(
-        `.system-instance-row [data-server-id="${serverId}"].server-status-dot`,
-      ).forEach((dot) => {
-        const row = dot.closest(".system-instance-row");
-        const label = row?.querySelector(".system-instance-state");
-        if (label) label.textContent = serverStateLabel(state, data.console_available);
-        const button = row?.querySelector(".server-control-button");
-        if (button) {
-          const action = state === "stopped" ? "start" : "stop";
-          const actionLabel = action === "start" ? "Start" : "Stop";
-          const actionIcon = action === "start" ? "play" : "stop";
-          button.dataset.serverAction = action;
-          button.className = `server-control-button ${action}`;
-          button.setAttribute("aria-label", `${actionLabel} ${row.querySelector("strong")?.textContent || "server"}`);
-          button.title = `${actionLabel} server`;
-          button.onclick = () => systemServerAction(serverId, action, button);
-          const icon = button.querySelector("i");
-          if (icon) icon.className = `fa-solid fa-${actionIcon}`;
-          button.disabled = state === "node_offline" || (action === "start"
-            ? state !== "stopped"
-            : data.console_available === false || state !== "running");
-        }
-      });
-
-      document.querySelectorAll(
-        `.server-status-text[data-server-id="${serverId}"]`,
-      ).forEach((label) => {
-        label.textContent = serverStateLabel(state, data.console_available);
-      });
-      if (state === "node_offline") markServerNodeOffline(serverId);
-    } catch {
-      // Keep the last confirmed state when one status poll fails.
-    }
+        document.querySelectorAll(
+          `.server-status-text[data-server-id="${serverId}"]`,
+        ).forEach((label) => {
+          label.textContent = serverStateLabel(state, data.console_available);
+        });
+        if (state === "node_offline") markServerNodeOffline(serverId);
+      } catch {
+        // Keep the last confirmed state when one status poll fails.
+      }
+    }));
+  } finally {
+    serverDotsPending = false;
   }
-  serverDotsPending = false;
 }
 
 updateServerDots();
@@ -2957,6 +2977,8 @@ async function refreshDeveloperPluginRow(filename, sequence) {
 }
 
 function startDeveloperPluginRowPolling(filename) {
+  const plugin = pluginData.find((item) => item.filename === filename);
+  if (!plugin || plugin.enabled !== true || plugin.previous_version === true) return;
   stopDeveloperPluginRowPolling(filename);
   const sequence = ++pluginBuildRowPollSequence;
   pluginBuildRowPolls.set(filename, {timer: null, sequence});
@@ -2969,6 +2991,7 @@ function startDeveloperPluginRowPolling(filename) {
 function syncDeveloperPluginRowPolling() {
   const activeFilenames = new Set();
   for (const plugin of pluginData) {
+    if (plugin.enabled !== true || plugin.previous_version === true) continue;
     const state = plugin.update?.monitoring?.development_status;
     if (!state || !["queued", "building"].includes(state.status)) continue;
     const row = [...document.querySelectorAll(".plugin-row")]
@@ -11118,14 +11141,14 @@ function startPluginBuildLogPolling() {
   stopPluginBuildLogPolling();
   const sequence = pluginBuildLogPollSequence;
   refreshPluginBuildLog(sequence);
-  pluginBuildLogPollTimer = window.setInterval(() => refreshPluginBuildLog(sequence), 500);
+  pluginBuildLogPollTimer = window.setInterval(() => refreshPluginBuildLog(sequence), 2500);
 }
 
 function openPluginBuildLog(index) {
   const plugin = pluginData[index];
   const modal = document.getElementById("plugin-build-log-modal");
   const page = document.querySelector(".plugins-page");
-  if (!plugin || !modal || !page) return;
+  if (!plugin || plugin.enabled !== true || plugin.previous_version === true || !modal || !page) return;
   const config = plugin.update?.monitoring || {};
   pluginBuildLogPreviousFocus = document.activeElement;
   modal.dataset.filename = plugin.filename;

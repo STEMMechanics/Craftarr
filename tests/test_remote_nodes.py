@@ -230,7 +230,7 @@ def test_gateway_maps_remote_operations_and_rewrites_server_refs():
     ).read == 600.0
     assert _upstream_timeout(
         f"/api/web/servers/{node_id}:42/metrics", "GET"
-    ).read == 60.0
+    ).read == 8.0
     response_headers = _proxy_response_headers({
         "content-length": "10485760",
         "content-range": "bytes 0-10485759/10737418240",

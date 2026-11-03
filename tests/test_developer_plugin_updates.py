@@ -11,10 +11,10 @@ def test_safe_build_environment_limits_gradle_and_maven(tmp_path):
     environment = updates._safe_build_environment(tmp_path)
 
     assert environment["GRADLE_USER_HOME"] == str(tmp_path / "gradle-cache")
-    assert "-Xmx1024m" in environment["GRADLE_OPTS"]
-    assert "-Dorg.gradle.workers.max=2" in environment["GRADLE_OPTS"]
-    assert "-Xmx1024m" in environment["MAVEN_OPTS"]
-    assert "-XX:ActiveProcessorCount=2" in environment["MAVEN_OPTS"]
+    assert "-Xmx768m" in environment["GRADLE_OPTS"]
+    assert "-Dorg.gradle.workers.max=1" in environment["GRADLE_OPTS"]
+    assert "-Xmx768m" in environment["MAVEN_OPTS"]
+    assert "-XX:ActiveProcessorCount=1" in environment["MAVEN_OPTS"]
     assert f"-Dmaven.repo.local={tmp_path / 'maven-cache'}" in environment["MAVEN_OPTS"]
 
 
