@@ -236,7 +236,31 @@ def remote_backups_data(
                 "summary": {"complete": 0, "partial": 0, "other": 0},
                 "error": str(error),
             }
+        candidate_jobs = (
+            db.query(BackupJob)
+            .filter(
+                BackupJob.server_id == server.id,
+                BackupJob.remote_destination == destination,
+            )
+            .order_by(BackupJob.id.desc())
+            .limit(100)
+            .all()
+        )
+        retry_jobs = []
+        for job in candidate_jobs:
+            message = (job.message or "").casefold()
+            if job.status != "warning" and "off-site copy failed" not in message:
+                continue
+            retry_jobs.append({
+                "id": job.id,
+                "filename": job.filename,
+                "label": job.label,
+                "message": job.message,
+            })
+            if len(retry_jobs) >= 10:
+                break
         inventory["schedules"] = item["schedules"]
+        inventory["retry_jobs"] = retry_jobs
         remotes.append(inventory)
     return {"remotes": remotes}
 
@@ -256,7 +280,8 @@ async def retry_remote_backup(
     job = db.get(BackupJob, job_id)
     if not job or job.server_id != server.id:
         return JSONResponse({"error": "Backup job not found"}, status_code=404)
-    if job.status != "warning" or not job.remote_destination:
+    legacy_remote_failure = "off-site copy failed" in (job.message or "").casefold()
+    if (job.status != "warning" and not (job.status == "complete" and legacy_remote_failure)) or not job.remote_destination:
         return JSONResponse({"error": "This backup has no remote copy to retry"}, status_code=409)
     if not job.filename or not safe_backup_path(server, job.filename).is_file():
         return JSONResponse({"error": "The local backup archive is no longer available"}, status_code=409)
@@ -267,6 +292,9 @@ async def retry_remote_backup(
     if isinstance(data, dict) and data.get("destination"):
         if str(data["destination"]).strip() != job.remote_destination:
             return JSONResponse({"error": "The retry destination does not match this backup"}, status_code=400)
+    if legacy_remote_failure and job.status == "complete":
+        job.status = "warning"
+        db.commit()
     if not start_remote_backup_retry(job.id):
         return JSONResponse({"error": "A remote retry is already running"}, status_code=409)
     request.state.audit_action = "Remote backup retry queued"

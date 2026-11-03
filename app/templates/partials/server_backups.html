@@ -44,35 +44,23 @@
 
     <div id="backup-jobs" class="backup-jobs"></div>
 
-    <section class="overview-card backup-activity-card">
+    <section class="overview-card backup-panel" data-backup-panel-key="local" data-backup-panel-title="Local backups">
 
-        <div class="card-header">
-            <span>Backup activity</span>
-            <span id="backup-job-history-count" class="plugin-count">Recent results</span>
-        </div>
-
-        <div id="backup-job-history" class="backup-job-history">
-            <div class="empty-message">Loading backup activity...</div>
-        </div>
-
-    </section>
-
-
-    <section class="overview-card">
-
-        <div class="card-header">
-
-            <span>
-                Backups
-            </span>
-
-            <span
-                id="backup-count"
-                class="plugin-count"
-            >
-                0 backups
-            </span>
-
+        <div class="card-header backup-panel-header">
+            <span>Local backups</span>
+            <div class="backup-panel-header-actions">
+                <span id="backup-count" class="plugin-count">0 backups</span>
+                <button
+                    class="backup-panel-collapse-toggle"
+                    type="button"
+                    aria-expanded="true"
+                    aria-label="Collapse Local backups"
+                    title="Collapse Local backups"
+                    onclick="toggleBackupPanel(this)"
+                >
+                    <i class="fa-solid fa-chevron-up" aria-hidden="true"></i>
+                </button>
+            </div>
         </div>
 
 
@@ -85,21 +73,31 @@
 
     </section>
 
-    <section class="overview-card remote-backup-card">
+    <div id="remote-backup-list" class="remote-backup-list">
+            <div class="empty-message">Loading remote backups...</div>
+    </div>
 
-        <div class="card-header">
-            <div>
-                <span>Remote backups</span>
-                <p class="card-header-subtitle">Remote files, completed copies, and partial uploads</p>
+    <section class="overview-card backup-panel backup-activity-card" data-backup-panel-key="activity" data-backup-panel-title="Backup activity">
+
+        <div class="card-header backup-panel-header">
+            <span>Backup activity</span>
+            <div class="backup-panel-header-actions">
+                <span id="backup-job-history-count" class="plugin-count">Recent results</span>
+                <button
+                    class="backup-panel-collapse-toggle"
+                    type="button"
+                    aria-expanded="true"
+                    aria-label="Collapse Backup activity"
+                    title="Collapse Backup activity"
+                    onclick="toggleBackupPanel(this)"
+                >
+                    <i class="fa-solid fa-chevron-up" aria-hidden="true"></i>
+                </button>
             </div>
-            <button class="button panel-header-button" type="button" onclick="updateRemoteBackups()">
-                <i class="fa-solid fa-rotate" aria-hidden="true"></i>
-                Refresh
-            </button>
         </div>
 
-        <div id="remote-backup-list" class="remote-backup-list">
-            <div class="empty-message">Loading remote backups...</div>
+        <div id="backup-job-history" class="backup-job-history">
+            <div class="empty-message">Loading backup activity...</div>
         </div>
 
     </section>
