@@ -3,9 +3,6 @@
 import threading
 import logging
 import json
-import math
-import re
-import subprocess
 from pathlib import Path
 from calendar import monthrange
 from datetime import datetime, timedelta, timezone
@@ -22,8 +19,7 @@ from .player_manager import get_online_players
 from .metrics_bridge import read_metrics_snapshot
 from .processes import (
     register_server, restart_server, run_pre_stop_commands, send_command,
-    start_server, stop_server_and_wait, console_cursor, console_lines_since,
-    wait_for_console_message,
+    start_server, stop_server_and_wait,
     server_process_stats, server_status,
 )
 from .audit import record_audit_event
@@ -43,78 +39,6 @@ METRIC_SECONDS = max(15, int(getenv("CRAFTARR_METRIC_INTERVAL_SECONDS", "60")))
 METRIC_RETENTION_DAYS = max(1, int(getenv("CRAFTARR_METRIC_RETENTION_DAYS", "30")))
 IDLE_RESTART_EMPTY_SECONDS = 30
 MAX_RESTART_ANNOUNCEMENT_LENGTH = 350
-_ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-_TPS_OUTPUT_PATTERN = re.compile(
-    r"TPS\s+from\s+last\s+1m[^:]*:\s*([0-9]+(?:\.[0-9]+)?)",
-    re.IGNORECASE,
-)
-_MSPT_OUTPUT_PATTERN = re.compile(
-    r"MSPT\s+from\s+last\s+1m[^:]*:\s*([0-9]+(?:\.[0-9]+)?)",
-    re.IGNORECASE,
-)
-_PAPER_MSPT_OUTPUT_PATTERN = re.compile(
-    r"Server\s+tick\s+times.*?:.*?"
-    r"([0-9]+(?:\.[0-9]+)?)\s*/[^,]+,\s*"
-    r"([0-9]+(?:\.[0-9]+)?)\s*/[^,]+,\s*"
-    r"([0-9]+(?:\.[0-9]+)?)\s*/",
-    re.IGNORECASE,
-)
-
-
-def _console_metric_value(value: str, maximum: float) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) and 0 <= number <= maximum else None
-
-
-def _parse_console_metrics(lines) -> dict[str, float]:
-    """Parse Paper's built-in TPS/MSPT command output."""
-    text = " ".join(_ANSI_ESCAPE_PATTERN.sub("", str(line)) for line in lines)
-    values = {}
-    tps_match = _TPS_OUTPUT_PATTERN.search(text)
-    if tps_match:
-        tps = _console_metric_value(tps_match.group(1), 20.5)
-        if tps is not None:
-            values["tps"] = tps
-    mspt_match = _MSPT_OUTPUT_PATTERN.search(text)
-    if mspt_match:
-        mspt = _console_metric_value(mspt_match.group(1), 600_000.0)
-    else:
-        paper_mspt_match = _PAPER_MSPT_OUTPUT_PATTERN.search(text)
-        mspt = _console_metric_value(paper_mspt_match.group(3), 600_000.0) if paper_mspt_match else None
-    if mspt is not None:
-        values["mspt"] = mspt
-    return values
-
-
-def _read_console_metrics(server_id: int, missing: set[str]) -> dict[str, float]:
-    """Read missing metrics from Paper without disturbing the server process."""
-    if not missing:
-        return {}
-    values = {}
-    commands = {
-        "tps": ("tps", "TPS from last"),
-        "mspt": ("mspt", ("Server tick times", "MSPT from last")),
-    }
-    for metric_name in ("tps", "mspt"):
-        if metric_name not in missing:
-            continue
-        command, response_texts = commands[metric_name]
-        try:
-            cursor = console_cursor(server_id)
-            send_command(server_id, command)
-            wait_for_console_message(server_id, response_texts, timeout=2, cursor=cursor)
-            values.update(_parse_console_metrics(console_lines_since(server_id, cursor)))
-        except (OSError, RuntimeError, subprocess.SubprocessError):
-            logger.debug(
-                "Paper %s console metric is unavailable for server %s",
-                metric_name,
-                server_id,
-                exc_info=True,
-            )
-    return {key: value for key, value in values.items() if key in missing}
 
 
 def wake_idle_restart_monitor() -> None:
@@ -581,15 +505,6 @@ def collect_metrics() -> None:
             status = server_status(server.id)
             stats = server_process_stats(server.id)
             performance = read_metrics_snapshot(server.directory) if status.get("running") else None
-            if status.get("running"):
-                missing_metrics = {
-                    key for key in ("tps", "mspt")
-                    if not performance or performance.get(key) is None
-                }
-                if missing_metrics:
-                    console_metrics = _read_console_metrics(server.id, missing_metrics)
-                    if console_metrics:
-                        performance = {**(performance or {}), **console_metrics}
             uptime = None
             pid = status.get("pid")
             if status.get("running") and pid:
