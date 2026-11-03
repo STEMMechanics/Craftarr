@@ -33,7 +33,7 @@ HOP_BY_HOP_HEADERS = {
     "te", "trailers", "transfer-encoding", "upgrade", "host", "set-cookie",
 }
 REMOTE_NODE_FAILURE_STATUSES = {502, 503, 504, 520, 521, 522, 523, 524, 525, 526}
-REMOTE_NODE_STATUS_PATHS = {"status", "process-stats", "metrics", "storage"}
+REMOTE_NODE_QUICK_PATHS = {"status", "process-stats", "metrics", "storage", "plugins/developer-build"}
 
 
 @dataclass(frozen=True)
@@ -104,7 +104,7 @@ def _upstream_timeout(path: str, method: str) -> httpx.Timeout:
     suffix = path[match.end():].strip("/") if match else ""
     if method.upper() in {"GET", "HEAD"} and suffix == "backups/download":
         return httpx.Timeout(60.0, connect=8.0, read=600.0)
-    if method.upper() in {"GET", "HEAD"} and suffix in REMOTE_NODE_STATUS_PATHS:
+    if method.upper() in {"GET", "HEAD"} and suffix in REMOTE_NODE_QUICK_PATHS:
         return httpx.Timeout(8.0, connect=4.0)
     return httpx.Timeout(60.0, connect=8.0)
 

@@ -33,6 +33,7 @@ from .update_providers import normalize_name
 
 logger = logging.getLogger(__name__)
 BUILD_TIMEOUT_SECONDS = max(60, int(os.environ.get("CRAFTARR_PLUGIN_BUILD_TIMEOUT_SECONDS", "900")))
+BUILD_IDLE_TIMEOUT_SECONDS = max(30, int(os.environ.get("CRAFTARR_PLUGIN_BUILD_IDLE_TIMEOUT_SECONDS", "180")))
 BUILD_MAX_MEMORY_MB = max(512, int(os.environ.get("CRAFTARR_PLUGIN_BUILD_MAX_MEMORY_MB", "768")))
 BUILD_MAX_WORKERS = max(1, min(4, int(os.environ.get("CRAFTARR_PLUGIN_BUILD_MAX_WORKERS", "1"))))
 BUILD_NICE = max(0, min(19, int(os.environ.get("CRAFTARR_PLUGIN_BUILD_NICE", "10"))))
@@ -109,7 +110,8 @@ def _builder_identity(root: Path):
     return {"user": identity.pw_uid, "group": identity.pw_gid, "extra_groups": []}, environment
 
 
-def _run(command: list[str], *, cwd: Path | None = None, timeout: int = 60, env=None, identity=None, on_output=None) -> str:
+def _run(command: list[str], *, cwd: Path | None = None, timeout: int = 60, idle_timeout: int | float | None = None,
+         env=None, identity=None, on_output=None) -> str:
     """Run a command while optionally forwarding combined output as it arrives."""
     process_group = os.name == "posix"
     completed = subprocess.Popen(
@@ -127,16 +129,27 @@ def _run(command: list[str], *, cwd: Path | None = None, timeout: int = 60, env=
     selector = selectors.DefaultSelector()
     selector.register(completed.stdout, selectors.EVENT_READ)
     deadline = time.monotonic() + timeout
+    idle_deadline = time.monotonic() + idle_timeout if idle_timeout else None
     timed_out = False
+    idle_timed_out = False
     try:
         while selector.get_map():
-            remaining = deadline - time.monotonic()
+            now = time.monotonic()
+            remaining = deadline - now
+            if idle_deadline is not None:
+                idle_remaining = idle_deadline - now
+                if idle_remaining <= 0:
+                    timed_out = True
+                    idle_timed_out = True
+                    break
+                remaining = min(remaining, idle_remaining)
             if remaining <= 0:
                 timed_out = True
                 break
             events = selector.select(remaining)
             if not events:
                 timed_out = True
+                idle_timed_out = idle_deadline is not None and time.monotonic() >= idle_deadline
                 break
             for key, _ in events:
                 chunk = os.read(key.fileobj.fileno(), 8192)
@@ -148,6 +161,8 @@ def _run(command: list[str], *, cwd: Path | None = None, timeout: int = 60, env=
                     output_parts.append(text)
                     if on_output:
                         on_output(text)
+                    if idle_deadline is not None:
+                        idle_deadline = time.monotonic() + idle_timeout
         tail = decoder.decode(b"", final=True)
         if tail:
             output_parts.append(tail)
@@ -166,7 +181,13 @@ def _run(command: list[str], *, cwd: Path | None = None, timeout: int = 60, env=
                 output_parts.append(remainder)
                 if on_output:
                     on_output(remainder)
-            raise subprocess.TimeoutExpired(command, timeout, output="".join(output_parts))
+            error = subprocess.TimeoutExpired(
+                command,
+                idle_timeout if idle_timed_out else timeout,
+                output="".join(output_parts),
+            )
+            error.idle_timeout = idle_timed_out
+            raise error
         try:
             return_code = completed.wait(timeout=5)
         except subprocess.TimeoutExpired:
@@ -240,13 +261,13 @@ def list_branch_names(project: str) -> list[str]:
 
 def _build_command(source: Path) -> list[str]:
     if (source / "gradlew").is_file():
-        return ["bash", "./gradlew", "--no-daemon", "build"]
+        return ["bash", "./gradlew", "--no-daemon", "--console=plain", "build"]
     if (source / "mvnw").is_file():
         return ["bash", "./mvnw", "--batch-mode", "package"]
     if (source / "build.gradle").is_file() or (source / "build.gradle.kts").is_file():
         if not shutil_which("gradle"):
             raise RuntimeError("This repository needs its Gradle wrapper (gradlew)")
-        return ["gradle", "--no-daemon", "build"]
+        return ["gradle", "--no-daemon", "--console=plain", "build"]
     if (source / "pom.xml").is_file():
         if not shutil_which("mvn"):
             raise RuntimeError("This repository needs its Maven wrapper (mvnw)")
@@ -368,7 +389,15 @@ def build_and_install(server, plugin: dict, project: str, branch: str, expected_
             raise RuntimeError("The branch changed while it was being downloaded; it will be checked again")
         command = _prioritise_build_command(_build_command(source))
         try:
-            build_log = _run(command, cwd=source, timeout=BUILD_TIMEOUT_SECONDS, env=env, identity=identity, on_output=on_output)
+            build_log = _run(
+                command,
+                cwd=source,
+                timeout=BUILD_TIMEOUT_SECONDS,
+                idle_timeout=BUILD_IDLE_TIMEOUT_SECONDS,
+                env=env,
+                identity=identity,
+                on_output=on_output,
+            )
         except (BuildCommandError, subprocess.TimeoutExpired) as error:
             _attach_problem_report(error, source, getattr(error, "output", ""))
             raise
@@ -559,11 +588,16 @@ def _process_job(server_id: int, plugin_name: str, filename: str, project: str, 
         state = db.get(DeveloperPluginUpdate, (server_id, plugin_name))
         if state:
             output = error.output.decode(errors="replace") if isinstance(error.output, bytes) else error.output or ""
+            timeout_message = (
+                f"Build stopped after {BUILD_IDLE_TIMEOUT_SECONDS} seconds without new output"
+                if getattr(error, "idle_timeout", False)
+                else f"Build timed out after {BUILD_TIMEOUT_SECONDS} seconds"
+            )
             _set_state(
                 db,
                 state,
                 status="failed",
-                error=f"Build timed out after {BUILD_TIMEOUT_SECONDS} seconds",
+                error=timeout_message,
                 build_log=output,
                 build_report_html=getattr(error, "report_html", None),
                 build_report_path=getattr(error, "report_path", None),
@@ -611,6 +645,7 @@ def _queue_job(server: Server, setting: PluginMonitoringSetting, plugin: dict, c
     state.latest_commit = commit
     state.status = "queued"
     state.error = None
+    state.build_log = None
     state.build_report_html = None
     state.build_report_path = None
     state.checked_at = now

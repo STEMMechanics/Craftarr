@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,6 +26,49 @@ def test_prioritise_build_command_uses_nice(monkeypatch):
     assert updates._prioritise_build_command(["bash", "./gradlew", "build"]) == [
         "/usr/bin/nice", "-n", "10", "bash", "./gradlew", "build",
     ]
+
+
+def test_run_idle_timeout_kills_the_build_process_group():
+    with pytest.raises(subprocess.TimeoutExpired) as failure:
+        updates._run(["bash", "-c", "printf start; sleep 30"], timeout=10, idle_timeout=1)
+
+    assert getattr(failure.value, "idle_timeout", False) is True
+
+
+def test_queue_job_clears_log_from_previous_build(monkeypatch):
+    state = SimpleNamespace(
+        source_key="owner/repository#main",
+        latest_commit="old-commit",
+        installed_commit="old-commit",
+        status="failed",
+        error="old error",
+        build_log="old build output",
+        build_report_html="old report",
+        build_report_path="old-report.html",
+        checked_at=None,
+        updated_at=None,
+    )
+
+    class FakeDB:
+        def get(self, *_args):
+            return state
+
+        def commit(self):
+            pass
+
+    server = SimpleNamespace(id=42)
+    setting = SimpleNamespace(project="Owner/Repository", development_branch="main", plugin_name="STEMCraft")
+    plugin = {"name": "STEMCraft", "filename": "STEMCraft.jar"}
+    monkeypatch.setattr(updates._worker_pool, "submit", lambda *_args: None)
+    updates._active_jobs.discard((server.id, "stemcraft"))
+
+    try:
+        assert updates._queue_job(server, setting, plugin, "new-commit", updates.datetime.utcnow(), FakeDB()) is True
+        assert state.build_log is None
+        assert state.build_report_html is None
+        assert state.build_report_path is None
+    finally:
+        updates._active_jobs.discard((server.id, "stemcraft"))
 
 
 @pytest.mark.skipif(os.name != "posix" or shutil.which("bash") is None, reason="requires POSIX bash process groups")

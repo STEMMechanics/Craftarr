@@ -99,7 +99,9 @@ custom build commands are not currently configured here. Builds use lower CPU
 priority, a 768 MiB JVM memory cap and one build worker by default so a build does
 not starve the Node or its Minecraft servers. Set `CRAFTARR_PLUGIN_BUILD_MAX_MEMORY_MB`,
 `CRAFTARR_PLUGIN_BUILD_MAX_WORKERS` or `CRAFTARR_PLUGIN_BUILD_NICE` in the Node
-environment when a project needs different limits.
+environment when a project needs different limits. A build is also stopped after
+three minutes without new output by default; set
+`CRAFTARR_PLUGIN_BUILD_IDLE_TIMEOUT_SECONDS` when a project has intentionally quiet tests.
 
 ## Shared settings repository
 
