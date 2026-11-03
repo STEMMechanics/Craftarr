@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import selectors
+import signal
 import subprocess
 import tempfile
 import threading
@@ -32,6 +33,9 @@ from .update_providers import normalize_name
 
 logger = logging.getLogger(__name__)
 BUILD_TIMEOUT_SECONDS = max(60, int(os.environ.get("CRAFTARR_PLUGIN_BUILD_TIMEOUT_SECONDS", "900")))
+BUILD_MAX_MEMORY_MB = max(512, int(os.environ.get("CRAFTARR_PLUGIN_BUILD_MAX_MEMORY_MB", "1024")))
+BUILD_MAX_WORKERS = max(1, min(4, int(os.environ.get("CRAFTARR_PLUGIN_BUILD_MAX_WORKERS", "2"))))
+BUILD_NICE = max(0, min(19, int(os.environ.get("CRAFTARR_PLUGIN_BUILD_NICE", "10"))))
 MAX_BUILD_LOG_BYTES = 16000
 MAX_BUILD_REPORT_BYTES = 2 * 1024 * 1024
 LIVE_BUILD_LOG_PERSIST_INTERVAL_SECONDS = 0.25
@@ -64,6 +68,16 @@ def _safe_build_environment(home: Path) -> dict[str, str]:
         "PATH": "/opt/gradle/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "HOME": str(home),
         "TMPDIR": str(home / "tmp"),
+        "GRADLE_USER_HOME": str(home / "gradle-cache"),
+        "GRADLE_OPTS": (
+            f"-Dorg.gradle.jvmargs=-Xmx{BUILD_MAX_MEMORY_MB}m "
+            f"-Dorg.gradle.workers.max={BUILD_MAX_WORKERS}"
+        ),
+        "MAVEN_OPTS": (
+            f"-Xmx{BUILD_MAX_MEMORY_MB}m -XX:MaxMetaspaceSize=256m "
+            f"-XX:ActiveProcessorCount={BUILD_MAX_WORKERS} "
+            f"-Dmaven.repo.local={home / 'maven-cache'}"
+        ),
         "LANG": os.environ.get("LANG", "C.UTF-8"),
         "GIT_TERMINAL_PROMPT": "0",
         "GIT_CONFIG_NOSYSTEM": "1",
@@ -92,13 +106,12 @@ def _builder_identity(root: Path):
     home = Path(identity.pw_dir)
     environment = _safe_build_environment(root)
     environment["HOME"] = str(home)
-    environment["GRADLE_USER_HOME"] = str(root / "gradle-cache")
-    environment["MAVEN_OPTS"] = f"-Dmaven.repo.local={root / 'maven-cache'}"
     return {"user": identity.pw_uid, "group": identity.pw_gid, "extra_groups": []}, environment
 
 
 def _run(command: list[str], *, cwd: Path | None = None, timeout: int = 60, env=None, identity=None, on_output=None) -> str:
     """Run a command while optionally forwarding combined output as it arrives."""
+    process_group = os.name == "posix"
     completed = subprocess.Popen(
         command,
         cwd=cwd,
@@ -106,6 +119,7 @@ def _run(command: list[str], *, cwd: Path | None = None, timeout: int = 60, env=
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         bufsize=0,
+        start_new_session=process_group,
         **(identity or {}),
     )
     output_parts = []
@@ -140,8 +154,12 @@ def _run(command: list[str], *, cwd: Path | None = None, timeout: int = 60, env=
             if on_output:
                 on_output(tail)
         if timed_out:
-            completed.kill()
-            remainder, _ = completed.communicate()
+            _kill_process_tree(completed, process_group)
+            try:
+                remainder, _ = completed.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                completed.kill()
+                remainder, _ = completed.communicate()
             if remainder:
                 if isinstance(remainder, bytes):
                     remainder = remainder.decode("utf-8", errors="replace")
@@ -149,18 +167,35 @@ def _run(command: list[str], *, cwd: Path | None = None, timeout: int = 60, env=
                 if on_output:
                     on_output(remainder)
             raise subprocess.TimeoutExpired(command, timeout, output="".join(output_parts))
-        return_code = completed.wait()
+        try:
+            return_code = completed.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _kill_process_tree(completed, process_group)
+            return_code = completed.wait(timeout=5)
     finally:
         selector.close()
         if completed.poll() is None:
-            completed.kill()
-            completed.wait()
+            _kill_process_tree(completed, process_group)
+            completed.wait(timeout=5)
 
     output = "".join(output_parts).strip()
     if return_code:
         detail = output[-4000:] or f"Command exited with status {return_code}"
         raise BuildCommandError(detail, output)
     return output
+
+
+def _kill_process_tree(process: subprocess.Popen, process_group: bool) -> None:
+    if process_group:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+            return
+        except (ProcessLookupError, PermissionError):
+            pass
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
 
 
 def latest_branch_commit(project: str, branch: str) -> str:
@@ -217,6 +252,13 @@ def _build_command(source: Path) -> list[str]:
             raise RuntimeError("This repository needs its Maven wrapper (mvnw)")
         return ["mvn", "--batch-mode", "package"]
     raise RuntimeError("No Gradle or Maven build file was found")
+
+
+def _prioritise_build_command(command: list[str]) -> list[str]:
+    if BUILD_NICE <= 0:
+        return command
+    nice = shutil_which("nice")
+    return [nice, "-n", str(BUILD_NICE), *command] if nice else command
 
 
 def shutil_which(command: str) -> str | None:
@@ -324,7 +366,7 @@ def build_and_install(server, plugin: dict, project: str, branch: str, expected_
             raise RuntimeError("Git did not return a full commit ID")
         if commit != expected_commit:
             raise RuntimeError("The branch changed while it was being downloaded; it will be checked again")
-        command = _build_command(source)
+        command = _prioritise_build_command(_build_command(source))
         try:
             build_log = _run(command, cwd=source, timeout=BUILD_TIMEOUT_SECONDS, env=env, identity=identity, on_output=on_output)
         except (BuildCommandError, subprocess.TimeoutExpired) as error:

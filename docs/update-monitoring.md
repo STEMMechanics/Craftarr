@@ -95,7 +95,11 @@ The Docker image includes Java, Git, Maven, Gradle, and unzip. Repository wrappe
 take precedence so a project can use its pinned tool version. In Docker, repository
 build scripts run as the unprivileged `craftarr-builder` user with a reduced
 environment. Public GitHub repositories are supported; private repositories and
-custom build commands are not currently configured here.
+custom build commands are not currently configured here. Builds use lower CPU
+priority, a 1 GiB JVM memory cap and two build workers by default so a build does
+not starve the Node or its Minecraft servers. Set `CRAFTARR_PLUGIN_BUILD_MAX_MEMORY_MB`,
+`CRAFTARR_PLUGIN_BUILD_MAX_WORKERS` or `CRAFTARR_PLUGIN_BUILD_NICE` in the Node
+environment when a project needs different limits.
 
 ## Shared settings repository
 

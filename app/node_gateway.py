@@ -25,6 +25,7 @@ SERVER_REF = re.compile(r"(?P<node>[0-9a-fA-F-]{36}):(?P<server_id>[1-9][0-9]*)(
 HTML_SERVER_PATH = re.compile(rb"(?P<prefix>/servers/)(?P<id>[0-9]+)(?=[/?#&\"'\s])")
 HTML_SERVER_DATA = re.compile(rb"(?P<prefix>data-server-id=[\"'])(?P<id>[0-9]+)(?P<suffix>[\"'])")
 HTML_ACTIVE_SERVER = re.compile(rb"(?P<prefix>active_server_id=)(?P<id>[0-9]+)")
+HTML_STATIC_VERSION = re.compile(rb"(?P<prefix>/static/[^?\"'\s>]+\?v=)[^&\"'\s>]+")
 HTML_PAGE_CONTENT = re.compile(rb"(?P<open><div[^>]*id=[\"']page-content[\"'][^>]*>)")
 
 HOP_BY_HOP_HEADERS = {
@@ -200,7 +201,7 @@ def _inject_remote_version_notice(body: bytes, node_version: str | None, request
     else:
         message = "This Node did not report its Craftarr version. Some functions may not be available on this Node."
     banner = (
-        '<div class="node-version-warning" role="status">'
+        '<div class="server-function-unavailable-notice node-version-warning" role="status" aria-live="polite">'
         '<i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i>'
         f'<span>{escape(message)}</span></div>'
     ).encode("utf-8")
@@ -439,4 +440,5 @@ def _rewrite_remote_html(body: bytes, node_id: str) -> bytes:
     body = HTML_SERVER_PATH.sub(lambda match: match.group("prefix") + node_id.encode("ascii") + b":" + match.group("id"), body)
     body = HTML_SERVER_DATA.sub(lambda match: match.group("prefix") + node_id.encode("ascii") + b":" + match.group("id") + match.group("suffix"), body)
     body = HTML_ACTIVE_SERVER.sub(lambda match: match.group("prefix") + node_id.encode("ascii") + b":" + match.group("id"), body)
+    body = HTML_STATIC_VERSION.sub(lambda match: match.group("prefix") + APP_VERSION.encode("ascii"), body)
     return body
