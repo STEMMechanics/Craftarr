@@ -36,3 +36,16 @@ def test_backup_download_supports_resuming_with_byte_ranges(monkeypatch, tmp_pat
     assert response.headers["content-range"] == "bytes 6-9/10"
     assert response.headers["content-length"] == "4"
     assert response.headers["accept-ranges"] == "bytes"
+
+
+def test_legacy_remote_failure_resolves_single_configured_destination():
+    job = SimpleNamespace(
+        status="complete",
+        remote_destination=None,
+        message="Backup complete; off-site copy failed: Off-site transfer timed out",
+    )
+
+    destination = web_backups._job_remote_destination(job, ["minecraft-backups:"])
+
+    assert destination == "minecraft-backups:"
+    assert web_backups._remote_retry_available(job, destination) is True
