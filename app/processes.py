@@ -22,6 +22,7 @@ processes: dict[int, subprocess.Popen] = {}
 process_lifecycle_states: dict[int, str] = {}
 
 console_buffers: dict[int, deque] = {}
+console_buffer_sequences: dict[int, int] = {}
 
 console_threads: dict[int, threading.Thread] = {}
 
@@ -87,6 +88,7 @@ def unregister_server(server_id: int) -> None:
     processes.pop(server_id, None)
     process_lifecycle_states.pop(server_id, None)
     console_buffers.pop(server_id, None)
+    console_buffer_sequences.pop(server_id, None)
     console_threads.pop(server_id, None)
     stats_processes.pop(server_id, None)
     stats_process_roots.pop(server_id, None)
@@ -310,6 +312,15 @@ def build_java_command(
     ]
 
 
+def _append_console_line(server_id: int, line: str) -> None:
+    """Append a line while preserving a cursor for the bounded buffer."""
+    if server_id not in console_buffers:
+        console_buffers[server_id] = deque(maxlen=MAX_CONSOLE_LINES)
+        console_buffer_sequences[server_id] = 0
+    console_buffers[server_id].append(line)
+    console_buffer_sequences[server_id] = console_buffer_sequences.get(server_id, 0) + 1
+
+
 def _read_console(
     server_id: int,
     process: subprocess.Popen,
@@ -324,6 +335,7 @@ def _read_console(
         console_buffers[server_id] = deque(
             maxlen=MAX_CONSOLE_LINES
         )
+        console_buffer_sequences[server_id] = 0
 
     if not process.stdout:
         return
@@ -339,16 +351,13 @@ def _read_console(
             ):
                 process_lifecycle_states[server_id] = "running"
 
-            console_buffers[
-                server_id
-            ].append(line)
+            _append_console_line(server_id, line)
 
     finally:
         return_code = process.poll()
 
-        console_buffers[
-            server_id
-        ].append(
+        _append_console_line(
+            server_id,
             f"[Panel] Server process exited "
             f"with code {return_code}"
         )
@@ -412,15 +421,9 @@ def start_server(
         # the local JDK or API is unavailable for compiling the bridge.
         logger.warning("Unable to prepare Craftarr TPS/MSPT metrics for server %s: %s", server_id, error)
 
-    console_buffers[server_id] = deque(
-        maxlen=MAX_CONSOLE_LINES
-    )
-
-    console_buffers[
-        server_id
-    ].append(
-        "[Panel] Starting server..."
-    )
+    console_buffers[server_id] = deque(maxlen=MAX_CONSOLE_LINES)
+    console_buffer_sequences[server_id] = 0
+    _append_console_line(server_id, "[Panel] Starting server...")
 
     process = subprocess.Popen(
         command,
@@ -573,8 +576,9 @@ def force_stop_server(server_id: int) -> bool:
     if not process or process.poll() is not None:
         return False
 
-    console_buffers.setdefault(server_id, deque(maxlen=MAX_CONSOLE_LINES)).append(
-        "[Panel] Force-stopping server immediately; unsaved world changes may be lost."
+    _append_console_line(
+        server_id,
+        "[Panel] Force-stopping server immediately; unsaved world changes may be lost.",
     )
     try:
         process.kill()
@@ -786,10 +790,7 @@ def send_command(
             "Server console unavailable"
         )
 
-    console_buffers.setdefault(
-        server_id,
-        deque(maxlen=MAX_CONSOLE_LINES),
-    ).append(f"[Panel command] > {command}")
+    _append_console_line(server_id, f"[Panel command] > {command}")
 
     process.stdin.write(
         command + "\n"
@@ -868,7 +869,40 @@ def console_cursor(server_id: int):
                 if line.startswith("-- cursor: "):
                     return ("systemd", line.removeprefix("-- cursor: ").strip())
         return ("systemd", None)
-    return ("subprocess", len(console_buffers.get(server_id, ())))
+    return ("subprocess", console_buffer_sequences.get(server_id, 0))
+
+
+def console_lines_since(server_id: int, cursor):
+    """Return console output written after a backend-specific cursor."""
+    backend, position = cursor or console_cursor(server_id)
+    if backend == "systemd":
+        config = _systemd_config(server_id)
+        if not config or not position:
+            return []
+        unit = _systemd_unit_name(config)
+        try:
+            result = subprocess.run(
+                [
+                    "journalctl", "--unit", unit, f"--after-cursor={position}",
+                    "--no-pager", "--output", "cat",
+                ],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return []
+        return result.stdout.splitlines() if result.returncode == 0 else []
+
+    lines = list(console_buffers.get(server_id, ()))
+    try:
+        start = max(0, int(position or 0))
+    except (TypeError, ValueError):
+        start = 0
+    current = console_buffer_sequences.get(server_id, 0)
+    if start >= current:
+        return []
+    first_retained = current - len(lines) + 1
+    return lines[max(0, start + 1 - first_retained):]
+
 
 def wait_for_console_message(
     server_id: int,
@@ -895,8 +929,6 @@ def wait_for_console_message(
     ]
 
     cursor = cursor or console_cursor(server_id)
-    backend, position = cursor
-
     deadline = (
         time.monotonic()
         + timeout
@@ -907,19 +939,7 @@ def wait_for_console_message(
         < deadline
     ):
 
-        if backend == "systemd":
-            config = _systemd_config(server_id)
-            if not config or not position:
-                lines = []
-            else:
-                unit = _systemd_unit_name(config)
-                result = subprocess.run(
-                    ["journalctl", "--unit", unit, f"--after-cursor={position}", "--no-pager", "--output", "cat"],
-                    capture_output=True, text=True, timeout=10, check=False,
-                )
-                lines = result.stdout.splitlines() if result.returncode == 0 else []
-        else:
-            lines = list(console_buffers.get(server_id, []))[int(position):]
+        lines = console_lines_since(server_id, cursor)
 
         for line in lines:
 

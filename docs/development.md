@@ -10,10 +10,12 @@
 Craftarr's TPS/MSPT history uses a small Paper API bridge. On the first start
 of a managed server, Craftarr compiles the bridge against that server's local
 Paper API and installs it as `plugins/craftarr-metrics.jar`. The bridge writes
-an atomic local snapshot and never sends a metrics command through the server
-console. A JDK is therefore required for the first bridge build; if Paper's
-API or a compiler is unavailable, the server still starts and the TPS/MSPT
-charts remain unavailable.
+an atomic local snapshot. If an already-running server has not loaded the
+bridge yet, the background collector briefly uses Paper's read-only `tps` and
+`mspt` commands so history can start immediately. A JDK is therefore required
+for the first bridge build; if Paper's API or a compiler is unavailable, the
+console fallback still keeps TPS/MSPT history available on supported Paper
+servers.
 
 Craftarr targets PaperMC on Minecraft Java Edition. macOS is supported for local
 development. Production installation currently targets Ubuntu 22.04+ and Oracle
