@@ -28,16 +28,91 @@ logger = logging.getLogger(__name__)
 BRIDGE_PLUGIN_NAME = "CraftarrMetrics"
 BRIDGE_PLUGIN_VERSION = "1.0.0"
 BRIDGE_SNAPSHOT_RELATIVE_PATH = Path("plugins") / BRIDGE_PLUGIN_NAME / "metrics.json"
+BRIDGE_STATUS_RELATIVE_PATH = Path("plugins") / BRIDGE_PLUGIN_NAME / "bridge-status.json"
 MAX_SNAPSHOT_BYTES = 4096
 MAX_SNAPSHOT_AGE_SECONDS = 180
 MAX_TPS = 20.5
 MAX_MSPT = 600_000.0
+MAX_STATUS_BYTES = 16_384
+MAX_INSTALLING_STATUS_AGE_SECONDS = 300
 _VERSION_PATTERN = re.compile(r"(?m)^version\s*:\s*[\"']?([^\"'\s#]+)")
 
 
 def metrics_snapshot_path(directory: str | Path) -> Path:
     """Return the bridge snapshot path inside a managed server directory."""
     return Path(directory).expanduser() / BRIDGE_SNAPSHOT_RELATIVE_PATH
+
+
+def metrics_bridge_status_path(directory: str | Path) -> Path:
+    """Return the persisted bridge installation status path."""
+    return Path(directory).expanduser() / BRIDGE_STATUS_RELATIVE_PATH
+
+
+def _write_bridge_status(directory: str | Path, state: str, message: str) -> None:
+    """Persist the latest bridge installation state without affecting startup."""
+    path = metrics_bridge_status_path(directory)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    payload = {
+        "state": state,
+        "message": str(message).strip()[:4000],
+        "checked_at": time(),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+        os.replace(temporary, path)
+    except OSError as error:
+        logger.debug("Unable to persist Paper metrics bridge status: %s", error)
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def read_metrics_bridge_status(directory: str | Path) -> dict:
+    """Return a user-facing bridge installation state for the performance page."""
+    root = Path(directory).expanduser()
+    plugin_directory = root / "plugins"
+    target = plugin_directory / "craftarr-metrics.jar"
+    disabled = plugin_directory / "craftarr-metrics.jar.disabled"
+
+    if disabled.is_file():
+        return {
+            "state": "disabled",
+            "message": "The Paper API bridge is disabled because craftarr-metrics.jar.disabled exists.",
+        }
+    if target.is_file() and _installed_bridge_version(target) == BRIDGE_PLUGIN_VERSION:
+        return {
+            "state": "ready",
+            "message": "The Paper API bridge is installed and will provide TPS/MSPT from Paper's API when loaded.",
+        }
+
+    status_path = metrics_bridge_status_path(root)
+    try:
+        if status_path.stat().st_size <= MAX_STATUS_BYTES:
+            data = json.loads(status_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                state = str(data.get("state") or "unknown")
+                message = str(data.get("message") or "").strip()
+                if state in {"installing", "error"} and message:
+                    if state == "installing":
+                        try:
+                            checked_at = float(data.get("checked_at"))
+                        except (TypeError, ValueError):
+                            checked_at = 0
+                        if checked_at <= time() - MAX_INSTALLING_STATUS_AGE_SECONDS:
+                            return {
+                                "state": "error",
+                                "message": "The last Paper API bridge installation attempt did not finish. Check the Craftarr and Minecraft server logs.",
+                            }
+                    return {"state": state, "message": message[:4000]}
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        pass
+
+    return {
+        "state": "error",
+        "message": "The Paper API bridge is not installed. Start or restart this server through Craftarr to install it.",
+    }
 
 
 def _number(value, *, maximum: float) -> float | None:
@@ -217,41 +292,57 @@ def ensure_metrics_bridge(
     target = plugin_directory / "craftarr-metrics.jar"
     disabled = plugin_directory / "craftarr-metrics.jar.disabled"
     if disabled.is_file():
+        message = "The Paper API bridge is disabled because craftarr-metrics.jar.disabled exists."
+        _write_bridge_status(root, "disabled", message)
         logger.info("Craftarr metrics bridge is disabled for %s", root)
         return False
     if target.is_file() and _installed_bridge_version(target) == BRIDGE_PLUGIN_VERSION:
+        _write_bridge_status(
+            root,
+            "ready",
+            "The Paper API bridge is installed and will provide TPS/MSPT from Paper's API when loaded.",
+        )
         return True
 
     source_directory = Path(__file__).resolve().parent / "metrics_bridge_source"
     source = source_directory / "CraftarrMetricsPlugin.java"
     descriptor = source_directory / "plugin.yml"
     if not source.is_file() or not descriptor.is_file():
-        logger.warning("Craftarr metrics bridge source is missing")
+        message = "Craftarr metrics bridge source is missing from this Craftarr installation."
+        _write_bridge_status(root, "error", message)
+        logger.warning(message)
         return False
 
     javac = _java_tool(java_path, "javac")
     jar_tool = _java_tool(java_path, "jar")
     if not javac or not jar_tool:
-        logger.info("A JDK is unavailable; TPS/MSPT metrics will be unavailable for %s", root)
+        message = "A JDK with javac and jar is unavailable, so the Paper API bridge could not be built."
+        _write_bridge_status(root, "error", message)
+        logger.info("%s Server: %s", message, root)
         return False
 
+    _write_bridge_status(root, "installing", "Craftarr is installing the Paper API bridge before the server starts.")
     try:
         plugin_directory.mkdir(parents=True, exist_ok=True)
         temporary_directory = Path(tempfile.mkdtemp(prefix=".craftarr-metrics-", dir=str(plugin_directory)))
     except OSError as error:
-        logger.warning("Unable to prepare the Paper metrics bridge directory: %s", error)
+        message = f"Unable to prepare the Paper API bridge directory: {error}"
+        _write_bridge_status(root, "error", message)
+        logger.warning(message)
         return False
     classes_directory = temporary_directory / "classes"
     temporary_jar = temporary_directory / "craftarr-metrics.jar"
-    classes_directory.mkdir()
     try:
+        classes_directory.mkdir()
         classpath = _api_classpath(
             root,
             Path(server_jar).expanduser(),
             temporary_directory / "embedded-libraries",
         )
         if not classpath:
-            logger.info("Paper API is unavailable; TPS/MSPT metrics will be unavailable for %s", root)
+            message = "Paper's API classes were not found in the server JAR or its libraries, so the bridge could not be built."
+            _write_bridge_status(root, "error", message)
+            logger.info("%s Server: %s", message, root)
             return False
         shutil.copyfile(descriptor, classes_directory / "plugin.yml")
         compile_result = subprocess.run(
@@ -271,7 +362,9 @@ def ensure_metrics_bridge(
         )
         if compile_result.returncode != 0:
             detail = (compile_result.stderr or compile_result.stdout or "javac failed").strip()
-            logger.warning("Unable to build the Paper metrics bridge: %s", detail[-1000:])
+            message = f"Unable to build the Paper API bridge: {detail[-3000:]}"
+            _write_bridge_status(root, "error", message)
+            logger.warning(message)
             return False
 
         package_result = subprocess.run(
@@ -283,12 +376,21 @@ def ensure_metrics_bridge(
         )
         if package_result.returncode != 0:
             detail = (package_result.stderr or package_result.stdout or "jar failed").strip()
-            logger.warning("Unable to package the Paper metrics bridge: %s", detail[-1000:])
+            message = f"Unable to package the Paper API bridge: {detail[-3000:]}"
+            _write_bridge_status(root, "error", message)
+            logger.warning(message)
             return False
         os.replace(temporary_jar, target)
+        _write_bridge_status(
+            root,
+            "ready",
+            "The Paper API bridge was installed and will provide TPS/MSPT from Paper's API when loaded.",
+        )
         return True
     except (OSError, subprocess.SubprocessError) as error:
-        logger.warning("Unable to install the Paper metrics bridge: %s", error)
+        message = f"Unable to install the Paper API bridge: {error}"
+        _write_bridge_status(root, "error", message)
+        logger.warning(message)
         return False
     finally:
         shutil.rmtree(temporary_directory, ignore_errors=True)

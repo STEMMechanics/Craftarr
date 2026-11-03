@@ -624,6 +624,17 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .performance-chart-card canvas { height: 180px; margin-top: 13px; }
 .performance-chart-note { display: flex; align-items: flex-start; gap: 8px; margin-top: 15px; padding: 12px 14px; border-radius: 12px; background: #f2f8ff; color: #4c657b; font-size: 12px; }
 .performance-chart-note i { margin-top: 3px; color: #286eae; }
+.performance-bridge-status { display: flex; align-items: flex-start; gap: 10px; padding: 13px 15px; border: 1px solid #d8e5f0; border-radius: 12px; background: #f5f9fd; color: #526a80; font-size: 12px; line-height: 1.45; }
+.performance-bridge-status > i { width: 16px; margin-top: 2px; color: #517996; text-align: center; }
+.performance-bridge-status > div { display: grid; min-width: 0; gap: 2px; }
+.performance-bridge-status strong { color: #31516d; font-size: 12px; }
+.performance-bridge-status span { overflow-wrap: anywhere; }
+.performance-bridge-status.is-ready { border-color: #b9e0c6; background: #f1faf3; color: #317049; }
+.performance-bridge-status.is-ready > i, .performance-bridge-status.is-ready strong { color: #247143; }
+.performance-bridge-status.is-warning, .performance-bridge-status.is-disabled { border-color: #f0d1a5; background: #fff7e8; color: #874900; }
+.performance-bridge-status.is-warning > i, .performance-bridge-status.is-disabled > i, .performance-bridge-status.is-warning strong, .performance-bridge-status.is-disabled strong { color: #874900; }
+.performance-bridge-status.is-error { border-color: #f0ceca; background: #fff3f2; color: #823e39; }
+.performance-bridge-status.is-error > i, .performance-bridge-status.is-error strong { color: #a12e2e; }
 
 /* Server list, files, plugins, backups, editor and terminal */
 .servers-page-intro, .server-list-heading, .backups-toolbar, .files-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 22px; }

@@ -57,6 +57,9 @@ def test_server_home_and_performance_pages_render_storage_panel(monkeypatch, tmp
         assert 'id="metric-cpu"' in full_page.text
         assert 'id="metric-tps"' in full_page.text
         assert 'id="metric-mspt"' in full_page.text
+        assert 'id="performance-metrics-bridge-status"' in full_page.text
+        assert "TPS/MSPT are read from Paper's API bridge" in full_page.text
+        assert "read-only command fallback" not in full_page.text
         assert 'data-server-storage' in full_page.text
         assert "This shows the whole volume" in full_page.text
         assert "Craftarr" in full_page.text
@@ -72,6 +75,7 @@ def test_server_home_and_performance_pages_render_storage_panel(monkeypatch, tmp
         assert metrics.status_code == 200
         assert metrics.json()["metrics"][-1]["tps"] == 19.85
         assert metrics.json()["metrics"][-1]["mspt"] == 24.5
+        assert metrics.json()["bridge"]["state"] == "error"
 
         monkeypatch.setattr(
             web_automation,

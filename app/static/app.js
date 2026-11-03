@@ -9902,6 +9902,43 @@ function drawMetricChart(
   canvas.onmouseleave = () => { canvas.title = summary; };
 }
 
+function renderPerformanceBridgeStatus(bridge) {
+  const element = document.getElementById("performance-metrics-bridge-status");
+  if (!element) return;
+  const state = String(bridge?.state || "unknown");
+  const classState = {
+    ready: "ready",
+    error: "error",
+    disabled: "disabled",
+    installing: "warning",
+  }[state] || "pending";
+  const icon = element.querySelector(":scope > i");
+  const title = element.querySelector("strong");
+  const message = element.querySelector("span");
+  element.className = `performance-bridge-status is-${classState}`;
+  if (icon) {
+    icon.className = state === "ready"
+      ? "fa-solid fa-circle-check"
+      : state === "error" || state === "disabled"
+        ? "fa-solid fa-triangle-exclamation"
+        : "fa-solid fa-circle-notch fa-spin";
+  }
+  if (title) {
+    title.textContent = state === "ready"
+      ? "Paper API bridge ready"
+      : state === "error"
+        ? "Paper API bridge problem"
+        : state === "disabled"
+          ? "Paper API bridge disabled"
+          : state === "installing"
+            ? "Installing Paper API bridge"
+            : "Paper API bridge status";
+  }
+  if (message) {
+    message.textContent = bridge?.message || "The Paper API bridge status is not available yet.";
+  }
+}
+
 async function loadServerMetrics() {
   const page = automationPage();
   if (!page || !document.getElementById("metric-cpu")) return;
@@ -9912,6 +9949,7 @@ async function loadServerMetrics() {
     );
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Unable to load metrics");
+    renderPerformanceBridgeStatus(data.bridge);
     const rows = data.metrics || [];
     drawMetricChart(
       "metric-cpu",
@@ -9972,6 +10010,7 @@ async function loadServerMetrics() {
     const overviewMspt = document.getElementById("overview-mspt-value");
     if (overviewTps) overviewTps.textContent = "—";
     if (overviewMspt) overviewMspt.textContent = "—";
+    renderPerformanceBridgeStatus({ state: "error", message: error.message });
   }
 }
 
