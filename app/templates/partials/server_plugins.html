@@ -298,8 +298,10 @@
       <p id="plugin-monitoring-hint" class="modal-note"></p>
       <div id="plugin-monitoring-development-fields" hidden>
         <label for="plugin-monitoring-development-branch">Branch to build</label>
-        <input id="plugin-monitoring-development-branch" type="text" maxlength="255" autocomplete="off" list="plugin-monitoring-branch-options" placeholder="main" oninput="updatePluginMonitoringFields(); resetPluginMonitoringBranchStatus()" onchange="testPluginMonitoringBranch()">
-        <datalist id="plugin-monitoring-branch-options"></datalist>
+        <div class="plugin-monitoring-branch-picker">
+          <input id="plugin-monitoring-development-branch" type="text" maxlength="255" autocomplete="off" placeholder="main" role="combobox" aria-autocomplete="list" aria-controls="plugin-monitoring-branch-suggestions" aria-expanded="false" onfocus="showPluginMonitoringBranchSuggestions()" onblur="hidePluginMonitoringBranchSuggestions()" oninput="updatePluginMonitoringFields(); resetPluginMonitoringBranchStatus(); renderPluginMonitoringBranchSuggestions()" onchange="testPluginMonitoringBranch()" onkeydown="handlePluginMonitoringBranchKeydown(event)">
+          <div id="plugin-monitoring-branch-suggestions" class="plugin-monitoring-branch-suggestions" role="listbox" hidden></div>
+        </div>
         <p id="plugin-monitoring-development-hint" class="modal-note">Public GitHub repositories only. Craftarr tracks commits on this branch, builds the matching plugin JAR, and installs it using the server's Developer options above.</p>
         <p id="plugin-monitoring-development-status" class="modal-note" role="status" aria-live="polite"></p>
       </div>
