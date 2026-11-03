@@ -17,6 +17,7 @@ from .web_context import build_web_context
 from .web_render import render_page
 from .config import SCHEDULE_TIMEZONE_NAME
 from .offsite_backups import OffsiteBackupError, configured_remotes, validate_destination
+from .metrics_bridge import read_metrics_bridge_status
 
 
 router = APIRouter()
@@ -399,12 +400,15 @@ def metrics(server_id: int, request: Request, hours: int = 24, db: Session = Dep
         ServerMetric.server_id == server.id,
         ServerMetric.recorded_at >= datetime.utcnow() - timedelta(hours=hours),
     ).order_by(ServerMetric.recorded_at).limit(5000).all()
-    return {"metrics": [{
-        "recorded_at": _utc_iso(row.recorded_at), "running": row.running,
-        "cpu_percent": row.cpu_percent, "memory_bytes": row.memory_bytes,
-        "tps": row.tps, "mspt": row.mspt,
-        "player_count": row.player_count, "uptime_seconds": row.uptime_seconds,
-    } for row in rows]}
+    return {
+        "metrics": [{
+            "recorded_at": _utc_iso(row.recorded_at), "running": row.running,
+            "cpu_percent": row.cpu_percent, "memory_bytes": row.memory_bytes,
+            "tps": row.tps, "mspt": row.mspt,
+            "player_count": row.player_count, "uptime_seconds": row.uptime_seconds,
+        } for row in rows],
+        "bridge": read_metrics_bridge_status(server.directory),
+    }
 
 
 @router.get("/api/web/servers/{server_id}/storage")
