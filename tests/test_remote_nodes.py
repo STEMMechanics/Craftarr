@@ -27,6 +27,7 @@ from app.node_gateway import (
 from app.node_security import generate_node_token, verify_node_token
 from app.remote_nodes import RemoteNodeError, normalize_remote_url, sync_node_servers
 from app.schemas import NodeServerOut
+from app.version import APP_VERSION
 from app.web_users import _gateway_user
 
 
@@ -256,11 +257,16 @@ def test_gateway_maps_remote_operations_and_rewrites_server_refs():
 
     html = (
         b'<a href="/servers/42">Open</a> '
-        b'data-server-id="42" active_server_id=42'
+        b'data-server-id="42" active_server_id=42 '
+        b'<link href="/static/server-manager.css?v=0.4.37"> '
+        b'<script src="/static/app.js?v=0.4.37"></script>'
     )
-    assert _rewrite_remote_html(html, node_id) == (
+    rewritten = _rewrite_remote_html(html, node_id)
+    assert rewritten == (
         f'<a href="/servers/{node_id}:42">Open</a> '
-        f'data-server-id="{node_id}:42" active_server_id={node_id}:42'
+        f'data-server-id="{node_id}:42" active_server_id={node_id}:42 '
+        f'<link href="/static/server-manager.css?v={APP_VERSION}"> '
+        f'<script src="/static/app.js?v={APP_VERSION}"></script>'
     ).encode()
 
 
@@ -311,7 +317,8 @@ def test_remote_version_notice_has_warning_markup():
     body = b'<div id="page-content"><main>Server</main></div>'
     rendered = _inject_remote_version_notice(body, "0.4.36", request)
 
-    assert b'class="node-version-warning"' in rendered
+    assert b'class="server-function-unavailable-notice node-version-warning"' in rendered
+    assert b'aria-live="polite"' in rendered
     assert b'fa-circle-exclamation' in rendered
     assert b"Craftarr 0.4.36" in rendered
 
