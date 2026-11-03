@@ -257,6 +257,62 @@ def upload_backup(server, filename: str, destination: str, progress_callback=Non
     return remote_file
 
 
+def _remote_file_status(name: str) -> str:
+    lowered = name.casefold()
+    if "partial" in lowered or lowered.endswith((".part", ".tmp", ".temp")):
+        return "partial"
+    if lowered.endswith(".zip"):
+        return "complete"
+    return "other"
+
+
+def list_remote_backups(server, destination: str, *, timeout_seconds: int = 20) -> dict:
+    """Return the remote objects for one server, including incomplete uploads."""
+    remote_directory = remote_backup_directory(destination, server)
+    result = _run_rclone(
+        "lsjson", remote_directory, "--files-only",
+        timeout_seconds=timeout_seconds,
+    )
+    try:
+        entries = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError as error:
+        raise OffsiteBackupError("rclone returned an invalid remote file list") from error
+    if not isinstance(entries, list):
+        raise OffsiteBackupError("rclone returned an invalid remote file list")
+
+    files = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        name = Path(str(entry.get("Name") or "")).name
+        if not name:
+            continue
+        try:
+            size = max(0, int(entry.get("Size") or 0))
+        except (TypeError, ValueError):
+            size = 0
+        files.append({
+            "name": name,
+            "status": _remote_file_status(name),
+            "size": size,
+            "modified_at": str(entry.get("ModTime") or ""),
+        })
+
+    files.sort(key=lambda item: item["modified_at"], reverse=True)
+    summary = {
+        "complete": sum(item["status"] == "complete" for item in files),
+        "partial": sum(item["status"] == "partial" for item in files),
+        "other": sum(item["status"] == "other" for item in files),
+    }
+    return {
+        "destination": destination,
+        "directory": remote_directory,
+        "files": files,
+        "summary": summary,
+        "error": None,
+    }
+
+
 def test_destination(destination: str) -> None:
     _run_rclone(
         "lsd", validate_destination(destination), "--max-depth", "1",

@@ -45,6 +45,28 @@ def test_restart_releases_abandoned_backup_and_task(db, tmp_path):
     assert run.status == "failed"
 
 
+def test_restart_keeps_remote_upload_retryable(db, tmp_path):
+    server = Server(
+        name="Survival", directory=str(tmp_path), service_name="survival",
+        process_backend="systemd",
+    )
+    db.add(server)
+    db.commit()
+    job = BackupJob(
+        server_id=server.id,
+        filename="daily.zip",
+        remote_destination="sftp:backups",
+        status="uploading",
+        progress=72,
+    )
+    db.add(job)
+    db.commit()
+
+    assert fail_abandoned_backup_jobs(db) == 1
+    assert job.status == "warning"
+    assert "remote copy was interrupted" in job.message
+
+
 def test_disk_full_fails_and_removes_partial_archive(tmp_path, monkeypatch):
     (tmp_path / "world.dat").write_bytes(b"world")
     server = SimpleNamespace(directory=str(tmp_path))

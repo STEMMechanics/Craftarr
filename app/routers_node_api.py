@@ -173,7 +173,7 @@ def node_notifications(
 
     recent_cutoff = datetime.utcnow() - timedelta(days=30)
     jobs = db.query(BackupJob).filter(
-        BackupJob.status.in_(("complete", "failed", "cancelled")),
+        BackupJob.status.in_(("complete", "warning", "failed", "cancelled")),
         BackupJob.finished_at >= recent_cutoff,
     ).order_by(BackupJob.finished_at.desc()).limit(100).all()
     for job in jobs:

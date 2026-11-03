@@ -44,6 +44,19 @@
 
     <div id="backup-jobs" class="backup-jobs"></div>
 
+    <section class="overview-card backup-activity-card">
+
+        <div class="card-header">
+            <span>Backup activity</span>
+            <span id="backup-job-history-count" class="plugin-count">Recent results</span>
+        </div>
+
+        <div id="backup-job-history" class="backup-job-history">
+            <div class="empty-message">Loading backup activity...</div>
+        </div>
+
+    </section>
+
 
     <section class="overview-card">
 
@@ -68,6 +81,25 @@
             class="backup-list"
         >
             <div class="empty-message">Loading backups...</div>
+        </div>
+
+    </section>
+
+    <section class="overview-card remote-backup-card">
+
+        <div class="card-header">
+            <div>
+                <span>Remote backups</span>
+                <p class="card-header-subtitle">Remote files, completed copies, and partial uploads</p>
+            </div>
+            <button class="button panel-header-button" type="button" onclick="updateRemoteBackups()">
+                <i class="fa-solid fa-rotate" aria-hidden="true"></i>
+                Refresh
+            </button>
+        </div>
+
+        <div id="remote-backup-list" class="remote-backup-list">
+            <div class="empty-message">Loading remote backups...</div>
         </div>
 
     </section>

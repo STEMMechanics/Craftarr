@@ -408,7 +408,7 @@
                 <span>Node offline email delay (minutes)</span>
                 <input id="node-offline-alert-delay" type="number" min="1" max="1440" value="5">
             </label>
-            <p class="modal-note full-width">The same resource thresholds apply to linked Nodes. Node outage emails are sent after the configured delay (5 minutes by default). Resource alerts appear in the hub for settings administrators and use the hub's SMTP settings.</p>
+            <p class="modal-note full-width">The same resource thresholds apply to linked Nodes. Node outage emails are sent after the configured delay (5 minutes by default). Resource alerts and remote-backup failure alerts are emailed to enabled Settings administrators through the active SMTP configuration.</p>
             <div class="settings-save-row">
                 <span id="system-alert-save-status" class="muted-small"></span>
                 <button class="button" type="button" onclick="saveSystemAlertSettings()">Save Alerts</button>

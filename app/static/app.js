@@ -1290,6 +1290,7 @@ document.body.addEventListener(
     updatePluginsPage();
     updateOverviewPlugins();
     updateBackupsPage();
+    updateRemoteBackups();
     updatePropertiesPage();
     loadAdvancedProperties();
     updateSMTPSettings();
@@ -5769,9 +5770,22 @@ function renderBackups(
 
   list.innerHTML = backupData.map(
     (backup) => {
+      const page = document.querySelector(".backups-page");
       const filename = String(backup.filename || "");
       const labelMatch = filename.match(/^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:-(.*))?\.zip$/i);
       const displayName = labelMatch ? (labelMatch[1] || "Backup") : filename;
+      const remoteStatus = backup.remote_status;
+      const remoteStatusMarkup = remoteStatus === "failed"
+        ? `<div class="backup-remote-status is-error" title="${escapeHtml(backup.remote_message || "Remote copy failed")}">
+             <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+             <span>Remote copy failed${backup.remote_message ? `: ${escapeHtml(backup.remote_message)}` : ""}</span>
+             ${page?.dataset.canManage === "true" && backup.remote_job_id && backup.remote_destination ? `<button type="button" class="button backup-retry-button" onclick="retryRemoteBackup(${Number(backup.remote_job_id)}, this)">Try again</button>` : ""}
+           </div>`
+        : remoteStatus === "uploading"
+          ? `<div class="backup-remote-status is-progress"><i class="fa-solid fa-cloud-arrow-up" aria-hidden="true"></i><span>Remote copy in progress${backup.remote_destination ? ` · ${escapeHtml(backup.remote_destination)}` : ""}</span></div>`
+          : remoteStatus === "complete"
+            ? `<div class="backup-remote-status is-success"><i class="fa-solid fa-cloud-check" aria-hidden="true"></i><span>Remote copy complete${backup.remote_destination ? ` · ${escapeHtml(backup.remote_destination)}` : ""}</span></div>`
+            : "";
       return `
                 <div class="backup-row">
 
@@ -5790,6 +5804,7 @@ function renderBackups(
                                 ·
                                 ${escapeHtml(backup.size_display)}
                             </small>
+                            ${remoteStatusMarkup}
 
                         </div>
 
@@ -5800,9 +5815,7 @@ function renderBackups(
 
                         <a
                             class="button backup-action-button"
-                            href="/servers/${
-      document.querySelector(".backups-page").dataset.serverId
-    }/backups/download?filename=${encodeURIComponent(backup.filename)}"
+                            href="/servers/${page.dataset.serverId}/backups/download?filename=${encodeURIComponent(backup.filename)}"
                             aria-label="Download backup ${escapeHtml(backup.filename)}"
                         >
                             <i class="fa-solid fa-download" aria-hidden="true"></i><span>Download</span>
@@ -5831,6 +5844,87 @@ function renderBackups(
     },
   )
     .join("");
+}
+
+let remoteBackupRequestInFlight = false;
+
+function formatRemoteBackupSize(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value < 0) return "0 bytes";
+  if (value < 1024) return `${Math.round(value)} bytes`;
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  let size = value;
+  let unit = "bytes";
+  for (const nextUnit of units) {
+    size /= 1024;
+    unit = nextUnit;
+    if (size < 1024 || nextUnit === units.at(-1)) break;
+  }
+  return `${size.toFixed(size >= 10 ? 1 : 2)} ${unit}`;
+}
+
+function renderRemoteBackups(remotes) {
+  const list = document.getElementById("remote-backup-list");
+  if (!list) return;
+  if (!remotes.length) {
+    list.innerHTML = '<div class="empty-message">No scheduled backup has a remote destination configured.</div>';
+    return;
+  }
+
+  list.innerHTML = remotes.map((remote) => {
+    const summary = remote.summary || {};
+    const files = Array.isArray(remote.files) ? remote.files : [];
+    const schedules = Array.isArray(remote.schedules) ? remote.schedules : [];
+    const scheduleText = schedules.length
+      ? `Used by ${schedules.map((schedule) => `${escapeHtml(schedule.name || "Backup schedule")}${schedule.enabled ? "" : " (disabled)"}`).join(", ")}`
+      : "Not used by an active backup schedule";
+    const headerStatus = remote.error
+      ? '<span class="remote-backup-status is-error"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>Remote unavailable</span>'
+      : `<span class="remote-backup-status ${Number(summary.partial || 0) ? "is-error" : "is-success"}">${Number(summary.complete || 0)} complete · ${Number(summary.partial || 0)} partial</span>`;
+    const fileMarkup = files.length
+      ? files.map((file) => {
+        const partial = file.status === "partial";
+        const statusLabel = partial
+          ? "Partial upload — failed or interrupted"
+          : file.status === "complete" ? "Uploaded" : "Unrecognized remote file";
+        const statusClass = partial ? "is-error" : file.status === "complete" ? "is-success" : "is-muted";
+        return `<div class="remote-backup-file">
+          <div class="remote-backup-file-main">
+            <i class="fa-solid ${partial ? "fa-triangle-exclamation" : file.status === "complete" ? "fa-file-zipper" : "fa-file"}" aria-hidden="true"></i>
+            <div><strong>${escapeHtml(file.name || "Unnamed remote file")}</strong><small>${escapeHtml(formatRemoteBackupSize(file.size))} · ${escapeHtml(file.modified_at ? formatBrowserTimestamp(file.modified_at) : "Unknown time")}</small></div>
+          </div>
+          <span class="remote-backup-file-status ${statusClass}">${escapeHtml(statusLabel)}</span>
+        </div>`;
+      }).join("")
+      : '<div class="empty-message">No remote files found for this server.</div>';
+    return `<div class="remote-backup-group ${remote.error ? "has-error" : ""}">
+      <div class="remote-backup-group-header">
+        <div><strong>${escapeHtml(remote.destination || "Remote destination")}</strong><small>${escapeHtml(remote.directory || scheduleText)}${remote.directory ? ` · ${scheduleText}` : ""}</small></div>
+        ${headerStatus}
+      </div>
+      ${remote.error ? `<div class="remote-backup-error"><i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i><span>${escapeHtml(remote.error)}</span></div>` : fileMarkup}
+    </div>`;
+  }).join("");
+}
+
+async function updateRemoteBackups() {
+  const page = document.querySelector(".backups-page");
+  const list = document.getElementById("remote-backup-list");
+  if (!page || !list || remoteBackupRequestInFlight) return;
+  remoteBackupRequestInFlight = true;
+  try {
+    const response = await fetch(
+      `/api/web/servers/${page.dataset.serverId}/backups/remote`,
+      { cache: "no-store", quietConnectionErrors: true },
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to load remote backups.");
+    renderRemoteBackups(Array.isArray(data.remotes) ? data.remotes : []);
+  } catch (error) {
+    list.innerHTML = `<div class="remote-backup-error"><i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i><span>${escapeHtml(error.message || "Unable to load remote backups.")}</span></div>`;
+  } finally {
+    remoteBackupRequestInFlight = false;
+  }
 }
 
 function openCreateBackupModal() {
@@ -6071,6 +6165,7 @@ async function confirmDeleteBackup() {
 }
 
 updateBackupsPage();
+updateRemoteBackups();
 
 async function updatePropertiesPage() {
   const page = document.querySelector(
@@ -8541,9 +8636,9 @@ async function updateBackupJobs() {
 
     const data = await response.json();
 
-    renderBackupJobs(
-      data.jobs || [],
-    );
+    const jobs = data.jobs || [];
+    renderBackupJobs(jobs);
+    renderBackupJobHistory(jobs);
 
     if (activeBackupJobId) {
       const job = (data.jobs || []).find(
@@ -8638,6 +8733,58 @@ function renderBackupJobs(
     .join("");
 }
 
+function renderBackupJobHistory(jobs) {
+  const container = document.getElementById("backup-job-history");
+  if (!container) return;
+  const history = jobs.filter((job) => ![
+    "queued", "saving", "archiving", "uploading",
+  ].includes(job.status));
+  const count = document.getElementById("backup-job-history-count");
+  if (count) count.textContent = `${history.length} recent result${history.length === 1 ? "" : "s"}`;
+  if (!history.length) {
+    container.innerHTML = '<div class="empty-message">No completed backup results yet.</div>';
+    return;
+  }
+  const canManage = document.querySelector(".backups-page")?.dataset.canManage === "true";
+  const labels = {
+    complete: "Complete",
+    warning: "Remote copy failed",
+    failed: "Failed",
+    cancelled: "Cancelled",
+  };
+  container.innerHTML = history.map((job) => {
+    const status = labels[job.status] || job.status || "Finished";
+    const isWarning = job.status === "warning" && job.remote_destination;
+    return `<div class="backup-history-row is-${escapeHtml(job.status || "finished")}"${isWarning ? ` title="${escapeHtml(job.message || status)}"` : ""}>
+      <div class="backup-history-main">
+        <span class="backup-history-status"><i class="fa-solid ${job.status === "complete" ? "fa-circle-check" : job.status === "warning" ? "fa-triangle-exclamation" : "fa-circle-xmark"}" aria-hidden="true"></i>${escapeHtml(status)}</span>
+        <strong>${escapeHtml(job.filename || job.label || "Backup")}</strong>
+        <small>${escapeHtml(job.message || "No additional detail")} · ${escapeHtml(formatBrowserTimestamp(job.finished_at || job.created_at))}</small>
+      </div>
+      ${isWarning && canManage ? `<button type="button" class="button backup-retry-button" onclick="retryRemoteBackup(${Number(job.id)}, this)"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Try remote copy again</button>` : ""}
+    </div>`;
+  }).join("");
+}
+
+async function retryRemoteBackup(jobId, button) {
+  const page = document.querySelector(".backups-page");
+  if (!page) return;
+  if (button) button.disabled = true;
+  try {
+    const response = await fetch(
+      `/api/web/servers/${page.dataset.serverId}/backups/jobs/${jobId}/retry-remote`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to retry the remote copy.");
+    showToast("Remote copy retry started.", "info");
+    await Promise.all([updateBackupsPage(), updateRemoteBackups(), updateBackupJobs()]);
+  } catch (error) {
+    showToast(error.message || "Unable to retry the remote copy.", "error");
+    if (button) button.disabled = false;
+  }
+}
+
 async function cancelBackup(jobId) {
   const page = document.querySelector(".backups-page");
   if (!page || !confirm("Cancel this backup? The incomplete archive will be removed.")) return;
@@ -8685,15 +8832,14 @@ function updateBackupModalProgress(
 
   if (
     job.status === "complete" ||
-    job.status === "failed"
+    job.status === "warning" ||
+    job.status === "failed" ||
+    job.status === "cancelled"
   ) {
     activeBackupJobId = null;
 
-    if (
-      job.status === "complete"
-    ) {
-      updateBackupsPage();
-    }
+    updateBackupsPage();
+    updateRemoteBackups();
   }
 }
 
@@ -8705,6 +8851,7 @@ setInterval(
 // Refresh the directory-backed list too, so a page left open across a console
 // restart repopulates when the service returns.
 setInterval(updateBackupsPage, 10000);
+setInterval(updateRemoteBackups, 30000);
 
 updateBackupJobs();
 

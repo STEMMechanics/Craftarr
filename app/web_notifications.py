@@ -93,7 +93,7 @@ def notifications(request: Request, db: Session = Depends(get_db)):
             db.query(BackupJob)
             .filter(
                 BackupJob.server_id.in_(server_ids),
-                BackupJob.status.in_(("complete", "failed", "cancelled")),
+                BackupJob.status.in_(("complete", "warning", "failed", "cancelled")),
                 BackupJob.finished_at >= recent_cutoff,
             )
             .order_by(BackupJob.finished_at.desc())

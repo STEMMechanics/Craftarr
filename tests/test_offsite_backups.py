@@ -110,6 +110,27 @@ def test_remote_retention_deletes_only_old_zip_files(monkeypatch, tmp_path):
     assert deleted == [("deletefile", "sftp:backups/survival/old.zip")]
 
 
+def test_remote_inventory_reports_complete_and_partial_objects(monkeypatch, tmp_path):
+    server = SimpleNamespace(directory=str(tmp_path / "survival"))
+    listing = json.dumps([
+        {"Name": "2026-11-04-good.zip", "Size": 1024, "ModTime": "2026-11-04T02:00:00Z"},
+        {"Name": "2026-11-04-good.zip.partial", "Size": 512, "ModTime": "2026-11-04T02:01:00Z"},
+        {"Name": "README.txt", "Size": 12, "ModTime": "2026-11-04T01:00:00Z"},
+    ])
+    calls = []
+    monkeypatch.setattr(offsite_backups, "configured_remotes", lambda: ["sftp"])
+    monkeypatch.setattr(
+        offsite_backups, "_run_rclone",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or completed(listing),
+    )
+
+    result = offsite_backups.list_remote_backups(server, "sftp:backups")
+
+    assert result["summary"] == {"complete": 1, "partial": 1, "other": 1}
+    assert [item["status"] for item in result["files"]] == ["partial", "complete", "other"]
+    assert calls[0][1] == {"timeout_seconds": 20}
+
+
 def test_missing_rclone_has_actionable_error(monkeypatch):
     monkeypatch.setattr(offsite_backups.shutil, "which", lambda name: None)
 

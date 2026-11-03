@@ -827,6 +827,46 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .backup-more-menu { position: absolute; z-index: 15; top: calc(100% - 24px); right: 0; padding: 5px; border: 1px solid var(--sm-border); border-radius: 12px; background: #fff; box-shadow: var(--sm-shadow-pop); }
 .backup-more-menu button { min-height: 39px; padding: 8px 10px; border: 0; border-radius: 8px; background: #fff; color: var(--sm-red-dark); white-space: nowrap; cursor: pointer; }
 .backup-more-menu button:hover { background: #fff2f1; }
+.backup-activity-card { padding-bottom: 8px; }
+.backup-job-history { display: grid; gap: 0; }
+.backup-history-row { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 0; border-top: 1px solid #e9eff5; }
+.backup-history-main { display: grid; min-width: 0; gap: 3px; }
+.backup-history-main strong, .backup-history-main small { overflow-wrap: anywhere; }
+.backup-history-main strong { color: var(--sm-text); font-size: 12px; }
+.backup-history-main small { color: var(--sm-muted); font-size: 11px; }
+.backup-history-status { display: inline-flex; align-items: center; gap: 6px; width: fit-content; color: #287149; font-size: 11px; font-weight: 700; }
+.backup-history-status i { font-size: 11px; }
+.backup-history-row.is-warning .backup-history-status { color: var(--sm-orange-dark); }
+.backup-history-row.is-failed .backup-history-status, .backup-history-row.is-cancelled .backup-history-status { color: var(--sm-red-dark); }
+.backup-retry-button { min-height: 32px; flex: 0 0 auto; padding: 5px 9px; border-color: #e3c17e; background: #fff9ed; color: #8a5a0a; font-size: 11px; }
+.backup-retry-button:hover { background: #fff1d4; }
+.backup-remote-status { display: inline-flex; max-width: 100%; align-items: center; gap: 6px; margin-top: 5px; color: #526a80; font-size: 11px; font-weight: 650; }
+.backup-remote-status span { overflow-wrap: anywhere; }
+.backup-remote-status.is-error { color: var(--sm-red-dark); }
+.backup-remote-status.is-progress { color: #1866c5; }
+.backup-remote-status.is-success { color: #287149; }
+.backup-remote-status .backup-retry-button { margin-left: 3px; }
+.backup-remote-card .card-header { align-items: flex-start; }
+.card-header-subtitle { margin: 3px 0 0; color: var(--sm-muted); font-size: 11px; font-weight: 400; }
+.remote-backup-list { display: grid; gap: 12px; }
+.remote-backup-group { padding: 12px; border: 1px solid #e2ebf4; border-radius: 12px; background: #fbfdff; }
+.remote-backup-group.has-error { border-color: #efc9c5; background: #fffaf9; }
+.remote-backup-group-header { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 9px; }
+.remote-backup-group-header > div { display: grid; min-width: 0; gap: 3px; }
+.remote-backup-group-header strong { color: var(--sm-text); font-size: 12px; overflow-wrap: anywhere; }
+.remote-backup-group-header small { color: var(--sm-muted); font-size: 10px; overflow-wrap: anywhere; }
+.remote-backup-status, .remote-backup-file-status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; font-size: 10px; font-weight: 700; }
+.remote-backup-status.is-success, .remote-backup-file-status.is-success { color: #287149; }
+.remote-backup-status.is-error, .remote-backup-file-status.is-error { color: var(--sm-red-dark); }
+.remote-backup-file-status.is-muted { color: var(--sm-muted); }
+.remote-backup-file { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border-top: 1px solid #e9eff5; }
+.remote-backup-file-main { display: flex; min-width: 0; align-items: center; gap: 9px; }
+.remote-backup-file-main > i { display: grid; width: 27px; height: 27px; flex: 0 0 27px; place-items: center; border-radius: 8px; background: #edf5fc; color: #1866c5; font-size: 11px; }
+.remote-backup-file-main > div { display: grid; min-width: 0; gap: 2px; }
+.remote-backup-file-main strong { color: var(--sm-text); font-size: 11px; overflow-wrap: anywhere; }
+.remote-backup-file-main small { color: var(--sm-muted); font-size: 10px; }
+.remote-backup-error { display: flex; align-items: flex-start; gap: 8px; padding: 9px; border-radius: 9px; background: #fff0ef; color: var(--sm-red-dark); font-size: 11px; line-height: 1.45; }
+.remote-backup-error i { margin-top: 2px; }
 .main-area:has(.console-page) { display: flex; height: calc(100dvh - 1rem); min-height: 0; flex-direction: column; overflow: hidden; }
 .main-area:has(.console-page) > #topbar { flex: 0 0 auto; }
 .main-area:has(.console-page) > .page-content { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; overflow: hidden; padding-bottom: 16px; }
@@ -1377,6 +1417,10 @@ html.plugin-build-log-open, body.plugin-build-log-open { overflow: hidden; }
   .backup-action-button { width: 40px; min-width: 40px; min-height: 40px; flex: 0 0 40px; justify-content: center; padding: 0; }
   .backup-action-button > span { display: none; }
   .backup-more-actions > summary { width: 40px; height: 40px; }
+  .backup-history-row { align-items: flex-start; flex-direction: column; }
+  .backup-retry-button { width: 100%; }
+  .remote-backup-group-header, .remote-backup-file { align-items: flex-start; flex-direction: column; }
+  .remote-backup-status, .remote-backup-file-status { align-self: flex-start; }
   .settings-page .card-header { align-items: center; flex-wrap: wrap; }
   .settings-page .card-header > span:first-child { min-width: 0; flex: 1 1 calc(100% - 50px); }
   .settings-page .card-header .settings-collapse-toggle { order: 1; }

@@ -34,9 +34,15 @@ from .web_servers import (
 )
 from .permissions import has_permission
 
-from .backup_jobs import request_backup_cancellation, start_backup_job
+from .backup_jobs import (
+    request_backup_cancellation,
+    start_backup_job,
+    start_remote_backup_retry,
+)
 
-from .models import BackupJob
+from .models import BackupJob, ScheduledTask
+
+from .offsite_backups import OffsiteBackupError, list_remote_backups
 
 from .processes import (
     send_command,
@@ -143,6 +149,37 @@ def backups_data(
             status_code=403,
         )
 
+    backups = list_backups(server)
+    jobs = (
+        db.query(BackupJob)
+        .filter(
+            BackupJob.server_id == server.id,
+            BackupJob.filename.isnot(None),
+        )
+        .order_by(BackupJob.id.desc())
+        .limit(100)
+        .all()
+    )
+    latest_job_by_filename = {}
+    for job in jobs:
+        latest_job_by_filename.setdefault(job.filename, job)
+    for backup in backups:
+        job = latest_job_by_filename.get(backup.get("filename"))
+        if not job:
+            continue
+        legacy_remote_failure = "off-site copy failed" in (job.message or "").casefold()
+        if not job.remote_destination and not legacy_remote_failure:
+            continue
+        backup["remote_status"] = (
+            "failed" if job.status == "warning" or legacy_remote_failure
+            else "uploading" if job.status == "uploading"
+            else "complete" if job.status == "complete"
+            else None
+        )
+        backup["remote_destination"] = job.remote_destination
+        backup["remote_job_id"] = job.id
+        backup["remote_message"] = job.message
+
     return {
         "running":
             server_status(
@@ -152,9 +189,89 @@ def backups_data(
                 False,
             ),
 
-        "backups":
-            list_backups(server),
+        "backups": backups,
     }
+
+
+@router.get("/api/web/servers/{server_id}/backups/remote")
+def remote_backups_data(
+    server_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not server or not has_permission(user, "backups.view"):
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+
+    grouped = {}
+    tasks = db.query(ScheduledTask).filter(
+        ScheduledTask.server_id == server.id,
+        ScheduledTask.task_type == "backup",
+        ScheduledTask.remote_destination.isnot(None),
+    ).order_by(ScheduledTask.id.desc()).all()
+    for task in tasks:
+        destination = (task.remote_destination or "").strip()
+        if not destination:
+            continue
+        item = grouped.setdefault(destination, {
+            "destination": destination,
+            "schedules": [],
+        })
+        item["schedules"].append({
+            "name": task.name,
+            "enabled": bool(task.enabled),
+        })
+
+    remotes = []
+    for destination, item in grouped.items():
+        try:
+            inventory = list_remote_backups(server, destination)
+        except OffsiteBackupError as error:
+            inventory = {
+                "destination": destination,
+                "directory": None,
+                "files": [],
+                "summary": {"complete": 0, "partial": 0, "other": 0},
+                "error": str(error),
+            }
+        inventory["schedules"] = item["schedules"]
+        remotes.append(inventory)
+    return {"remotes": remotes}
+
+
+@router.post("/api/web/servers/{server_id}/backups/jobs/{job_id}/retry-remote")
+async def retry_remote_backup(
+    server_id: int,
+    job_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user, server = get_accessible_server(server_id, request, db)
+    if not user:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not server or not has_permission(user, "backups.manage"):
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+    job = db.get(BackupJob, job_id)
+    if not job or job.server_id != server.id:
+        return JSONResponse({"error": "Backup job not found"}, status_code=404)
+    if job.status != "warning" or not job.remote_destination:
+        return JSONResponse({"error": "This backup has no remote copy to retry"}, status_code=409)
+    if not job.filename or not safe_backup_path(server, job.filename).is_file():
+        return JSONResponse({"error": "The local backup archive is no longer available"}, status_code=409)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if isinstance(data, dict) and data.get("destination"):
+        if str(data["destination"]).strip() != job.remote_destination:
+            return JSONResponse({"error": "The retry destination does not match this backup"}, status_code=400)
+    if not start_remote_backup_retry(job.id):
+        return JSONResponse({"error": "A remote retry is already running"}, status_code=409)
+    request.state.audit_action = "Remote backup retry queued"
+    request.state.audit_details = job.filename
+    return {"success": True}
 
 
 @router.post(
@@ -454,6 +571,8 @@ def backup_jobs_api(
                 "progress": job.progress,
                 "message": job.message,
                 "filename": job.filename,
+                "label": job.label,
+                "remote_destination": job.remote_destination,
                 "created_at": (
                     job.created_at.isoformat()
                     if job.created_at
