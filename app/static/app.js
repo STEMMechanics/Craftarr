@@ -10987,8 +10987,11 @@ function renderPluginBuildLogDialog(state) {
     }
     output.innerHTML = renderedLog + escapeHtml(log.slice(cursor));
   } else {
+    const waitingMessage = state?.status === "queued"
+      ? "Build queued; waiting for the build worker…"
+      : "Waiting for live build output…";
     output.textContent = log || (state?.status === "building" || state?.status === "queued"
-      ? "Waiting for live build output…"
+      ? waitingMessage
       : "No build output has been recorded yet.");
   }
   const reportMentioned = /problems-report\.html/i.test(log);
@@ -10998,7 +11001,9 @@ function renderPluginBuildLogDialog(state) {
       : state?.status === "building" || state?.status === "queued"
         ? "Live output is refreshed automatically while the build runs."
         : "Showing the retained tail of the latest build log."
-    : "This dialog refreshes automatically while the build runs.";
+    : state?.status === "queued"
+      ? "The build is queued and will start when the build worker is available."
+      : "This dialog refreshes automatically while the build runs.";
   if (reportButton) {
     reportButton.hidden = !reportAvailable;
     reportButton.disabled = !reportAvailable;
@@ -11134,6 +11139,27 @@ function stopPluginBuildLogPolling() {
   pluginBuildLogPollSequence += 1;
 }
 
+function setPluginBuildLogPollingMessage(message, retrying = true) {
+  const status = document.getElementById("plugin-build-log-status");
+  const output = document.getElementById("plugin-build-log-output");
+  const note = document.getElementById("plugin-build-log-note");
+  if (status) {
+    status.textContent = message;
+    status.dataset.state = "error";
+  }
+  if (output && [
+    "Waiting for live build output…",
+    "Build queued; waiting for the build worker…",
+  ].includes(output.textContent?.trim())) {
+    output.textContent = message;
+  }
+  if (note) {
+    note.textContent = retrying
+      ? "Build status could not be refreshed; Craftarr will retry automatically."
+      : "Build status polling has stopped. Close the dialog and try again after the Node is available.";
+  }
+}
+
 async function refreshPluginBuildLog(sequence) {
   const modal = document.getElementById("plugin-build-log-modal");
   if (!modal || modal.hidden || sequence !== pluginBuildLogPollSequence) return;
@@ -11151,20 +11177,40 @@ async function refreshPluginBuildLog(sequence) {
     );
     connectionFailureLatched = false;
     if (handleAuthenticationResponse(response)) return;
-    const data = await response.json();
+    let data = {};
+    try {
+      data = await response.json();
+    } catch {
+      // A proxy such as Cloudflare may return an HTML error page instead of JSON.
+    }
+    if (!data || typeof data !== "object") data = {};
     if (sequence !== pluginBuildLogPollSequence) return;
     if (!response.ok) {
       if (data.node_offline === true) {
         markServerNodeOffline(modal.dataset.serverId);
+        setPluginBuildLogPollingMessage(data.error || "The Node is offline; build status is unavailable.", false);
         stopPluginBuildLogPolling();
         return;
       }
-      if (handleFunctionUnavailableData(modal.dataset.serverId, data, true)) stopPluginBuildLogPolling();
+      if (handleFunctionUnavailableData(modal.dataset.serverId, data, true)) {
+        setPluginBuildLogPollingMessage(data.error || DEFAULT_FUNCTION_UNAVAILABLE_MESSAGE, false);
+        stopPluginBuildLogPolling();
+      } else {
+        setPluginBuildLogPollingMessage(
+          data.error || `Unable to load live build status (HTTP ${response.status}); retrying…`,
+        );
+      }
       return;
     }
     renderPluginBuildLogDialog(data.development_status);
-  } catch {
-    // Keep the last visible output when a background refresh is unavailable.
+  } catch (error) {
+    if (sequence === pluginBuildLogPollSequence && !modal.hidden) {
+      setPluginBuildLogPollingMessage(
+        error?.name === "AbortError"
+          ? "The Node did not respond in time; retrying…"
+          : "Unable to reach the Node; retrying…",
+      );
+    }
   } finally {
     window.clearTimeout(timeout);
     if (pluginBuildLogPollController === request) pluginBuildLogPollController = null;
