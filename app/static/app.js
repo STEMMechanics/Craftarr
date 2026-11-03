@@ -10699,13 +10699,20 @@ function openPluginMonitoring(index) {
   if (config.error) setPluginMonitoringFeedback(config.error, "error");
   modal.hidden = false;
   startPluginMonitoringBuildPolling();
+  if (selectedMode === "custom" && savedBranchMode && config.project) {
+    loadPluginMonitoringBranches(true);
+  }
   document.getElementById("plugin-monitoring-mode").focus();
 }
 
 function closePluginMonitoring() {
   const modal = document.getElementById("plugin-monitoring-modal");
   stopPluginMonitoringBuildPolling();
-  if (modal) modal.hidden = true;
+  if (modal) {
+    modal.hidden = true;
+    modal._branchLoadSequence = (modal._branchLoadSequence || 0) + 1;
+  }
+  setPluginMonitoringBranchSuggestionsVisibility(false);
   const previousFocus = pluginMonitoringPreviousFocus;
   pluginMonitoringPreviousFocus = null;
   if (previousFocus?.isConnected) previousFocus.focus({preventScroll: true});
@@ -10726,8 +10733,128 @@ function clearMonitoringPreview() {
 }
 
 function clearPluginMonitoringBranchOptions() {
-  const options = document.getElementById("plugin-monitoring-branch-options");
-  if (options) options.replaceChildren();
+  const modal = document.getElementById("plugin-monitoring-modal");
+  if (modal) {
+    modal._branchOptions = [];
+    modal._branchActiveIndex = -1;
+    modal._branchLoadSequence = (modal._branchLoadSequence || 0) + 1;
+  }
+  const suggestions = document.getElementById("plugin-monitoring-branch-suggestions");
+  if (suggestions) suggestions.replaceChildren();
+  setPluginMonitoringBranchSuggestionsVisibility(false);
+}
+
+function setPluginMonitoringBranchSuggestionsVisibility(visible) {
+  const input = document.getElementById("plugin-monitoring-development-branch");
+  const suggestions = document.getElementById("plugin-monitoring-branch-suggestions");
+  if (!suggestions) return;
+  suggestions.hidden = !visible;
+  input?.setAttribute("aria-expanded", String(visible));
+  if (!visible) {
+    const modal = document.getElementById("plugin-monitoring-modal");
+    if (modal) modal._branchActiveIndex = -1;
+    input?.removeAttribute("aria-activedescendant");
+  }
+}
+
+function setPluginMonitoringBranchActiveOption(index) {
+  const modal = document.getElementById("plugin-monitoring-modal");
+  const input = document.getElementById("plugin-monitoring-development-branch");
+  const suggestions = document.getElementById("plugin-monitoring-branch-suggestions");
+  if (!modal || !input || !suggestions) return;
+  const options = [...suggestions.querySelectorAll('[role="option"]')];
+  const activeIndex = index >= 0 && index < options.length ? index : -1;
+  modal._branchActiveIndex = activeIndex;
+  options.forEach((option, optionIndex) => {
+    const active = optionIndex === activeIndex;
+    option.classList.toggle("is-active", active);
+    option.setAttribute("aria-selected", String(active));
+  });
+  if (activeIndex >= 0) input.setAttribute("aria-activedescendant", options[activeIndex].id);
+  else input.removeAttribute("aria-activedescendant");
+}
+
+function renderPluginMonitoringBranchSuggestions(forceOpen = false) {
+  const modal = document.getElementById("plugin-monitoring-modal");
+  const input = document.getElementById("plugin-monitoring-development-branch");
+  const suggestions = document.getElementById("plugin-monitoring-branch-suggestions");
+  if (!modal || !input || !suggestions) return;
+  const branches = Array.isArray(modal._branchOptions) ? modal._branchOptions : [];
+  const query = input.value.trim().toLowerCase();
+  const matches = branches
+    .filter((branch) => !query || branch.toLowerCase().includes(query))
+    .slice(0, 50);
+  suggestions.replaceChildren();
+  if (modal.hidden || input.disabled || !matches.length
+      || (!forceOpen && document.activeElement !== input)) {
+    setPluginMonitoringBranchSuggestionsVisibility(false);
+    return;
+  }
+  const selectedIndex = matches.findIndex((branch) => branch.toLowerCase() === query);
+  matches.forEach((branch, index) => {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = "plugin-monitoring-branch-suggestion";
+    option.id = `plugin-monitoring-branch-option-${index}`;
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", String(index === selectedIndex));
+    option.textContent = branch;
+    option.addEventListener("mousedown", (event) => event.preventDefault());
+    option.addEventListener("click", () => selectPluginMonitoringBranch(branch));
+    suggestions.append(option);
+  });
+  modal._branchActiveIndex = selectedIndex;
+  setPluginMonitoringBranchSuggestionsVisibility(true);
+  setPluginMonitoringBranchActiveOption(selectedIndex);
+}
+
+function showPluginMonitoringBranchSuggestions() {
+  renderPluginMonitoringBranchSuggestions(true);
+}
+
+function hidePluginMonitoringBranchSuggestions() {
+  window.setTimeout(() => {
+    const picker = document.querySelector(".plugin-monitoring-branch-picker");
+    if (picker?.contains(document.activeElement)) return;
+    setPluginMonitoringBranchSuggestionsVisibility(false);
+  }, 0);
+}
+
+function selectPluginMonitoringBranch(branch) {
+  const input = document.getElementById("plugin-monitoring-development-branch");
+  if (!input) return;
+  input.value = branch;
+  setPluginMonitoringBranchSuggestionsVisibility(false);
+  input.dispatchEvent(new Event("change", {bubbles: true}));
+}
+
+function handlePluginMonitoringBranchKeydown(event) {
+  const modal = document.getElementById("plugin-monitoring-modal");
+  const suggestions = document.getElementById("plugin-monitoring-branch-suggestions");
+  if (!modal || !suggestions) return;
+  if (event.key === "Escape") {
+    setPluginMonitoringBranchSuggestionsVisibility(false);
+    return;
+  }
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Enter") return;
+  const options = [...suggestions.querySelectorAll('[role="option"]')];
+  if (!options.length || suggestions.hidden) {
+    if (event.key !== "Enter") showPluginMonitoringBranchSuggestions();
+    return;
+  }
+  const currentIndex = Number.isInteger(modal._branchActiveIndex) ? modal._branchActiveIndex : -1;
+  if (event.key === "Enter") {
+    if (currentIndex >= 0) {
+      event.preventDefault();
+      selectPluginMonitoringBranch(options[currentIndex].textContent || "");
+    }
+    return;
+  }
+  event.preventDefault();
+  const nextIndex = event.key === "ArrowDown"
+    ? (currentIndex + 1) % options.length
+    : (currentIndex - 1 + options.length) % options.length;
+  setPluginMonitoringBranchActiveOption(nextIndex);
 }
 
 function setPluginMonitoringDevelopmentStatus(message, state = "") {
@@ -11025,6 +11152,8 @@ function closePluginBuildLog() {
 }
 
 function renderPluginMonitoringDevelopmentState(state) {
+  const modal = document.getElementById("plugin-monitoring-modal");
+  if (modal) modal._developmentState = state || null;
   if (!state) {
     setPluginMonitoringDevelopmentStatus("No branch build has run yet.");
     return;
@@ -11197,14 +11326,16 @@ function updatePluginMonitoringFields(providerChanged = false) {
   clearMonitoringPreview();
 }
 
-async function loadPluginMonitoringBranches() {
+async function loadPluginMonitoringBranches(preserveBuildStatus = false) {
   const modal = document.getElementById("plugin-monitoring-modal");
   const projectInput = document.getElementById("plugin-monitoring-project");
-  const options = document.getElementById("plugin-monitoring-branch-options");
-  if (!modal || !projectInput || !options) return false;
+  const branchInput = document.getElementById("plugin-monitoring-development-branch");
+  if (!modal || !projectInput || !branchInput) return false;
   const project = projectInput.value.trim();
+  const loadSequence = modal._branchLoadSequence = (modal._branchLoadSequence || 0) + 1;
   if (!project) {
-    setPluginMonitoringDevelopmentStatus("No branch build has run yet.");
+    if (preserveBuildStatus) renderPluginMonitoringDevelopmentState(modal._developmentState);
+    else setPluginMonitoringDevelopmentStatus("No branch build has run yet.");
     return false;
   }
   setPluginMonitoringDevelopmentStatus("Loading GitHub branches…", "pending");
@@ -11218,22 +11349,25 @@ async function loadPluginMonitoringBranches() {
     if (handleAuthenticationResponse(response)) return false;
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Unable to load GitHub branches.");
-    if (projectInput.value.trim() !== project) return false;
+    if (modal._branchLoadSequence !== loadSequence || projectInput.value.trim() !== project) return false;
     if (data.project && projectInput.value.trim() === project) projectInput.value = data.project;
-    options.replaceChildren();
-    for (const branch of (Array.isArray(data.branches) ? data.branches : [])) {
-      if (typeof branch !== "string") continue;
-      const option = document.createElement("option");
-      option.value = branch;
-      options.append(option);
+    modal._branchOptions = [...new Set(
+      (Array.isArray(data.branches) ? data.branches : [])
+        .filter((branch) => typeof branch === "string" && branch),
+    )];
+    renderPluginMonitoringBranchSuggestions(document.activeElement === branchInput);
+    if (preserveBuildStatus) {
+      renderPluginMonitoringDevelopmentState(modal._developmentState);
+    } else {
+      const count = modal._branchOptions.length;
+      setPluginMonitoringDevelopmentStatus(
+        count ? "No branch build has run yet." : "No GitHub branches were found for this repository.",
+        count ? "" : "error",
+      );
     }
-    const count = options.options.length;
-    setPluginMonitoringDevelopmentStatus(
-      count ? "No branch build has run yet." : "No GitHub branches were found for this repository.",
-      count ? "" : "error",
-    );
     return true;
   } catch (failure) {
+    if (modal._branchLoadSequence !== loadSequence || projectInput.value.trim() !== project) return false;
     const message = failure instanceof TypeError
       ? "Unable to connect to the server."
       : failure.message || "Unable to load GitHub branches.";
