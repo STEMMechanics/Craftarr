@@ -25,7 +25,7 @@ from .processes import (
 from .audit import record_audit_event
 from .config import SCHEDULE_TIMEZONE
 from .offsite_backups import OffsiteBackupError, enforce_remote_retention, upload_backup
-from .system_alerts import check_system_alerts
+from .system_alerts import check_system_alerts, send_backup_failure_alert
 
 
 _stop = threading.Event()
@@ -404,6 +404,7 @@ def execute_task(task_id: int, *, reschedule: bool = True) -> None:
                 raise RuntimeError("A backup is already running")
             job = BackupJob(
                 server_id=server.id, label=task.name,
+                remote_destination=task.remote_destination,
                 status="queued", progress=0, message="Scheduled",
             )
             db.add(job)
@@ -438,8 +439,16 @@ def execute_task(task_id: int, *, reschedule: bool = True) -> None:
                 except OffsiteBackupError as error:
                     run.status = "warning"
                     run.detail += f" · off-site copy failed: {error}"
-                    job.status = "complete"
-                    job.message = f"Backup complete; off-site copy failed: {error}"
+                    job.status = "warning"
+                    job.message = f"Local backup complete; remote copy to {task.remote_destination} failed: {error}"[:255]
+                    email_sent = send_backup_failure_alert(
+                        db, server, job, task.remote_destination, error,
+                    )
+                    run.detail += " · failure email sent" if email_sent else " · failure email not sent (SMTP or administrator email is not configured)"
+                    logger.warning(
+                        "Remote backup copy failed for server %s (job %s, destination %s): %s; email_sent=%s",
+                        server.name, job.id, task.remote_destination, error, email_sent,
+                    )
                 job.finished_at = datetime.utcnow()
         else:
             raise RuntimeError("Unsupported scheduled task type")

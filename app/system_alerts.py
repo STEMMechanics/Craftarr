@@ -6,7 +6,7 @@ import psutil
 
 from .emailer import send_email
 from .models import User
-from .settings_manager import get_setting, get_system_alert_settings, set_setting
+from .settings_manager import get_setting, get_smtp_settings, get_system_alert_settings, set_setting
 
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,33 @@ def _admin_addresses(db) -> list[str]:
         for user in db.query(User).filter(User.enabled.is_(True)).all()
         if user.email and user.can("settings.manage")
     })
+
+
+def send_backup_failure_alert(db, server, job, destination: str, error) -> bool:
+    """Email administrators when a local backup cannot be copied remotely."""
+    if hub_manages_alerts(db):
+        return False
+    recipients = _admin_addresses(db)
+    if not recipients or not get_smtp_settings(db).get("smtp_host", "").strip():
+        return False
+
+    filename = job.filename or "the local backup archive"
+    subject = f"Craftarr alert: Remote backup failed for {server.name}"
+    body = (
+        f"The local backup for {server.name} was created, but its remote copy failed.\n"
+        f"Local archive: {filename}\n"
+        f"Remote destination: {destination}\n"
+        f"Reason: {error}\n\n"
+        "Open the server's Backup tab to inspect the remote files and retry the copy."
+    )
+    sent = False
+    for address in recipients:
+        try:
+            send_email(db, address, subject, body)
+            sent = True
+        except Exception:
+            logger.exception("Unable to send remote backup failure alert")
+    return sent
 
 
 def hub_manages_alerts(db, now: datetime | None = None) -> bool:

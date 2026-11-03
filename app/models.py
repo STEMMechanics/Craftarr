@@ -468,6 +468,11 @@ class BackupJob(Base):
         nullable=True,
     )
 
+    remote_destination = Column(
+        String(500),
+        nullable=True,
+    )
+
     status = Column(
         String(32),
         nullable=False,

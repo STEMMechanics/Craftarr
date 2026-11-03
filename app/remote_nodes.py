@@ -356,6 +356,41 @@ def _email_remote_update_notifications(db: Session, node: RemoteNode, notificati
         db.commit()
 
 
+def _email_remote_backup_notifications(db: Session, node: RemoteNode, notifications: list[dict]) -> None:
+    """Forward remote Node backup failures to the hub's administrators once."""
+    from .emailer import send_email
+    from .settings_manager import get_setting, get_smtp_settings, set_setting
+    from .system_alerts import _admin_addresses
+
+    recipients = _admin_addresses(db)
+    if not recipients or not get_smtp_settings(db).get("smtp_host", "").strip():
+        return
+    for item in notifications:
+        if item.get("kind") not in {"backup-warning", "backup-failed"}:
+            continue
+        event_id = str(item.get("id") or "")
+        if not event_id:
+            continue
+        for address in recipients:
+            digest = hashlib.sha256(f"{node.node_id}|{event_id}|{address}".encode("utf-8")).hexdigest()
+            key = f"remote_backup_sent_{digest}"
+            if get_setting(db, key):
+                continue
+            subject = f"Craftarr alert: Remote backup failed on Node {node.name}"
+            body = (
+                f"{item.get('message') or 'A remote backup requires attention.'}\n\n"
+                f"Node: {node.name}\n"
+                "Open the server's Backup tab to inspect the remote files and retry the copy."
+            )
+            try:
+                send_email(db, address, subject, body)
+            except Exception as error:
+                logger.warning("Remote backup notification delivery failed (%s)", type(error).__name__)
+                continue
+            set_setting(db, key, datetime.now(timezone.utc).isoformat())
+            db.commit()
+
+
 def _merge_remote_system_alerts(db: Session, node: RemoteNode, alerts: list[dict]) -> list[dict]:
     from .settings_manager import get_setting, set_setting
 
@@ -501,6 +536,7 @@ def synchronize_plugin_monitoring_repositories(db: Session) -> dict:
             node.offline_alert_sent = False
             _save_remote_notification_snapshot(db, node, notifications)
             _email_remote_update_notifications(db, node, notifications)
+            _email_remote_backup_notifications(db, node, remote_notifications)
             _email_remote_system_alerts(db, node, system_alerts)
             if was_offline and alert_was_sent:
                 recoveries.append(node)

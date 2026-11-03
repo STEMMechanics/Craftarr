@@ -40,3 +40,23 @@ def test_threshold_alert_has_persisted_cooldown(monkeypatch):
     assert system_alerts.check_system_alerts(DB(), now) == ["memory", "storage"]
     assert system_alerts.check_system_alerts(DB(), now) == []
     assert len(sent) == 2
+
+
+def test_remote_backup_failure_alert_emails_administrators(monkeypatch):
+    sent = []
+    monkeypatch.setattr(system_alerts, "hub_manages_alerts", lambda _db: False)
+    monkeypatch.setattr(system_alerts, "get_smtp_settings", lambda _db: {"smtp_host": "smtp.example.test"})
+    monkeypatch.setattr(system_alerts, "send_email", lambda *args: sent.append(args))
+
+    result = system_alerts.send_backup_failure_alert(
+        DB(),
+        SimpleNamespace(name="Survival"),
+        SimpleNamespace(filename="daily.zip"),
+        "sftp:backups",
+        "Off-site transfer timed out",
+    )
+
+    assert result is True
+    assert sent[0][1] == "admin@example.com"
+    assert "Remote backup failed for Survival" in sent[0][2]
+    assert "Off-site transfer timed out" in sent[0][3]
