@@ -1289,6 +1289,7 @@ document.body.addEventListener(
     updateOverviewPlayers();
     updatePluginsPage();
     updateOverviewPlugins();
+    initializeBackupPanels();
     updateBackupsPage();
     updateRemoteBackups();
     updatePropertiesPage();
@@ -5688,6 +5689,59 @@ let backupData = [];
 let backupPendingRestore = null;
 let backupPendingDelete = null;
 
+function remoteFailureReason(message) {
+  const text = String(message || "").trim();
+  if (!text) return "";
+  if (/^Local backup may be complete;\s*remote copy was interrupted by a console restart\.?$/i.test(text)) {
+    return "Console service restarted during the remote copy";
+  }
+  return text
+    .replace(/^Local backup complete;\s*remote copy(?: to .*?)? failed:\s*/i, "")
+    .replace(/^Backup complete;\s*off-site copy failed:\s*/i, "")
+    .replace(/^Remote copy(?: to .*?)? failed:\s*/i, "")
+    .trim();
+}
+
+function toggleBackupPanel(button) {
+  const panel = button?.closest(".backup-panel");
+  if (!panel) return;
+  const collapsed = !panel.classList.contains("is-collapsed");
+  panel.classList.toggle("is-collapsed", collapsed);
+  const title = panel.dataset.backupPanelTitle || "Backup panel";
+  button.setAttribute("aria-expanded", String(!collapsed));
+  button.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${title}`);
+  button.title = `${collapsed ? "Expand" : "Collapse"} ${title}`;
+  const icon = button.querySelector("i");
+  if (icon) icon.className = `fa-solid fa-chevron-${collapsed ? "down" : "up"}`;
+  try {
+    localStorage.setItem(`craftarr.backupPanelCollapsed.${panel.dataset.backupPanelKey || title}`, String(collapsed));
+  } catch {
+    // Keep the panel usable when browser storage is disabled.
+  }
+}
+
+function initializeBackupPanels() {
+  const page = document.querySelector(".backups-page");
+  if (!page) return;
+  page.querySelectorAll(":scope .backup-panel").forEach((panel) => {
+    const button = panel.querySelector(":scope > .card-header .backup-panel-collapse-toggle");
+    if (!button) return;
+    const title = panel.dataset.backupPanelTitle || "Backup panel";
+    let collapsed = false;
+    try {
+      collapsed = localStorage.getItem(`craftarr.backupPanelCollapsed.${panel.dataset.backupPanelKey || title}`) === "true";
+    } catch {
+      collapsed = false;
+    }
+    panel.classList.toggle("is-collapsed", collapsed);
+    button.setAttribute("aria-expanded", String(!collapsed));
+    button.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${title}`);
+    button.title = `${collapsed ? "Expand" : "Collapse"} ${title}`;
+    const icon = button.querySelector("i");
+    if (icon) icon.className = `fa-solid fa-chevron-${collapsed ? "down" : "up"}`;
+  });
+}
+
 async function updateBackupsPage() {
   const page = document.querySelector(
     ".backups-page",
@@ -5775,11 +5829,11 @@ function renderBackups(
       const labelMatch = filename.match(/^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:-(.*))?\.zip$/i);
       const displayName = labelMatch ? (labelMatch[1] || "Backup") : filename;
       const remoteStatus = backup.remote_status;
+      const failureReason = remoteFailureReason(backup.remote_message);
       const remoteStatusMarkup = remoteStatus === "failed"
         ? `<div class="backup-remote-status is-error" title="${escapeHtml(backup.remote_message || "Remote copy failed")}">
              <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
-             <span>Remote copy failed${backup.remote_message ? `: ${escapeHtml(backup.remote_message)}` : ""}</span>
-             ${page?.dataset.canManage === "true" && backup.remote_job_id && backup.remote_destination ? `<button type="button" class="button backup-retry-button" onclick="retryRemoteBackup(${Number(backup.remote_job_id)}, this)">Try again</button>` : ""}
+             <span><strong>Remote copy failed, Local backup complete</strong>${failureReason ? `<small>Reason: ${escapeHtml(failureReason)}</small>` : ""}</span>
            </div>`
         : remoteStatus === "uploading"
           ? `<div class="backup-remote-status is-progress"><i class="fa-solid fa-cloud-arrow-up" aria-hidden="true"></i><span>Remote copy in progress${backup.remote_destination ? ` · ${escapeHtml(backup.remote_destination)}` : ""}</span></div>`
@@ -5834,7 +5888,10 @@ function renderBackups(
 
                         <details class="backup-more-actions">
                           <summary aria-label="More actions for ${escapeHtml(backup.filename)}" title="More actions"><i class="fa-solid fa-ellipsis" aria-hidden="true"></i></summary>
-                          <div class="backup-more-menu"><button type="button" onclick="this.closest('details').open=false; openDeleteBackupModal('${escapeJs(backup.filename)}')"><i class="fa-solid fa-trash" aria-hidden="true"></i> Delete backup</button></div>
+                          <div class="backup-more-menu">
+                            ${page?.dataset.canManage === "true" && remoteStatus === "failed" && backup.remote_job_id && backup.remote_destination ? `<button type="button" class="backup-retry-menu-item" onclick="this.closest('details').open=false; retryRemoteBackup(${Number(backup.remote_job_id)}, this)"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Try remote copy again</button>` : ""}
+                            <button type="button" onclick="this.closest('details').open=false; openDeleteBackupModal('${escapeJs(backup.filename)}')"><i class="fa-solid fa-trash" aria-hidden="true"></i> Delete backup</button>
+                          </div>
                         </details>
 
                     </div>
@@ -5875,20 +5932,27 @@ function renderRemoteBackups(remotes) {
     const summary = remote.summary || {};
     const files = Array.isArray(remote.files) ? remote.files : [];
     const schedules = Array.isArray(remote.schedules) ? remote.schedules : [];
+    const retryJobs = Array.isArray(remote.retry_jobs) ? remote.retry_jobs : [];
+    const partialCount = Number(summary.partial || 0);
+    const otherCount = Number(summary.other || 0);
+    const completeCount = Number(summary.complete || 0);
+    const hasFileErrors = partialCount > 0 || otherCount > 0;
+    const hasError = Boolean(remote.error) || hasFileErrors;
     const scheduleText = schedules.length
       ? `Used by ${schedules.map((schedule) => `${escapeHtml(schedule.name || "Backup schedule")}${schedule.enabled ? "" : " (disabled)"}`).join(", ")}`
       : "Not used by an active backup schedule";
     const headerStatus = remote.error
       ? '<span class="remote-backup-status is-error"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>Remote unavailable</span>'
-      : `<span class="remote-backup-status ${Number(summary.partial || 0) ? "is-error" : "is-success"}">${Number(summary.complete || 0)} complete · ${Number(summary.partial || 0)} partial</span>`;
+      : `<span class="remote-backup-status ${hasFileErrors ? "is-error" : "is-complete"}"><i class="fa-solid ${hasFileErrors ? "fa-triangle-exclamation" : "fa-circle-check"}" aria-hidden="true"></i>${completeCount} complete${partialCount ? ` · ${partialCount} partial` : ""}${otherCount ? ` · ${otherCount} other` : ""}</span>`;
     const fileMarkup = files.length
       ? files.map((file) => {
         const partial = file.status === "partial";
+        const complete = file.status === "complete";
         const statusLabel = partial
-          ? "Partial upload — failed or interrupted"
-          : file.status === "complete" ? "Uploaded" : "Unrecognized remote file";
-        const statusClass = partial ? "is-error" : file.status === "complete" ? "is-success" : "is-muted";
-        return `<div class="remote-backup-file">
+          ? "Error · partial upload"
+          : complete ? "Complete" : "Error · unrecognized remote file";
+        const statusClass = complete ? "is-complete" : "is-error";
+        return `<div class="remote-backup-file ${complete ? "" : "is-error"}">
           <div class="remote-backup-file-main">
             <i class="fa-solid ${partial ? "fa-triangle-exclamation" : file.status === "complete" ? "fa-file-zipper" : "fa-file"}" aria-hidden="true"></i>
             <div><strong>${escapeHtml(file.name || "Unnamed remote file")}</strong><small>${escapeHtml(formatRemoteBackupSize(file.size))} · ${escapeHtml(file.modified_at ? formatBrowserTimestamp(file.modified_at) : "Unknown time")}</small></div>
@@ -5897,14 +5961,34 @@ function renderRemoteBackups(remotes) {
         </div>`;
       }).join("")
       : '<div class="empty-message">No remote files found for this server.</div>';
-    return `<div class="remote-backup-group ${remote.error ? "has-error" : ""}">
-      <div class="remote-backup-group-header">
-        <div><strong>${escapeHtml(remote.destination || "Remote destination")}</strong><small>${escapeHtml(remote.directory || scheduleText)}${remote.directory ? ` · ${scheduleText}` : ""}</small></div>
-        ${headerStatus}
+    const retryMarkup = retryJobs.length
+      ? `<div class="remote-backup-retry-list">
+          <div class="remote-backup-retry-heading"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><span>Remote copies needing attention</span></div>
+          ${retryJobs.map((job) => `<div class="remote-backup-retry-row"><span>${escapeHtml(job.filename || job.label || "Local backup")}</span><button type="button" class="button backup-retry-button" onclick="retryRemoteBackup(${Number(job.id)}, this)"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Retry</button></div>`).join("")}
+        </div>`
+      : "";
+    const destination = remote.destination || "Remote destination";
+    const directoryText = remote.directory ? `${escapeHtml(remote.directory)} · ${scheduleText}` : scheduleText;
+    return `<section class="overview-card backup-panel remote-backup-card ${hasError ? "has-error" : "is-complete"}" data-backup-panel-key="remote-${escapeHtml(destination)}" data-backup-panel-title="Remote backups — ${escapeHtml(destination)}">
+      <div class="card-header backup-panel-header">
+        <div class="backup-panel-heading">
+          <span>Remote backups — ${escapeHtml(destination)}</span>
+          <p class="card-header-subtitle">${directoryText}</p>
+        </div>
+        <div class="backup-panel-header-actions">
+          ${headerStatus}
+          <button class="button panel-header-button" type="button" onclick="updateRemoteBackups()"><i class="fa-solid fa-rotate" aria-hidden="true"></i><span>Refresh</span></button>
+          <a class="button panel-header-button" href="/settings#offsite-backup-settings"><i class="fa-solid fa-pen-to-square" aria-hidden="true"></i><span>Edit</span></a>
+          <button class="backup-panel-collapse-toggle" type="button" aria-expanded="true" aria-label="Collapse Remote backups — ${escapeHtml(destination)}" title="Collapse Remote backups — ${escapeHtml(destination)}" onclick="toggleBackupPanel(this)"><i class="fa-solid fa-chevron-up" aria-hidden="true"></i></button>
+        </div>
       </div>
-      ${remote.error ? `<div class="remote-backup-error"><i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i><span>${escapeHtml(remote.error)}</span></div>` : fileMarkup}
-    </div>`;
+      <div class="remote-backup-panel-body">
+        ${remote.error ? `<div class="remote-backup-error"><i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i><span>${escapeHtml(remote.error)}</span></div>` : fileMarkup}
+        ${retryMarkup}
+      </div>
+    </section>`;
   }).join("");
+  initializeBackupPanels();
 }
 
 async function updateRemoteBackups() {
@@ -6166,6 +6250,7 @@ async function confirmDeleteBackup() {
 
 updateBackupsPage();
 updateRemoteBackups();
+initializeBackupPanels();
 
 async function updatePropertiesPage() {
   const page = document.querySelector(
@@ -8746,22 +8831,32 @@ function renderBackupJobHistory(jobs) {
     return;
   }
   const canManage = document.querySelector(".backups-page")?.dataset.canManage === "true";
-  const labels = {
-    complete: "Complete",
-    warning: "Remote copy failed",
-    failed: "Failed",
-    cancelled: "Cancelled",
-  };
   container.innerHTML = history.map((job) => {
-    const status = labels[job.status] || job.status || "Finished";
-    const isWarning = job.status === "warning" && job.remote_destination;
-    return `<div class="backup-history-row is-${escapeHtml(job.status || "finished")}"${isWarning ? ` title="${escapeHtml(job.message || status)}"` : ""}>
+    const message = String(job.message || "");
+    const remoteFailed = job.status === "warning" || /off-site copy failed|remote copy(?: to .*?)? failed|remote copy was interrupted/i.test(message);
+    const failureReason = remoteFailureReason(message);
+    const isWarning = remoteFailed;
+    const status = isWarning
+      ? "Incomplete"
+      : job.status === "complete" ? "Complete"
+        : job.status === "failed" ? "Failed"
+          : job.status === "cancelled" ? "Cancelled"
+            : job.status || "Finished";
+    const rowClass = isWarning ? "warning" : job.status || "finished";
+    const detail = isWarning
+      ? `Remote copy failed, Local backup complete${failureReason ? ` · Reason: ${failureReason}` : ""}`
+      : job.status === "complete"
+        ? job.remote_destination ? "Local backup complete · Remote copy complete" : "Local backup complete"
+        : job.status === "failed" ? `Local backup failed${message ? ` · ${message}` : ""}`
+          : message || "No additional detail";
+    const retryable = canManage && isWarning && job.remote_destination && (job.status === "warning" || /off-site copy failed/i.test(message));
+    return `<div class="backup-history-row is-${escapeHtml(rowClass)}"${isWarning ? ` title="${escapeHtml(message || detail)}"` : ""}>
       <div class="backup-history-main">
-        <span class="backup-history-status"><i class="fa-solid ${job.status === "complete" ? "fa-circle-check" : job.status === "warning" ? "fa-triangle-exclamation" : "fa-circle-xmark"}" aria-hidden="true"></i>${escapeHtml(status)}</span>
+        <span class="backup-history-status"><i class="fa-solid ${isWarning ? "fa-triangle-exclamation" : job.status === "complete" ? "fa-circle-check" : "fa-circle-xmark"}" aria-hidden="true"></i>${escapeHtml(status)}</span>
         <strong>${escapeHtml(job.filename || job.label || "Backup")}</strong>
-        <small>${escapeHtml(job.message || "No additional detail")} · ${escapeHtml(formatBrowserTimestamp(job.finished_at || job.created_at))}</small>
+        <small>${escapeHtml(detail)} · ${escapeHtml(formatBrowserTimestamp(job.finished_at || job.created_at))}</small>
       </div>
-      ${isWarning && canManage ? `<button type="button" class="button backup-retry-button" onclick="retryRemoteBackup(${Number(job.id)}, this)"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Try remote copy again</button>` : ""}
+      ${retryable ? `<button type="button" class="button backup-retry-button" onclick="retryRemoteBackup(${Number(job.id)}, this)"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Try remote copy again</button>` : ""}
     </div>`;
   }).join("");
 }
