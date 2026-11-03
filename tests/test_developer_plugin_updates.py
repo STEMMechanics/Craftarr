@@ -64,9 +64,53 @@ def test_queue_job_clears_log_from_previous_build(monkeypatch):
 
     try:
         assert updates._queue_job(server, setting, plugin, "new-commit", updates.datetime.utcnow(), FakeDB()) is True
-        assert state.build_log is None
+        assert state.build_log == "Build queued; waiting for the build worker…\n"
         assert state.build_report_html is None
         assert state.build_report_path is None
+    finally:
+        updates._active_jobs.discard((server.id, "stemcraft"))
+
+
+def test_queue_job_marks_state_failed_if_worker_cannot_start(monkeypatch):
+    state = SimpleNamespace(
+        source_key="owner/repository#main",
+        latest_commit="old-commit",
+        installed_commit="old-commit",
+        status="current",
+        error=None,
+        build_log="old build output",
+        build_report_html=None,
+        build_report_path=None,
+        checked_at=None,
+        updated_at=None,
+    )
+
+    class FakeDB:
+        def get(self, *_args):
+            return state
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+    def fail_submit(*_args):
+        raise RuntimeError("pool closed")
+
+    server = SimpleNamespace(id=43)
+    setting = SimpleNamespace(project="Owner/Repository", development_branch="main", plugin_name="STEMCraft")
+    plugin = {"name": "STEMCraft", "filename": "STEMCraft.jar"}
+    monkeypatch.setattr(updates._worker_pool, "submit", fail_submit)
+    updates._active_jobs.discard((server.id, "stemcraft"))
+
+    try:
+        with pytest.raises(RuntimeError, match="pool closed"):
+            updates._queue_job(server, setting, plugin, "new-commit", updates.datetime.utcnow(), FakeDB())
+        assert state.status == "failed"
+        assert state.error == "Unable to start the build worker: pool closed"
+        assert state.build_log == "Build queued; waiting for the build worker…\n"
+        assert (server.id, "stemcraft") not in updates._active_jobs
     finally:
         updates._active_jobs.discard((server.id, "stemcraft"))
 

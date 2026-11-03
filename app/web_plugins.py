@@ -32,6 +32,7 @@ from .plugin_manager import (
     list_plugins,
     list_plugin_files,
     plugin_info,
+    read_plugin_yml,
     remove_plugin,
     install_plugin_file,
     install_plugin_url,
@@ -63,6 +64,25 @@ from .processes import server_status
 router = APIRouter()
 logger = logging.getLogger(__name__)
 PLUGIN_PROGRESS_COMPONENT = "@plugins-progress"
+
+
+def _plugin_file_summary(server, filename: str) -> dict | None:
+    """Return one plugin's cheap summary plus its descriptor metadata.
+
+    Plugin actions are often used while a branch build is running. Calling
+    ``list_plugins`` here would also scan every plugin data directory and can
+    make the Node unresponsive. The filename is first matched against the
+    cheap inventory, then only this JAR's small descriptor is opened.
+    """
+    plugin = next((item for item in list_plugin_files(server) if item["filename"] == filename), None)
+    if not plugin:
+        return None
+    metadata = read_plugin_yml(Path(server.directory) / "plugins" / plugin["filename"])
+    if metadata.get("name"):
+        plugin["name"] = metadata["name"]
+    if metadata.get("version"):
+        plugin["version"] = metadata["version"]
+    return plugin
 
 
 def monitoring_download_url(data):
@@ -1120,7 +1140,7 @@ def developer_plugin_build_status(server_id: int, filename: str, request: Reques
     # This endpoint is polled while a build is running. Keep it to a cheap
     # directory/stat lookup; full plugin discovery opens every JAR and scans
     # plugin data directories, which can starve a small Node during a build.
-    plugin = next((item for item in list_plugin_files(server) if item['filename'] == filename), None)
+    plugin = _plugin_file_summary(server, filename)
     if not plugin:
         return JSONResponse({'error': 'Installed plugin not found; reload the Plugins page'}, status_code=404)
     if plugin.get('enabled') is not True or plugin.get('previous_version') is True:
@@ -1147,7 +1167,7 @@ def developer_plugin_build_report(server_id: int, filename: str, request: Reques
         return JSONResponse({'error': 'Not authenticated'}, status_code=401)
     if not server or not has_permission(user, 'plugins.manage'):
         return JSONResponse({'error': 'Access denied'}, status_code=403)
-    plugin = next((item for item in list_plugins(server) if item['filename'] == filename), None)
+    plugin = _plugin_file_summary(server, filename)
     if not plugin:
         return JSONResponse({'error': 'Installed plugin not found; reload the Plugins page'}, status_code=404)
     plugin_name = normalize_name(plugin['name'])
@@ -1188,7 +1208,7 @@ def rebuild_developer_plugin_build(server_id: int, filename: str, request: Reque
         return JSONResponse({'error': 'Not authenticated'}, status_code=401)
     if not server or not has_permission(user, 'plugins.manage'):
         return JSONResponse({'error': 'Access denied'}, status_code=403)
-    plugin = next((item for item in list_plugins(server) if item['filename'] == filename), None)
+    plugin = _plugin_file_summary(server, filename)
     if not plugin:
         return JSONResponse({'error': 'Installed plugin not found; reload the Plugins page'}, status_code=404)
     if not server.developer_updates_enabled:

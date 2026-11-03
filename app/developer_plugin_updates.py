@@ -25,7 +25,7 @@ from .models import (
     PluginMonitoringSetting,
     Server,
 )
-from .plugin_manager import install_plugin_build, list_plugins, read_plugin_yml
+from .plugin_manager import install_plugin_build, list_plugin_files, read_plugin_yml
 from .plugin_monitoring import validate_development_branch
 from .processes import register_server, server_status
 from .update_providers import normalize_name
@@ -275,6 +275,26 @@ def _build_command(source: Path) -> list[str]:
     raise RuntimeError("No Gradle or Maven build file was found")
 
 
+def _developer_plugin_inventory(server) -> list[dict]:
+    """Read only plugin JAR metadata needed by the branch-build worker.
+
+    Full plugin discovery also walks every YAML file below each plugin data
+    directory. That is useful for the file manager, but it can delay a build
+    indefinitely on a large server while the UI still reports only ``queued``.
+    """
+    plugins_root = Path(server.directory) / "plugins"
+    inventory = []
+    for item in list_plugin_files(server):
+        path = plugins_root / item["filename"]
+        metadata = read_plugin_yml(path)
+        if metadata.get("name"):
+            item["name"] = metadata["name"]
+        if metadata.get("version"):
+            item["version"] = metadata["version"]
+        inventory.append(item)
+    return inventory
+
+
 def _prioritise_build_command(command: list[str]) -> list[str]:
     if BUILD_NICE <= 0:
         return command
@@ -456,7 +476,14 @@ def _process_job(server_id: int, plugin_name: str, filename: str, project: str, 
                 or setting.project != project or state.source_key != source_key):
             _set_state(db, state, status="waiting")
             return
-        installed_plugins = list_plugins(server)
+        _set_state(
+            db,
+            state,
+            status="building",
+            error=None,
+            build_log="Build worker started; checking the installed plugin…\n",
+        )
+        installed_plugins = _developer_plugin_inventory(server)
         plugin = next((item for item in installed_plugins if item["filename"] == filename), None)
         active_matches = [item for item in installed_plugins
                           if normalize_name(item.get("name", "")) == plugin_name
@@ -468,7 +495,6 @@ def _process_job(server_id: int, plugin_name: str, filename: str, project: str, 
             _set_state(db, state, status="failed", error="More than one enabled copy is installed; resolve the duplicates before building")
             return
 
-        _set_state(db, state, status="building", error=None)
         register_server(server)
         def still_enabled():
             with SessionLocal() as check_db:
@@ -482,7 +508,7 @@ def _process_job(server_id: int, plugin_name: str, filename: str, project: str, 
                     and current_state and current_state.source_key == source_key
                 )
 
-        live_log = ""
+        live_log = state.build_log or ""
         last_live_log_commit = 0.0
 
         def persist_live_log(force=False):
@@ -645,7 +671,7 @@ def _queue_job(server: Server, setting: PluginMonitoringSetting, plugin: dict, c
     state.latest_commit = commit
     state.status = "queued"
     state.error = None
-    state.build_log = None
+    state.build_log = "Build queued; waiting for the build worker…\n"
     state.build_report_html = None
     state.build_report_path = None
     state.checked_at = now
@@ -657,23 +683,32 @@ def _queue_job(server: Server, setting: PluginMonitoringSetting, plugin: dict, c
         with _active_jobs_lock:
             _active_jobs.discard(key)
         raise
-    _worker_pool.submit(
-        _process_job,
-        server.id,
-        plugin_name,
-        plugin["filename"],
-        setting.project,
-        setting.development_branch,
-        commit,
-        source_key,
-    )
+    try:
+        _worker_pool.submit(
+            _process_job,
+            server.id,
+            plugin_name,
+            plugin["filename"],
+            setting.project,
+            setting.development_branch,
+            commit,
+            source_key,
+        )
+    except Exception as error:
+        state.status = "failed"
+        state.error = f"Unable to start the build worker: {str(error)[:800]}"
+        state.updated_at = datetime.utcnow()
+        db.commit()
+        with _active_jobs_lock:
+            _active_jobs.discard(key)
+        raise
     return True
 
 
 def queue_developer_plugin_rebuild(db, server: Server, setting: PluginMonitoringSetting, plugin: dict) -> tuple[str, bool]:
     """Force a build for the currently configured branch commit."""
     plugin_name = normalize_name(setting.plugin_name)
-    active_matches = [item for item in list_plugins(server)
+    active_matches = [item for item in _developer_plugin_inventory(server)
                       if normalize_name(item.get("name", "")) == plugin_name
                       and item.get("enabled") is True
                       and not item.get("previous_version")]
@@ -692,7 +727,7 @@ def run_scheduled_developer_updates() -> None:
         servers = db.query(Server).filter_by(developer_updates_enabled=True).all()
         for server in servers:
             interval = max(1, min(1440, int(server.developer_update_interval_minutes or 5)))
-            plugins = list_plugins(server)
+            plugins = _developer_plugin_inventory(server)
             for setting in db.query(PluginMonitoringSetting).filter_by(server_id=server.id).all():
                 branch = setting.development_branch
                 if not branch:
