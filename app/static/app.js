@@ -2957,6 +2957,8 @@ async function refreshDeveloperPluginRow(filename, sequence) {
 }
 
 function startDeveloperPluginRowPolling(filename) {
+  const plugin = pluginData.find((item) => item.filename === filename);
+  if (!plugin || plugin.enabled !== true || plugin.previous_version === true) return;
   stopDeveloperPluginRowPolling(filename);
   const sequence = ++pluginBuildRowPollSequence;
   pluginBuildRowPolls.set(filename, {timer: null, sequence});
@@ -2969,6 +2971,7 @@ function startDeveloperPluginRowPolling(filename) {
 function syncDeveloperPluginRowPolling() {
   const activeFilenames = new Set();
   for (const plugin of pluginData) {
+    if (plugin.enabled !== true || plugin.previous_version === true) continue;
     const state = plugin.update?.monitoring?.development_status;
     if (!state || !["queued", "building"].includes(state.status)) continue;
     const row = [...document.querySelectorAll(".plugin-row")]
@@ -11118,14 +11121,14 @@ function startPluginBuildLogPolling() {
   stopPluginBuildLogPolling();
   const sequence = pluginBuildLogPollSequence;
   refreshPluginBuildLog(sequence);
-  pluginBuildLogPollTimer = window.setInterval(() => refreshPluginBuildLog(sequence), 500);
+  pluginBuildLogPollTimer = window.setInterval(() => refreshPluginBuildLog(sequence), 2500);
 }
 
 function openPluginBuildLog(index) {
   const plugin = pluginData[index];
   const modal = document.getElementById("plugin-build-log-modal");
   const page = document.querySelector(".plugins-page");
-  if (!plugin || !modal || !page) return;
+  if (!plugin || plugin.enabled !== true || plugin.previous_version === true || !modal || !page) return;
   const config = plugin.update?.monitoring || {};
   pluginBuildLogPreviousFocus = document.activeElement;
   modal.dataset.filename = plugin.filename;

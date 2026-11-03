@@ -1117,9 +1117,18 @@ def developer_plugin_build_status(server_id: int, filename: str, request: Reques
         return JSONResponse({'error': 'Not authenticated'}, status_code=401)
     if not server or not has_permission(user, 'plugins.manage'):
         return JSONResponse({'error': 'Access denied'}, status_code=403)
-    plugin = next((item for item in list_plugins(server) if item['filename'] == filename), None)
+    # This endpoint is polled while a build is running. Keep it to a cheap
+    # directory/stat lookup; full plugin discovery opens every JAR and scans
+    # plugin data directories, which can starve a small Node during a build.
+    plugin = next((item for item in list_plugin_files(server) if item['filename'] == filename), None)
     if not plugin:
         return JSONResponse({'error': 'Installed plugin not found; reload the Plugins page'}, status_code=404)
+    if plugin.get('enabled') is not True or plugin.get('previous_version') is True:
+        return {
+            'project': '',
+            'branch': '',
+            'development_status': None,
+        }
     _, config = monitoring_config(db, server.id, plugin['name'])
     return {
         'project': config.get('project', ''),

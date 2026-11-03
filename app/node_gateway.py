@@ -32,6 +32,7 @@ HOP_BY_HOP_HEADERS = {
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
     "te", "trailers", "transfer-encoding", "upgrade", "host", "set-cookie",
 }
+REMOTE_NODE_FAILURE_STATUSES = {502, 503, 504, 520, 521, 522, 523, 524, 525, 526}
 
 
 @dataclass(frozen=True)
@@ -368,6 +369,14 @@ async def maybe_proxy_remote_server(request: Request):
     from .remote_nodes import record_remote_node_online
 
     record_remote_node_online(node_id)
+
+    if response.status_code in REMOTE_NODE_FAILURE_STATUSES:
+        await response.aclose()
+        await client.aclose()
+        from .remote_nodes import record_remote_node_offline
+
+        record_remote_node_offline(node_id, f"The Node returned HTTP {response.status_code}")
+        return _node_offline_response(request, node_id, server_id)
 
     if response.status_code == 401:
         await response.aclose()
