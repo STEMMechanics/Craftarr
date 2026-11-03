@@ -824,8 +824,6 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .backup-panel-heading { display: grid; min-width: 0; gap: 1px; }
 .backup-panel-heading > span { overflow-wrap: anywhere; }
 .backup-panel-header-actions { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: 6px; }
-.backup-panel-collapse-toggle { display: inline-grid; width: 32px; min-width: 32px; height: 32px; min-height: 32px; flex: 0 0 32px; place-items: center; padding: 0; border: 1px solid #dce7f0; border-radius: 9px; background: #fff; color: #45637d; cursor: pointer; }
-.backup-panel-collapse-toggle:hover { background: #f2f8fd; color: #155ba6; }
 .backup-panel.is-collapsed > :not(.card-header) { display: none !important; }
 .backup-actions { display: flex; align-items: center; gap: 7px; }
 .backup-more-actions { position: relative; }
@@ -849,15 +847,17 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .backup-history-row.is-failed .backup-history-status, .backup-history-row.is-cancelled .backup-history-status { color: var(--sm-red-dark); }
 .backup-retry-button { min-height: 32px; flex: 0 0 auto; padding: 5px 9px; border-color: #e3c17e; background: #fff9ed; color: #8a5a0a; font-size: 11px; }
 .backup-retry-button:hover { background: #fff1d4; }
-.backup-remote-status { display: inline-flex; max-width: 100%; align-items: center; gap: 6px; margin-top: 5px; color: #526a80; font-size: 11px; font-weight: 650; }
+.backup-remote-status { display: inline-flex; max-width: 100%; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 5px; color: #526a80; font-size: 11px; font-weight: 650; }
 .backup-remote-status span { overflow-wrap: anywhere; }
 .backup-remote-status span { display: grid; gap: 1px; }
 .backup-remote-status strong { font-weight: 700; }
 .backup-remote-status small { color: inherit; font-size: 10px; font-weight: 500; overflow-wrap: anywhere; }
-.backup-remote-status.is-error { color: var(--sm-red-dark); }
+.backup-remote-status.is-error { align-items: flex-start; padding: 8px 10px; border: 1px solid #f0c4bf; border-radius: 10px; background: #fff3f2; color: var(--sm-red-dark); font-weight: 700; line-height: 1.35; }
+.backup-remote-status.is-error > i { margin-top: 2px; }
+.backup-remote-status.is-error strong { display: inline; color: inherit; font-size: inherit; }
 .backup-remote-status.is-progress { color: #1866c5; }
 .backup-remote-status.is-success { color: var(--sm-blue-dark); }
-.backup-remote-status .backup-retry-button { margin-left: 3px; }
+.backup-remote-status .backup-retry-button { margin-left: auto; white-space: nowrap; }
 .backup-remote-card .card-header { align-items: flex-start; }
 .card-header-subtitle { margin: 3px 0 0; color: var(--sm-muted); font-size: 11px; font-weight: 400; }
 .remote-backup-list { display: grid; gap: 12px; }
@@ -871,8 +871,12 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .remote-backup-group-header strong { color: var(--sm-text); font-size: 12px; overflow-wrap: anywhere; }
 .remote-backup-group-header small { color: var(--sm-muted); font-size: 10px; overflow-wrap: anywhere; }
 .remote-backup-status, .remote-backup-file-status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; font-size: 10px; font-weight: 700; }
+.remote-backup-status { padding: 5px 8px; border: 1px solid transparent; border-radius: 9px; line-height: 1.2; }
 .remote-backup-status.is-complete, .remote-backup-file-status.is-complete { color: var(--sm-blue-dark); }
+.remote-backup-status.is-complete { border-color: #c9ddf0; background: #edf6ff; }
 .remote-backup-status.is-error, .remote-backup-file-status.is-error { color: var(--sm-red-dark); }
+.remote-backup-status.is-error { border-color: #efc9c5; background: #fff0ef; }
+.remote-backup-file-status.is-error { padding: 4px 7px; border: 1px solid #efc9c5; border-radius: 7px; background: #fff0ef; }
 .remote-backup-file-status.is-muted { color: var(--sm-muted); }
 .remote-backup-file { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border-top: 1px solid #e9eff5; }
 .remote-backup-file-main { display: flex; min-width: 0; align-items: center; gap: 9px; }
@@ -1440,6 +1444,7 @@ html.plugin-build-log-open, body.plugin-build-log-open { overflow: hidden; }
   .backup-more-actions > summary { width: 40px; height: 40px; }
   .backup-history-row { align-items: flex-start; flex-direction: column; }
   .backup-retry-button { width: 100%; }
+  .backup-remote-status .backup-retry-button { margin-left: 0; }
   .backup-panel-header { flex-wrap: wrap; }
   .backup-panel-header-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
   .remote-backup-card .backup-panel-header-actions { padding-top: 3px; }

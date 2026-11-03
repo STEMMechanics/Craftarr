@@ -1,3 +1,5 @@
+import re
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -50,6 +52,48 @@ from .processes import (
     wait_for_console_message,
 )
 router = APIRouter()
+
+_REMOTE_FAILURE_PATTERN = re.compile(
+    r"off-site copy failed|remote copy(?: to .*?)? failed|remote copy was interrupted",
+    re.IGNORECASE,
+)
+_REMOTE_DESTINATION_PATTERN = re.compile(
+    r"remote copy to\s+(.+?)\s+failed:",
+    re.IGNORECASE,
+)
+
+
+def _is_remote_failure_message(message: str | None) -> bool:
+    return bool(_REMOTE_FAILURE_PATTERN.search(message or ""))
+
+
+def _unique_remote_destinations(tasks) -> list[str]:
+    destinations = []
+    for task in tasks:
+        destination = (task.remote_destination or "").strip()
+        if destination and destination not in destinations:
+            destinations.append(destination)
+    return destinations
+
+
+def _job_remote_destination(job: BackupJob, configured_destinations: list[str]) -> str | None:
+    destination = (job.remote_destination or "").strip()
+    if destination:
+        return destination
+    match = _REMOTE_DESTINATION_PATTERN.search(job.message or "")
+    if match:
+        destination = match.group(1).strip()
+        if destination:
+            return destination
+    if _is_remote_failure_message(job.message) and len(configured_destinations) == 1:
+        return configured_destinations[0]
+    return None
+
+
+def _remote_retry_available(job: BackupJob, destination: str | None) -> bool:
+    return bool(destination) and (
+        job.status == "warning" or _is_remote_failure_message(job.message)
+    )
 
 
 @router.post("/api/web/servers/{server_id}/backups/jobs/{job_id}/cancel")
@@ -150,6 +194,12 @@ def backups_data(
         )
 
     backups = list_backups(server)
+    remote_tasks = db.query(ScheduledTask).filter(
+        ScheduledTask.server_id == server.id,
+        ScheduledTask.task_type == "backup",
+        ScheduledTask.remote_destination.isnot(None),
+    ).all()
+    configured_destinations = _unique_remote_destinations(remote_tasks)
     jobs = (
         db.query(BackupJob)
         .filter(
@@ -167,18 +217,20 @@ def backups_data(
         job = latest_job_by_filename.get(backup.get("filename"))
         if not job:
             continue
-        legacy_remote_failure = "off-site copy failed" in (job.message or "").casefold()
-        if not job.remote_destination and not legacy_remote_failure:
+        remote_destination = _job_remote_destination(job, configured_destinations)
+        remote_failure = job.status == "warning" or _is_remote_failure_message(job.message)
+        if not remote_destination and not remote_failure:
             continue
         backup["remote_status"] = (
-            "failed" if job.status == "warning" or legacy_remote_failure
+            "failed" if remote_failure
             else "uploading" if job.status == "uploading"
             else "complete" if job.status == "complete"
             else None
         )
-        backup["remote_destination"] = job.remote_destination
+        backup["remote_destination"] = remote_destination
         backup["remote_job_id"] = job.id
         backup["remote_message"] = job.message
+        backup["remote_retry_available"] = _remote_retry_available(job, remote_destination)
 
     return {
         "running":
@@ -224,6 +276,31 @@ def remote_backups_data(
             "enabled": bool(task.enabled),
         })
 
+    configured_destinations = list(grouped)
+    candidate_jobs = (
+        db.query(BackupJob)
+        .filter(
+            BackupJob.server_id == server.id,
+            BackupJob.filename.isnot(None),
+        )
+        .order_by(BackupJob.id.desc())
+        .limit(100)
+        .all()
+    )
+    retry_jobs_by_destination = {}
+    for job in candidate_jobs:
+        destination = _job_remote_destination(job, configured_destinations)
+        if not _remote_retry_available(job, destination):
+            continue
+        retry_jobs_by_destination.setdefault(destination, []).append({
+            "id": job.id,
+            "filename": job.filename,
+            "label": job.label,
+            "message": job.message,
+        })
+        if len(retry_jobs_by_destination[destination]) >= 10:
+            retry_jobs_by_destination[destination] = retry_jobs_by_destination[destination][:10]
+
     remotes = []
     for destination, item in grouped.items():
         try:
@@ -236,31 +313,8 @@ def remote_backups_data(
                 "summary": {"complete": 0, "partial": 0, "other": 0},
                 "error": str(error),
             }
-        candidate_jobs = (
-            db.query(BackupJob)
-            .filter(
-                BackupJob.server_id == server.id,
-                BackupJob.remote_destination == destination,
-            )
-            .order_by(BackupJob.id.desc())
-            .limit(100)
-            .all()
-        )
-        retry_jobs = []
-        for job in candidate_jobs:
-            message = (job.message or "").casefold()
-            if job.status != "warning" and "off-site copy failed" not in message:
-                continue
-            retry_jobs.append({
-                "id": job.id,
-                "filename": job.filename,
-                "label": job.label,
-                "message": job.message,
-            })
-            if len(retry_jobs) >= 10:
-                break
         inventory["schedules"] = item["schedules"]
-        inventory["retry_jobs"] = retry_jobs
+        inventory["retry_jobs"] = retry_jobs_by_destination.get(destination, [])
         remotes.append(inventory)
     return {"remotes": remotes}
 
@@ -280,8 +334,13 @@ async def retry_remote_backup(
     job = db.get(BackupJob, job_id)
     if not job or job.server_id != server.id:
         return JSONResponse({"error": "Backup job not found"}, status_code=404)
-    legacy_remote_failure = "off-site copy failed" in (job.message or "").casefold()
-    if (job.status != "warning" and not (job.status == "complete" and legacy_remote_failure)) or not job.remote_destination:
+    remote_tasks = db.query(ScheduledTask).filter(
+        ScheduledTask.server_id == server.id,
+        ScheduledTask.task_type == "backup",
+        ScheduledTask.remote_destination.isnot(None),
+    ).all()
+    destination = _job_remote_destination(job, _unique_remote_destinations(remote_tasks))
+    if not _remote_retry_available(job, destination):
         return JSONResponse({"error": "This backup has no remote copy to retry"}, status_code=409)
     if not job.filename or not safe_backup_path(server, job.filename).is_file():
         return JSONResponse({"error": "The local backup archive is no longer available"}, status_code=409)
@@ -290,10 +349,16 @@ async def retry_remote_backup(
     except Exception:
         data = {}
     if isinstance(data, dict) and data.get("destination"):
-        if str(data["destination"]).strip() != job.remote_destination:
+        if str(data["destination"]).strip() != destination:
             return JSONResponse({"error": "The retry destination does not match this backup"}, status_code=400)
-    if legacy_remote_failure and job.status == "complete":
+    changed = False
+    if job.remote_destination != destination:
+        job.remote_destination = destination
+        changed = True
+    if job.status != "warning":
         job.status = "warning"
+        changed = True
+    if changed:
         db.commit()
     if not start_remote_backup_retry(job.id):
         return JSONResponse({"error": "A remote retry is already running"}, status_code=409)
@@ -578,6 +643,12 @@ def backup_jobs_api(
             status_code=403,
         )
 
+    remote_tasks = db.query(ScheduledTask).filter(
+        ScheduledTask.server_id == server.id,
+        ScheduledTask.task_type == "backup",
+        ScheduledTask.remote_destination.isnot(None),
+    ).all()
+    configured_destinations = _unique_remote_destinations(remote_tasks)
     jobs = (
         db.query(BackupJob)
         .filter(
@@ -600,7 +671,11 @@ def backup_jobs_api(
                 "message": job.message,
                 "filename": job.filename,
                 "label": job.label,
-                "remote_destination": job.remote_destination,
+                "remote_destination": _job_remote_destination(job, configured_destinations),
+                "remote_retry_available": _remote_retry_available(
+                    job,
+                    _job_remote_destination(job, configured_destinations),
+                ),
                 "created_at": (
                     job.created_at.isoformat()
                     if job.created_at
