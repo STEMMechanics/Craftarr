@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import selectors
 import shutil
 import subprocess
 import time
@@ -22,6 +23,10 @@ _DESTINATION = re.compile(r"^([A-Za-z0-9_-]+):(.*)$")
 _REMOTE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,50}$")
 _config_lock = threading.RLock()
 _TRANSFER_PERCENT = re.compile(r",\s*(\d{1,3})%[,\s]")
+_TRANSFER_BYTES = re.compile(
+    r"Transferred:\s*([\d.]+)(?:\s*([A-Za-z]+))?\s*/\s*([\d.]+)\s*([A-Za-z]+)",
+    re.IGNORECASE,
+)
 
 
 def managed_config_path() -> Path:
@@ -64,6 +69,36 @@ def _transfer_percent(line: str) -> int | None:
     return min(100, int(match.group(1))) if match else None
 
 
+def _transfer_bytes(line: str) -> tuple[int, int] | None:
+    match = _TRANSFER_BYTES.search(line)
+    if not match:
+        return None
+
+    units = {
+        "b": 1,
+        "byte": 1,
+        "bytes": 1,
+        "kb": 1000,
+        "kib": 1024,
+        "mb": 1000**2,
+        "mib": 1024**2,
+        "gb": 1000**3,
+        "gib": 1024**3,
+        "tb": 1000**4,
+        "tib": 1024**4,
+        "pb": 1000**5,
+        "pib": 1024**5,
+    }
+    try:
+        transferred_unit = (match.group(2) or match.group(4)).casefold()
+        total_unit = match.group(4).casefold()
+        transferred = int(float(match.group(1)) * units[transferred_unit])
+        total = int(float(match.group(3)) * units[total_unit])
+    except (KeyError, ValueError, OverflowError):
+        return None
+    return max(0, transferred), max(0, total)
+
+
 def _run_rclone_with_progress(*args: str, progress_callback) -> None:
     timeout = max(30, int(getenv("CRAFTARR_RCLONE_TIMEOUT_SECONDS", "3600")))
     command = _rclone_command(
@@ -78,24 +113,46 @@ def _run_rclone_with_progress(*args: str, progress_callback) -> None:
         )
     except OSError as error:
         raise OffsiteBackupError("rclone is installed but could not be started") from error
-    deadline = time.monotonic() + timeout
     assert process.stderr is not None
+    selector = selectors.DefaultSelector()
+    selector.register(process.stderr, selectors.EVENT_READ)
+    last_output_at = time.monotonic()
     try:
         while True:
-            line = process.stderr.readline()
-            if line:
-                recent_errors.append(line.strip())
-                recent_errors = recent_errors[-20:]
-                percent = _transfer_percent(line)
-                if percent is not None:
-                    progress_callback(percent)
+            events = selector.select(timeout=1)
+            if events:
+                line = process.stderr.readline()
+                if line:
+                    last_output_at = time.monotonic()
+                    recent_errors.append(line.strip())
+                    recent_errors = recent_errors[-20:]
+                    percent = _transfer_percent(line)
+                    transfer_bytes = _transfer_bytes(line)
+                    if percent is None and transfer_bytes and transfer_bytes[1] > 0:
+                        percent = min(100, round(transfer_bytes[0] * 100 / transfer_bytes[1]))
+                    if percent is not None:
+                        progress_callback(
+                            percent,
+                            transfer_bytes[0] if transfer_bytes else None,
+                            transfer_bytes[1] if transfer_bytes else None,
+                        )
+                elif process.poll() is not None:
+                    break
             elif process.poll() is not None:
                 break
-            if time.monotonic() >= deadline:
-                process.kill()
-                raise OffsiteBackupError("Off-site transfer timed out")
+            if time.monotonic() - last_output_at >= timeout:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                process.wait()
+                raise OffsiteBackupError(
+                    f"Off-site transfer timed out after {timeout} seconds without rclone output"
+                )
         return_code = process.wait()
     finally:
+        selector.unregister(process.stderr)
+        selector.close()
         process.stderr.close()
     if return_code:
         detail = next((line for line in reversed(recent_errors) if line), "rclone failed")
@@ -246,12 +303,20 @@ def upload_backup(server, filename: str, destination: str, progress_callback=Non
     from .backup_manager import safe_backup_path
 
     local_path = safe_backup_path(server, filename)
+    total_bytes = local_path.stat().st_size
     remote_directory = remote_backup_directory(destination, server)
     remote_file = f"{remote_directory}/{local_path.name}"
     arguments = ("copyto", str(local_path), remote_file, "--transfers", "1", "--checkers", "1")
     if progress_callback:
-        _run_rclone_with_progress(*arguments, progress_callback=progress_callback)
-        progress_callback(100)
+        def report_progress(percent, transferred_bytes=None, reported_total_bytes=None):
+            progress_callback(
+                percent,
+                total_bytes * percent // 100 if transferred_bytes is None else transferred_bytes,
+                reported_total_bytes or total_bytes,
+            )
+
+        _run_rclone_with_progress(*arguments, progress_callback=report_progress)
+        progress_callback(100, total_bytes, total_bytes)
     else:
         _run_rclone(*arguments)
     return remote_file

@@ -70,6 +70,11 @@ example:
 CRAFTARR_RCLONE_CONFIG=/etc/craftarr/rclone.conf
 ```
 
+`CRAFTARR_RCLONE_TIMEOUT_SECONDS` is an inactivity limit for an active copy,
+not a maximum total transfer time. rclone emits progress while a large backup
+is moving, so a slow transfer can continue; a copy is stopped only after that
+many seconds pass without any rclone output.
+
 Schedules maintain separate local and off-site retention counts. A successful
 local backup remains available if an upload fails; Craftarr records a warning
 so the upload can be retried or investigated.

@@ -13,6 +13,7 @@ from .player_manager import get_online_players
 from .web_servers import get_accessible_server
 from .permissions import has_permission
 from .automation import manual_backup_starting, next_task_run, start_task_now, validate_cron_expression
+from .backup_jobs import backup_transfer_payload
 from .web_context import build_web_context
 from .web_render import render_page
 from .config import SCHEDULE_TIMEZONE_NAME
@@ -174,6 +175,7 @@ def schedules(server_id: int, request: Request, runs_page: int = 1, runs_per_pag
     backup_jobs = [{
         "id": job.id, "status": job.status, "progress": job.progress,
         "message": job.message, "label": job.label,
+        **backup_transfer_payload(job, server),
     } for job in db.query(BackupJob).filter(
         BackupJob.server_id == server.id,
         BackupJob.status.in_(["queued", "saving", "archiving", "uploading"]),
