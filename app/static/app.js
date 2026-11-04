@@ -5688,6 +5688,7 @@ document.addEventListener(
 let backupData = [];
 let backupPendingRestore = null;
 let backupPendingDelete = null;
+let backupPageRequestInFlight = false;
 
 function remoteFailureReason(message) {
   const text = String(message || "").trim();
@@ -5733,14 +5734,15 @@ async function updateBackupsPage() {
     ".backups-page",
   );
 
-  if (!page) {
+  if (!page || backupPageRequestInFlight) {
     return;
   }
+  backupPageRequestInFlight = true;
 
   try {
     const response = await fetch(
       `/api/web/servers/${page.dataset.serverId}/backups`,
-      { quietConnectionErrors: true },
+      { cache: "no-store", quietConnectionErrors: true },
     );
 
     if (!response.ok) {
@@ -5774,6 +5776,8 @@ async function updateBackupsPage() {
     if (list) {
       list.textContent = "Unable to load backups.";
     }
+  } finally {
+    backupPageRequestInFlight = false;
   }
 }
 
@@ -8681,19 +8685,22 @@ async function saveSystemAlertSettings() {
 
 loadSystemAlertSettings();
 
+let backupJobsRequestInFlight = false;
+
 async function updateBackupJobs() {
   const page = document.querySelector(
     ".backups-page",
   );
 
-  if (!page) {
+  if (!page || backupJobsRequestInFlight) {
     return;
   }
+  backupJobsRequestInFlight = true;
 
   try {
     const response = await fetch(
       `/api/web/servers/${page.dataset.serverId}/backups/jobs`,
-      { quietConnectionErrors: true },
+      { cache: "no-store", quietConnectionErrors: true },
     );
 
     if (!response.ok) {
@@ -8721,6 +8728,8 @@ async function updateBackupJobs() {
     }
   } catch {
     // leave existing UI alone
+  } finally {
+    backupJobsRequestInFlight = false;
   }
 }
 
@@ -8941,8 +8950,8 @@ setInterval(
 
 // Refresh the directory-backed list too, so a page left open across a console
 // restart repopulates when the service returns.
-setInterval(updateBackupsPage, 10000);
-setInterval(updateRemoteBackups, 30000);
+setInterval(updateBackupsPage, 3000);
+setInterval(updateRemoteBackups, 5000);
 
 updateBackupJobs();
 
