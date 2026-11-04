@@ -1,4 +1,5 @@
 import logging
+import re
 import threading
 
 from datetime import datetime
@@ -46,29 +47,76 @@ _cancel_lock = threading.Lock()
 _remote_retry_jobs: set[int] = set()
 _remote_retry_lock = threading.Lock()
 logger = logging.getLogger(__name__)
+_PROGRESS_ETA_PATTERN = re.compile(r"·\s*about\s+(.+?)\s+remaining", re.IGNORECASE)
+_PROGRESS_ETA_PART = re.compile(r"([\d.]+)\s*([wdhms])", re.IGNORECASE)
+
+
+def format_transfer_eta(seconds) -> str | None:
+    if seconds is None:
+        return None
+    try:
+        total = max(0, round(float(seconds)))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    days, remainder = divmod(total, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if days:
+        return f"{days}d {hours}h" if hours else f"{days}d"
+    if hours:
+        return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+    if minutes:
+        return f"{minutes}m {seconds}s" if seconds else f"{minutes}m"
+    return f"{seconds}s"
+
+
+def _progress_eta_seconds(message: str | None) -> int | None:
+    match = _PROGRESS_ETA_PATTERN.search(message or "")
+    if not match:
+        return None
+    multipliers = {"w": 604800, "d": 86400, "h": 3600, "m": 60, "s": 1}
+    parts = list(_PROGRESS_ETA_PART.finditer(match.group(1)))
+    if not parts:
+        return None
+    try:
+        return max(0, round(sum(
+            float(part.group(1)) * multipliers[part.group(2).casefold()]
+            for part in parts
+        )))
+    except (KeyError, ValueError, OverflowError):
+        return None
 
 
 def backup_transfer_payload(job, server) -> dict:
     """Return transient byte totals for an active remote-copy job."""
     if job.status != "uploading" or not job.filename:
-        return {"transferred_bytes": None, "total_bytes": None}
+        return {"transferred_bytes": None, "total_bytes": None, "eta_seconds": None}
     try:
         total_bytes = max(0, int(safe_backup_path(server, job.filename).stat().st_size))
     except (OSError, ValueError):
-        return {"transferred_bytes": None, "total_bytes": None}
+        return {"transferred_bytes": None, "total_bytes": None, "eta_seconds": None}
     progress = max(0, min(100, int(job.progress or 0)))
     return {
         "transferred_bytes": total_bytes * progress // 100,
         "total_bytes": total_bytes,
+        "eta_seconds": _progress_eta_seconds(job.message),
     }
 
 
-def remote_copy_progress_message(prefix: str, percent, transferred_bytes=None, total_bytes=None) -> str:
+def remote_copy_progress_message(
+    prefix: str,
+    percent,
+    transferred_bytes=None,
+    total_bytes=None,
+    eta_seconds=None,
+) -> str:
     progress = max(0, min(100, int(percent or 0)))
+    eta = format_transfer_eta(eta_seconds)
+    eta_suffix = f" · About {eta} remaining" if eta else ""
     if total_bytes:
         transferred = max(0, min(int(transferred_bytes or 0), int(total_bytes)))
-        return f"{prefix} · {format_size(transferred)} / {format_size(int(total_bytes))} · {progress}%"[:255]
-    return f"{prefix} · {progress}%"[:255]
+        return f"{prefix} · {format_size(transferred)} / {format_size(int(total_bytes))} · {progress}%{eta_suffix}"[:255]
+    return f"{prefix} · {progress}%{eta_suffix}"[:255]
 
 
 def request_backup_cancellation(job_id: int) -> bool:
@@ -189,7 +237,7 @@ def run_remote_backup_retry(job_id: int) -> None:
         job.finished_at = None
         db.commit()
 
-        def update_upload_progress(percent, transferred_bytes=None, total_bytes=None):
+        def update_upload_progress(percent, transferred_bytes=None, total_bytes=None, eta_seconds=None):
             current = db.get(BackupJob, job_id)
             if not current:
                 return
@@ -199,6 +247,7 @@ def run_remote_backup_retry(job_id: int) -> None:
                 current.progress,
                 transferred_bytes,
                 total_bytes,
+                eta_seconds,
             )
             db.commit()
 

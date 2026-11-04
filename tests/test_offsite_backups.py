@@ -176,5 +176,13 @@ def test_parses_rclone_one_line_transfer_percentage():
     line = "Transferred: 5242880 / 10485760 Bytes, 50%, 1048576 Bytes/s, ETA 5s"
     assert offsite_backups._transfer_percent(line) == 50
     assert offsite_backups._transfer_bytes(line) == (5242880, 10485760)
+    assert offsite_backups._transfer_eta(line) == 5
     assert offsite_backups._transfer_percent("Checking files") is None
     assert offsite_backups._transfer_bytes("Checking files") is None
+    assert offsite_backups._transfer_eta("Transferred: 1 / 2 Bytes, 50%, ETA -") is None
+
+
+def test_parses_compound_rclone_transfer_eta():
+    assert offsite_backups._transfer_eta(
+        "Transferred: 1.0 GiB / 4.0 GiB, 25%, 20 MiB/s, ETA 1m 23s"
+    ) == 83

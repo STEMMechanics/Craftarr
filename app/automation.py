@@ -423,13 +423,19 @@ def execute_task(task_id: int, *, reschedule: bool = True) -> None:
                 job.finished_at = None
                 db.commit()
                 try:
-                    def update_upload_progress(percent, transferred_bytes=None, total_bytes=None):
+                    def update_upload_progress(
+                        percent,
+                        transferred_bytes=None,
+                        total_bytes=None,
+                        eta_seconds=None,
+                    ):
                         job.progress = max(0, min(100, int(percent)))
                         job.message = remote_copy_progress_message(
                             f"Copying backup to {task.remote_destination}",
                             job.progress,
                             transferred_bytes,
                             total_bytes,
+                            eta_seconds,
                         )
                         db.commit()
 

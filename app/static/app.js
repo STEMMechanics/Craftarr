@@ -5903,15 +5903,15 @@ function formatRemoteBackupSize(bytes) {
   const value = Number(bytes);
   if (!Number.isFinite(value) || value < 0) return "0 B";
   if (value < 1024) return `${Math.round(value)} B`;
-  const units = ["KiB", "MiB", "GiB", "TiB"];
+  const units = ["KB", "MB", "GB", "TB"];
   let size = value;
-  let unit = "bytes";
+  let unit = "B";
   for (const nextUnit of units) {
     size /= 1024;
     unit = nextUnit;
     if (size < 1024 || nextUnit === units.at(-1)) break;
   }
-  return `${size.toFixed(size >= 10 ? 1 : 2)} ${unit}`;
+  return `${size.toFixed(1)} ${unit}`;
 }
 
 function remoteDestinationLabel(destination) {
@@ -8812,15 +8812,31 @@ function formatBackupJobProgress(job) {
   const percent = Number(job?.progress);
   const hasPercent = Number.isFinite(percent);
   const boundedPercent = hasPercent ? Math.max(0, Math.min(100, percent)) : null;
+  const eta = formatBackupJobEta(job?.eta_seconds);
+  const etaLabel = eta ? ` · About ${eta} remaining` : "";
   const total = Number(job?.total_bytes);
   if (job?.status === "uploading" && Number.isFinite(total) && total > 0) {
     const reportedTransferred = Number(job?.transferred_bytes);
     const transferred = Number.isFinite(reportedTransferred)
       ? Math.max(0, Math.min(total, reportedTransferred))
       : total * (boundedPercent || 0) / 100;
-    return `${formatRemoteBackupSize(transferred)} / ${formatRemoteBackupSize(total)} · ${hasPercent ? `${boundedPercent}%` : "In progress"}`;
+    return `${formatRemoteBackupSize(transferred)} / ${formatRemoteBackupSize(total)} · ${hasPercent ? `${boundedPercent}%` : "In progress"}${etaLabel}`;
   }
-  return hasPercent ? `${boundedPercent}%` : "In progress";
+  return `${hasPercent ? `${boundedPercent}%` : "In progress"}${etaLabel}`;
+}
+
+function formatBackupJobEta(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value < 0) return "";
+  const total = Math.max(0, Math.round(value));
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const remainingSeconds = total % 60;
+  if (days) return `${days}d${hours ? ` ${hours}h` : ""}`;
+  if (hours) return `${hours}h${minutes ? ` ${minutes}m` : ""}`;
+  if (minutes) return `${minutes}m${remainingSeconds ? ` ${remainingSeconds}s` : ""}`;
+  return `${remainingSeconds}s`;
 }
 
 function renderBackupJobHistory(jobs) {
@@ -8861,7 +8877,7 @@ function renderBackupJobHistory(jobs) {
         <strong>${escapeHtml(job.filename || job.label || "Backup")}</strong>
         <small>${escapeHtml(detail)} · ${escapeHtml(formatBrowserTimestamp(job.finished_at || job.created_at))}</small>
       </div>
-      ${retryable ? `<button type="button" class="button backup-retry-button" onclick="retryRemoteBackup(${Number(job.id)}, this)"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Try remote copy</button>` : ""}
+      ${retryable ? `<button type="button" class="button backup-retry-button" onclick="retryRemoteBackup(${Number(job.id)}, this)"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Retry</button>` : ""}
     </div>`;
   }).join("");
 }
