@@ -27,6 +27,8 @@ _TRANSFER_BYTES = re.compile(
     r"Transferred:\s*([\d.]+)(?:\s*([A-Za-z]+))?\s*/\s*([\d.]+)\s*([A-Za-z]+)",
     re.IGNORECASE,
 )
+_TRANSFER_ETA = re.compile(r"\bETA\s+(.+?)(?=,\s|$)", re.IGNORECASE)
+_ETA_PART = re.compile(r"([\d.]+)\s*([wdhms])", re.IGNORECASE)
 
 
 def managed_config_path() -> Path:
@@ -99,6 +101,27 @@ def _transfer_bytes(line: str) -> tuple[int, int] | None:
     return max(0, transferred), max(0, total)
 
 
+def _transfer_eta(line: str) -> int | None:
+    match = _TRANSFER_ETA.search(line)
+    if not match:
+        return None
+    value = match.group(1).strip()
+    if value.casefold() in {"-", "?", "unknown"}:
+        return None
+    multipliers = {"w": 604800, "d": 86400, "h": 3600, "m": 60, "s": 1}
+    parts = list(_ETA_PART.finditer(value))
+    if not parts:
+        return None
+    try:
+        seconds = sum(
+            float(part.group(1)) * multipliers[part.group(2).casefold()]
+            for part in parts
+        )
+    except (KeyError, ValueError, OverflowError):
+        return None
+    return max(0, round(seconds))
+
+
 def _run_rclone_with_progress(*args: str, progress_callback) -> None:
     timeout = max(30, int(getenv("CRAFTARR_RCLONE_TIMEOUT_SECONDS", "3600")))
     command = _rclone_command(
@@ -128,6 +151,7 @@ def _run_rclone_with_progress(*args: str, progress_callback) -> None:
                     recent_errors = recent_errors[-20:]
                     percent = _transfer_percent(line)
                     transfer_bytes = _transfer_bytes(line)
+                    eta_seconds = _transfer_eta(line)
                     if percent is None and transfer_bytes and transfer_bytes[1] > 0:
                         percent = min(100, round(transfer_bytes[0] * 100 / transfer_bytes[1]))
                     if percent is not None:
@@ -135,6 +159,7 @@ def _run_rclone_with_progress(*args: str, progress_callback) -> None:
                             percent,
                             transfer_bytes[0] if transfer_bytes else None,
                             transfer_bytes[1] if transfer_bytes else None,
+                            eta_seconds,
                         )
                 elif process.poll() is not None:
                     break
@@ -308,15 +333,21 @@ def upload_backup(server, filename: str, destination: str, progress_callback=Non
     remote_file = f"{remote_directory}/{local_path.name}"
     arguments = ("copyto", str(local_path), remote_file, "--transfers", "1", "--checkers", "1")
     if progress_callback:
-        def report_progress(percent, transferred_bytes=None, reported_total_bytes=None):
+        def report_progress(
+            percent,
+            transferred_bytes=None,
+            reported_total_bytes=None,
+            eta_seconds=None,
+        ):
             progress_callback(
                 percent,
                 total_bytes * percent // 100 if transferred_bytes is None else transferred_bytes,
                 reported_total_bytes or total_bytes,
+                eta_seconds,
             )
 
         _run_rclone_with_progress(*arguments, progress_callback=report_progress)
-        progress_callback(100, total_bytes, total_bytes)
+        progress_callback(100, total_bytes, total_bytes, 0)
     else:
         _run_rclone(*arguments)
     return remote_file

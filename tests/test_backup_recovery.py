@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app import backup_manager
-from app.backup_jobs import fail_abandoned_backup_jobs
+from app.backup_jobs import fail_abandoned_backup_jobs, remote_copy_progress_message
 from app.database import Base
 from app.models import BackupJob, ScheduledTask, Server, TaskRun
 
@@ -65,6 +65,18 @@ def test_restart_keeps_remote_upload_retryable(db, tmp_path):
     assert fail_abandoned_backup_jobs(db) == 1
     assert job.status == "warning"
     assert "remote copy was interrupted" in job.message
+
+
+def test_remote_progress_message_uses_consistent_size_and_eta():
+    message = remote_copy_progress_message(
+        "Copying backup to sftp:backups",
+        35,
+        int(1.28 * 1024**3),
+        4 * 1024**3,
+        123,
+    )
+
+    assert message == "Copying backup to sftp:backups · 1.3 GB / 4.0 GB · 35% · About 2m 3s remaining"
 
 
 def test_disk_full_fails_and_removes_partial_archive(tmp_path, monkeypatch):
