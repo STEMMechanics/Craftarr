@@ -820,11 +820,13 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .backup-main > i { display: grid; width: 42px; height: 42px; flex: 0 0 42px; place-items: center; border-radius: 12px; background: #eaf4ff; color: #1866c5; font-size: 17px; }
 .backup-main strong { display: block; overflow-wrap: anywhere; color: var(--sm-text); font-size: 13px; }
 .backup-main small { font-size: 11px; }
-.backup-panel-header { align-items: flex-start; }
-.backup-panel-heading { display: grid; min-width: 0; gap: 1px; }
+.backup-panel-summary > .backup-panel-heading { display: grid; min-width: 0; flex: 1 1 auto; gap: 1px; }
+.backup-panel-summary > .backup-panel-heading > span { overflow-wrap: anywhere; }
+.backup-panel-summary > .backup-panel-heading > small { color: var(--sm-muted); font-size: 11px; font-weight: 400; overflow-wrap: anywhere; }
 .backup-panel-heading > span { overflow-wrap: anywhere; }
 .backup-panel-header-actions { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: 6px; }
-.backup-panel.is-collapsed > :not(.card-header) { display: none !important; }
+.backup-panel-summary > .backup-panel-header-actions > .server-danger-zone-chevron { color: var(--sm-muted); }
+.backup-panel-body { padding: 0 19px 19px; border-top: 1px solid #e6edf3; }
 .backup-actions { display: flex; align-items: center; gap: 7px; }
 .backup-more-actions { position: relative; }
 .backup-more-actions > summary { display: grid; width: 42px; height: 42px; place-items: center; border: 1px solid var(--sm-border); border-radius: 12px; color: #34536e; cursor: pointer; list-style: none; }
@@ -834,7 +836,7 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .backup-more-menu button:hover { background: #fff2f1; }
 .backup-more-menu button.backup-retry-menu-item { color: var(--sm-orange-dark); }
 .backup-more-menu button.backup-retry-menu-item:hover { background: #fff7e8; }
-.backup-activity-card { padding-bottom: 8px; }
+.backup-activity-card > .backup-panel-body { padding-bottom: 8px; }
 .backup-job-history { display: grid; gap: 0; }
 .backup-history-row { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 0; border-top: 1px solid #e9eff5; }
 .backup-history-main { display: grid; min-width: 0; gap: 3px; }
@@ -847,6 +849,7 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .backup-history-row.is-failed .backup-history-status, .backup-history-row.is-cancelled .backup-history-status { color: var(--sm-red-dark); }
 .backup-retry-button { min-height: 32px; flex: 0 0 auto; padding: 5px 9px; border-color: #e3c17e; background: #fff9ed; color: #8a5a0a; font-size: 11px; }
 .backup-retry-button:hover { background: #fff1d4; }
+.backup-history-row .backup-retry-button { min-height: 24px; gap: 5px; padding: 2px 6px; border-radius: 8px; font-size: 10px; white-space: nowrap; }
 .backup-remote-status { display: inline-flex; max-width: 100%; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 5px; color: #526a80; font-size: 11px; font-weight: 650; }
 .backup-remote-status span { overflow-wrap: anywhere; }
 .backup-remote-status span { display: grid; gap: 1px; }
@@ -857,25 +860,19 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .backup-remote-status.is-error strong { display: inline; color: inherit; font-size: inherit; }
 .backup-remote-status.is-progress { color: #1866c5; }
 .backup-remote-status.is-success { color: var(--sm-blue-dark); }
-.backup-remote-status .backup-retry-button { margin-left: auto; white-space: nowrap; }
-.backup-remote-card .card-header { align-items: flex-start; }
 .card-header-subtitle { margin: 3px 0 0; color: var(--sm-muted); font-size: 11px; font-weight: 400; }
 .remote-backup-list { display: grid; gap: 12px; }
 .remote-backup-card { border-color: #c9ddf0; background: #fbfdff; }
 .remote-backup-card.has-error { border-color: #efc9c5; background: #fffaf9; }
-.remote-backup-card.is-collapsed { background: #fbfdff; }
 .remote-backup-group { padding: 12px; border: 1px solid #e2ebf4; border-radius: 12px; background: #fbfdff; }
 .remote-backup-group.has-error { border-color: #efc9c5; background: #fffaf9; }
 .remote-backup-group-header { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 9px; }
 .remote-backup-group-header > div { display: grid; min-width: 0; gap: 3px; }
 .remote-backup-group-header strong { color: var(--sm-text); font-size: 12px; overflow-wrap: anywhere; }
 .remote-backup-group-header small { color: var(--sm-muted); font-size: 10px; overflow-wrap: anywhere; }
-.remote-backup-status, .remote-backup-file-status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; font-size: 10px; font-weight: 700; }
-.remote-backup-status { padding: 5px 8px; border: 1px solid transparent; border-radius: 9px; line-height: 1.2; }
-.remote-backup-status.is-complete, .remote-backup-file-status.is-complete { color: var(--sm-blue-dark); }
-.remote-backup-status.is-complete { border-color: #c9ddf0; background: #edf6ff; }
-.remote-backup-status.is-error, .remote-backup-file-status.is-error { color: var(--sm-red-dark); }
-.remote-backup-status.is-error { border-color: #efc9c5; background: #fff0ef; }
+.remote-backup-file-status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; font-size: 10px; font-weight: 700; }
+.remote-backup-file-status.is-complete { color: var(--sm-blue-dark); }
+.remote-backup-file-status.is-error { color: var(--sm-red-dark); }
 .remote-backup-file-status.is-error { padding: 4px 7px; border: 1px solid #efc9c5; border-radius: 7px; background: #fff0ef; }
 .remote-backup-file-status.is-muted { color: var(--sm-muted); }
 .remote-backup-file { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border-top: 1px solid #e9eff5; }
@@ -885,13 +882,9 @@ input::placeholder, textarea::placeholder { color: #6c8092; opacity: 1; }
 .remote-backup-file-main > div { display: grid; min-width: 0; gap: 2px; }
 .remote-backup-file-main strong { color: var(--sm-text); font-size: 11px; overflow-wrap: anywhere; }
 .remote-backup-file-main small { color: var(--sm-muted); font-size: 10px; }
-.remote-backup-error { display: flex; align-items: flex-start; gap: 8px; padding: 9px; border-radius: 9px; background: #fff0ef; color: var(--sm-red-dark); font-size: 11px; line-height: 1.45; }
+.remote-backup-error { display: flex; align-items: flex-start; gap: 8px; padding: 9px; border: 1px solid #efc9c5; border-radius: 9px; background: #fff0ef; color: var(--sm-red-dark); font-size: 11px; line-height: 1.45; }
 .remote-backup-error i { margin-top: 2px; }
-.remote-backup-retry-list { display: grid; gap: 7px; margin-top: 10px; padding: 10px; border: 1px solid #f0d4a2; border-radius: 10px; background: #fffaf0; }
-.remote-backup-retry-heading { display: flex; align-items: center; gap: 6px; color: var(--sm-orange-dark); font-size: 11px; font-weight: 700; }
-.remote-backup-retry-row { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; padding-top: 7px; border-top: 1px solid #f1e3c8; }
-.remote-backup-retry-row > span { min-width: 0; overflow-wrap: anywhere; color: var(--sm-text); font-size: 11px; }
-.remote-backup-retry-row .backup-retry-button { min-width: 72px; }
+.remote-backup-panel-body { padding-bottom: 19px; }
 .main-area:has(.console-page) { display: flex; height: calc(100dvh - 1rem); min-height: 0; flex-direction: column; overflow: hidden; }
 .main-area:has(.console-page) > #topbar { flex: 0 0 auto; }
 .main-area:has(.console-page) > .page-content { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; overflow: hidden; padding-bottom: 16px; }
@@ -1444,12 +1437,11 @@ html.plugin-build-log-open, body.plugin-build-log-open { overflow: hidden; }
   .backup-more-actions > summary { width: 40px; height: 40px; }
   .backup-history-row { align-items: flex-start; flex-direction: column; }
   .backup-retry-button { width: 100%; }
-  .backup-remote-status .backup-retry-button { margin-left: 0; }
-  .backup-panel-header { flex-wrap: wrap; }
-  .backup-panel-header-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
-  .remote-backup-card .backup-panel-header-actions { padding-top: 3px; }
+  .backup-history-row .backup-retry-button { width: auto; }
+  .backup-panel-summary { align-items: flex-start; flex-wrap: wrap; }
+  .backup-panel-summary > .backup-panel-header-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
   .remote-backup-file { align-items: flex-start; flex-direction: column; }
-  .remote-backup-status, .remote-backup-file-status { align-self: flex-start; }
+  .remote-backup-file-status { align-self: flex-start; }
   .settings-page .card-header { align-items: center; flex-wrap: wrap; }
   .settings-page .card-header > span:first-child { min-width: 0; flex: 1 1 calc(100% - 50px); }
   .settings-page .card-header .settings-collapse-toggle { order: 1; }

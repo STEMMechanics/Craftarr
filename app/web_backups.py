@@ -37,6 +37,7 @@ from .web_servers import (
 from .permissions import has_permission
 
 from .backup_jobs import (
+    backup_transfer_payload,
     request_backup_cancellation,
     start_backup_job,
     start_remote_backup_retry,
@@ -276,31 +277,6 @@ def remote_backups_data(
             "enabled": bool(task.enabled),
         })
 
-    configured_destinations = list(grouped)
-    candidate_jobs = (
-        db.query(BackupJob)
-        .filter(
-            BackupJob.server_id == server.id,
-            BackupJob.filename.isnot(None),
-        )
-        .order_by(BackupJob.id.desc())
-        .limit(100)
-        .all()
-    )
-    retry_jobs_by_destination = {}
-    for job in candidate_jobs:
-        destination = _job_remote_destination(job, configured_destinations)
-        if not _remote_retry_available(job, destination):
-            continue
-        retry_jobs_by_destination.setdefault(destination, []).append({
-            "id": job.id,
-            "filename": job.filename,
-            "label": job.label,
-            "message": job.message,
-        })
-        if len(retry_jobs_by_destination[destination]) >= 10:
-            retry_jobs_by_destination[destination] = retry_jobs_by_destination[destination][:10]
-
     remotes = []
     for destination, item in grouped.items():
         try:
@@ -314,7 +290,6 @@ def remote_backups_data(
                 "error": str(error),
             }
         inventory["schedules"] = item["schedules"]
-        inventory["retry_jobs"] = retry_jobs_by_destination.get(destination, [])
         remotes.append(inventory)
     return {"remotes": remotes}
 
@@ -671,6 +646,7 @@ def backup_jobs_api(
                 "message": job.message,
                 "filename": job.filename,
                 "label": job.label,
+                **backup_transfer_payload(job, server),
                 "remote_destination": _job_remote_destination(job, configured_destinations),
                 "remote_retry_available": _remote_retry_available(
                     job,

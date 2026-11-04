@@ -5702,43 +5702,29 @@ function remoteFailureReason(message) {
     .trim();
 }
 
-function toggleBackupPanel(button) {
-  const panel = button?.closest(".backup-panel");
-  if (!panel) return;
-  const collapsed = !panel.classList.contains("is-collapsed");
-  panel.classList.toggle("is-collapsed", collapsed);
-  const title = panel.dataset.backupPanelTitle || "Backup panel";
-  button.setAttribute("aria-expanded", String(!collapsed));
-  button.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${title}`);
-  button.title = `${collapsed ? "Expand" : "Collapse"} ${title}`;
-  const icon = button.querySelector("i");
-  if (icon) icon.className = `fa-solid fa-chevron-${collapsed ? "down" : "up"}`;
-  try {
-    localStorage.setItem(`craftarr.backupPanelCollapsed.${panel.dataset.backupPanelKey || title}`, String(collapsed));
-  } catch {
-    // Keep the panel usable when browser storage is disabled.
-  }
-}
-
 function initializeBackupPanels() {
   const page = document.querySelector(".backups-page");
   if (!page) return;
   page.querySelectorAll(":scope .backup-panel").forEach((panel) => {
-    const button = panel.querySelector(":scope > .card-header .backup-panel-collapse-toggle");
-    if (!button) return;
     const title = panel.dataset.backupPanelTitle || "Backup panel";
-    let collapsed = false;
-    try {
-      collapsed = localStorage.getItem(`craftarr.backupPanelCollapsed.${panel.dataset.backupPanelKey || title}`) === "true";
-    } catch {
-      collapsed = false;
+    const key = `craftarr.backupPanelCollapsed.${panel.dataset.backupPanelKey || title}`;
+    if (panel.dataset.backupPanelInitialized !== "true") {
+      let collapsed = false;
+      try {
+        collapsed = localStorage.getItem(key) === "true";
+      } catch {
+        collapsed = false;
+      }
+      panel.open = !collapsed;
+      panel.addEventListener("toggle", () => {
+        try {
+          localStorage.setItem(key, String(!panel.open));
+        } catch {
+          // The native details panel remains usable when storage is disabled.
+        }
+      });
+      panel.dataset.backupPanelInitialized = "true";
     }
-    panel.classList.toggle("is-collapsed", collapsed);
-    button.setAttribute("aria-expanded", String(!collapsed));
-    button.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${title}`);
-    button.title = `${collapsed ? "Expand" : "Collapse"} ${title}`;
-    const icon = button.querySelector("i");
-    if (icon) icon.className = `fa-solid fa-chevron-${collapsed ? "down" : "up"}`;
   });
 }
 
@@ -5838,7 +5824,6 @@ function renderBackups(
         ? `<div class="backup-remote-status is-error" title="${escapeHtml(backup.remote_message || "Remote copy failed")}">
              <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
              <span><strong>Remote copy failed, Local backup complete</strong>${failureReason ? `<small>Reason: ${escapeHtml(failureReason)}</small>` : ""}</span>
-             ${canRetryRemoteCopy ? `<button type="button" class="button backup-retry-button" onclick="retryRemoteBackup(${Number(backup.remote_job_id)}, this)"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Retry remote copy</button>` : ""}
            </div>`
         : remoteStatus === "uploading"
           ? `<div class="backup-remote-status is-progress"><i class="fa-solid fa-cloud-arrow-up" aria-hidden="true"></i><span>Remote copy in progress${backup.remote_destination ? ` · ${escapeHtml(backup.remote_destination)}` : ""}</span></div>`
@@ -5894,7 +5879,7 @@ function renderBackups(
                         <details class="backup-more-actions">
                           <summary aria-label="More actions for ${escapeHtml(backup.filename)}" title="More actions"><i class="fa-solid fa-ellipsis" aria-hidden="true"></i></summary>
                           <div class="backup-more-menu">
-                            ${canRetryRemoteCopy ? `<button type="button" class="backup-retry-menu-item" onclick="this.closest('details').open=false; retryRemoteBackup(${Number(backup.remote_job_id)}, this)"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Try remote copy again</button>` : ""}
+                            ${canRetryRemoteCopy ? `<button type="button" class="backup-retry-menu-item" onclick="this.closest('details').open=false; retryRemoteBackup(${Number(backup.remote_job_id)}, this)"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Retry remote copy</button>` : ""}
                             <button type="button" onclick="this.closest('details').open=false; openDeleteBackupModal('${escapeJs(backup.filename)}')"><i class="fa-solid fa-trash" aria-hidden="true"></i> Delete backup</button>
                           </div>
                         </details>
@@ -5912,8 +5897,8 @@ let remoteBackupRequestInFlight = false;
 
 function formatRemoteBackupSize(bytes) {
   const value = Number(bytes);
-  if (!Number.isFinite(value) || value < 0) return "0 bytes";
-  if (value < 1024) return `${Math.round(value)} bytes`;
+  if (!Number.isFinite(value) || value < 0) return "0 B";
+  if (value < 1024) return `${Math.round(value)} B`;
   const units = ["KiB", "MiB", "GiB", "TiB"];
   let size = value;
   let unit = "bytes";
@@ -5941,19 +5926,13 @@ function renderRemoteBackups(remotes) {
     const summary = remote.summary || {};
     const files = Array.isArray(remote.files) ? remote.files : [];
     const schedules = Array.isArray(remote.schedules) ? remote.schedules : [];
-    const retryJobs = Array.isArray(remote.retry_jobs) ? remote.retry_jobs : [];
-    const canManage = document.querySelector(".backups-page")?.dataset.canManage === "true";
     const partialCount = Number(summary.partial || 0);
     const otherCount = Number(summary.other || 0);
-    const completeCount = Number(summary.complete || 0);
     const hasFileErrors = partialCount > 0 || otherCount > 0;
     const hasError = Boolean(remote.error) || hasFileErrors;
     const scheduleText = schedules.length
       ? `Used by ${schedules.map((schedule) => `${escapeHtml(schedule.name || "Backup schedule")}${schedule.enabled ? "" : " (disabled)"}`).join(", ")}`
       : "Not used by an active backup schedule";
-    const headerStatus = remote.error
-      ? '<span class="remote-backup-status is-error"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>Remote unavailable</span>'
-      : `<span class="remote-backup-status ${hasFileErrors ? "is-error" : "is-complete"}"><i class="fa-solid ${hasFileErrors ? "fa-triangle-exclamation" : "fa-circle-check"}" aria-hidden="true"></i>${completeCount} complete${partialCount ? ` · ${partialCount} partial` : ""}${otherCount ? ` · ${otherCount} other` : ""}</span>`;
     const fileMarkup = files.length
       ? files.map((file) => {
         const partial = file.status === "partial";
@@ -5971,32 +5950,24 @@ function renderRemoteBackups(remotes) {
         </div>`;
       }).join("")
       : '<div class="empty-message">No remote files found for this server.</div>';
-    const retryMarkup = retryJobs.length
-      ? `<div class="remote-backup-retry-list">
-          <div class="remote-backup-retry-heading"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><span>Remote copies needing attention</span></div>
-          ${retryJobs.map((job) => `<div class="remote-backup-retry-row"><span>${escapeHtml(job.filename || job.label || "Local backup")}</span>${canManage ? `<button type="button" class="button backup-retry-button" onclick="retryRemoteBackup(${Number(job.id)}, this)"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Retry remote copy</button>` : ""}</div>`).join("")}
-        </div>`
-      : "";
     const destination = remoteDestinationLabel(remote.destination);
     const directoryText = remote.directory ? `${escapeHtml(remote.directory)} · ${scheduleText}` : scheduleText;
-    return `<section class="overview-card backup-panel remote-backup-card ${hasError ? "has-error" : "is-complete"}" data-backup-panel-key="remote-${escapeHtml(destination)}" data-backup-panel-title="Remote backups — ${escapeHtml(destination)}">
-      <div class="card-header backup-panel-header">
-        <div class="backup-panel-heading">
+    return `<details class="overview-card backup-panel remote-backup-card server-danger-zone ${hasError ? "has-error" : ""}" data-backup-panel-key="remote-${escapeHtml(destination)}" data-backup-panel-title="Remote backups — ${escapeHtml(destination)}" open>
+      <summary class="server-danger-zone-summary backup-panel-summary">
+        <span class="backup-panel-heading">
           <span>Remote backups — ${escapeHtml(destination)}</span>
-          <p class="card-header-subtitle">${directoryText}</p>
-        </div>
-        <div class="backup-panel-header-actions">
-          ${headerStatus}
-          <button class="button panel-header-button" type="button" onclick="updateRemoteBackups()"><i class="fa-solid fa-rotate" aria-hidden="true"></i><span>Refresh</span></button>
-          <a class="button panel-header-button" href="/settings#offsite-backup-settings"><i class="fa-solid fa-pen-to-square" aria-hidden="true"></i><span>Edit</span></a>
-          <button class="settings-collapse-toggle backup-panel-collapse-toggle" type="button" aria-expanded="true" aria-label="Collapse Remote backups — ${escapeHtml(destination)}" title="Collapse Remote backups — ${escapeHtml(destination)}" onclick="toggleBackupPanel(this)"><i class="fa-solid fa-chevron-up" aria-hidden="true"></i></button>
-        </div>
-      </div>
-      <div class="remote-backup-panel-body">
+          <small class="card-header-subtitle">${directoryText}</small>
+        </span>
+        <span class="backup-panel-header-actions">
+          <button class="button panel-header-button" type="button" onclick="event.preventDefault(); event.stopPropagation(); updateRemoteBackups()"><i class="fa-solid fa-rotate" aria-hidden="true"></i><span>Refresh</span></button>
+          <a class="button panel-header-button" href="/settings#offsite-backup-settings" onclick="event.stopPropagation()"><i class="fa-solid fa-pen-to-square" aria-hidden="true"></i><span>Edit</span></a>
+          <i class="fa-solid fa-chevron-down server-danger-zone-chevron" aria-hidden="true"></i>
+        </span>
+      </summary>
+      <div class="backup-panel-body remote-backup-panel-body">
         ${remote.error ? `<div class="remote-backup-error"><i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i><span>${escapeHtml(remote.error)}</span></div>` : fileMarkup}
-        ${retryMarkup}
       </div>
-    </section>`;
+    </details>`;
   }).join("");
   initializeBackupPanels();
 }
@@ -8803,7 +8774,7 @@ function renderBackupJobs(
                         </div>
 
                         <strong>
-                            ${Number.isFinite(Number(job.progress)) ? `${Number(job.progress)}%` : "In progress"}
+                            ${escapeHtml(formatBackupJobProgress(job))}
                         </strong>
 
                     </div>
@@ -8826,6 +8797,21 @@ function renderBackupJobs(
             `,
   )
     .join("");
+}
+
+function formatBackupJobProgress(job) {
+  const percent = Number(job?.progress);
+  const hasPercent = Number.isFinite(percent);
+  const boundedPercent = hasPercent ? Math.max(0, Math.min(100, percent)) : null;
+  const total = Number(job?.total_bytes);
+  if (job?.status === "uploading" && Number.isFinite(total) && total > 0) {
+    const reportedTransferred = Number(job?.transferred_bytes);
+    const transferred = Number.isFinite(reportedTransferred)
+      ? Math.max(0, Math.min(total, reportedTransferred))
+      : total * (boundedPercent || 0) / 100;
+    return `${formatRemoteBackupSize(transferred)} / ${formatRemoteBackupSize(total)} · ${hasPercent ? `${boundedPercent}%` : "In progress"}`;
+  }
+  return hasPercent ? `${boundedPercent}%` : "In progress";
 }
 
 function renderBackupJobHistory(jobs) {
@@ -8866,7 +8852,7 @@ function renderBackupJobHistory(jobs) {
         <strong>${escapeHtml(job.filename || job.label || "Backup")}</strong>
         <small>${escapeHtml(detail)} · ${escapeHtml(formatBrowserTimestamp(job.finished_at || job.created_at))}</small>
       </div>
-      ${retryable ? `<button type="button" class="button backup-retry-button" onclick="retryRemoteBackup(${Number(job.id)}, this)"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Try remote copy again</button>` : ""}
+      ${retryable ? `<button type="button" class="button backup-retry-button" onclick="retryRemoteBackup(${Number(job.id)}, this)"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Try remote copy</button>` : ""}
     </div>`;
   }).join("");
 }
@@ -10372,7 +10358,7 @@ async function loadServerSchedules() {
     if (progress) progress.innerHTML = activeJobs.map((job) => {
       const uploading = job.status === "uploading";
       const percent = Number(job.progress || 0);
-      return `<div class="scheduled-backup-job"><div class="backup-job-header"><div><strong>${uploading ? "Copying backup off-site" : "Backup in progress"}</strong><small>${escapeHtml(job.message || job.status)}</small></div><strong>${Number.isFinite(percent) ? `${percent}%` : "In progress"}</strong></div><div class="upload-progress-track"><div class="upload-progress-bar" style="width: ${Number.isFinite(percent) ? percent : 0}%"></div></div></div>`;
+      return `<div class="scheduled-backup-job"><div class="backup-job-header"><div><strong>${uploading ? "Copying backup off-site" : "Backup in progress"}</strong><small>${escapeHtml(job.message || job.status)}</small></div><strong>${escapeHtml(formatBackupJobProgress(job))}</strong></div><div class="upload-progress-track"><div class="upload-progress-bar" style="width: ${Number.isFinite(percent) ? percent : 0}%"></div></div></div>`;
     }).join("");
     const runs = document.getElementById("schedule-runs");
     const recentRuns = [...(data.runs || [])].sort(

@@ -173,7 +173,8 @@ def test_website_can_remove_remote(monkeypatch, tmp_path):
 
 
 def test_parses_rclone_one_line_transfer_percentage():
-    assert offsite_backups._transfer_percent(
-        "Transferred: 5242880 / 10485760 Bytes, 50%, 1048576 Bytes/s, ETA 5s"
-    ) == 50
+    line = "Transferred: 5242880 / 10485760 Bytes, 50%, 1048576 Bytes/s, ETA 5s"
+    assert offsite_backups._transfer_percent(line) == 50
+    assert offsite_backups._transfer_bytes(line) == (5242880, 10485760)
     assert offsite_backups._transfer_percent("Checking files") is None
+    assert offsite_backups._transfer_bytes("Checking files") is None

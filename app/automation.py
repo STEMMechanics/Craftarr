@@ -11,7 +11,7 @@ from .env import getenv
 import psutil
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .backup_jobs import run_backup_job
+from .backup_jobs import remote_copy_progress_message, run_backup_job
 from .backup_manager import list_backups, delete_backup
 from .database import SessionLocal
 from .models import BackupJob, PendingAutomaticUpdate, PendingIdleRestart, ScheduledTask, Server, ServerMetric, ServerUpdateCheck, TaskRun, UpdateMonitorLease
@@ -423,9 +423,14 @@ def execute_task(task_id: int, *, reschedule: bool = True) -> None:
                 job.finished_at = None
                 db.commit()
                 try:
-                    def update_upload_progress(percent):
+                    def update_upload_progress(percent, transferred_bytes=None, total_bytes=None):
                         job.progress = max(0, min(100, int(percent)))
-                        job.message = f"Copying backup to {task.remote_destination} · {job.progress}%"
+                        job.message = remote_copy_progress_message(
+                            f"Copying backup to {task.remote_destination}",
+                            job.progress,
+                            transferred_bytes,
+                            total_bytes,
+                        )
                         db.commit()
 
                     remote_file = upload_backup(

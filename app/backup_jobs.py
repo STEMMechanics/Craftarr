@@ -6,6 +6,7 @@ from datetime import datetime
 from .backup_manager import (
     check_backup_space,
     create_backup,
+    format_size,
     safe_backup_path,
 )
 
@@ -45,6 +46,29 @@ _cancel_lock = threading.Lock()
 _remote_retry_jobs: set[int] = set()
 _remote_retry_lock = threading.Lock()
 logger = logging.getLogger(__name__)
+
+
+def backup_transfer_payload(job, server) -> dict:
+    """Return transient byte totals for an active remote-copy job."""
+    if job.status != "uploading" or not job.filename:
+        return {"transferred_bytes": None, "total_bytes": None}
+    try:
+        total_bytes = max(0, int(safe_backup_path(server, job.filename).stat().st_size))
+    except (OSError, ValueError):
+        return {"transferred_bytes": None, "total_bytes": None}
+    progress = max(0, min(100, int(job.progress or 0)))
+    return {
+        "transferred_bytes": total_bytes * progress // 100,
+        "total_bytes": total_bytes,
+    }
+
+
+def remote_copy_progress_message(prefix: str, percent, transferred_bytes=None, total_bytes=None) -> str:
+    progress = max(0, min(100, int(percent or 0)))
+    if total_bytes:
+        transferred = max(0, min(int(transferred_bytes or 0), int(total_bytes)))
+        return f"{prefix} · {format_size(transferred)} / {format_size(int(total_bytes))} · {progress}%"[:255]
+    return f"{prefix} · {progress}%"[:255]
 
 
 def request_backup_cancellation(job_id: int) -> bool:
@@ -165,12 +189,17 @@ def run_remote_backup_retry(job_id: int) -> None:
         job.finished_at = None
         db.commit()
 
-        def update_upload_progress(percent):
+        def update_upload_progress(percent, transferred_bytes=None, total_bytes=None):
             current = db.get(BackupJob, job_id)
             if not current:
                 return
             current.progress = max(0, min(100, int(percent)))
-            current.message = f"Retrying remote copy to {destination} · {current.progress}%"[:255]
+            current.message = remote_copy_progress_message(
+                f"Retrying remote copy to {destination}",
+                current.progress,
+                transferred_bytes,
+                total_bytes,
+            )
             db.commit()
 
         try:
