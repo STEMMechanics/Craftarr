@@ -1153,6 +1153,14 @@ def developer_plugin_build_status(server_id: int, filename: str, request: Reques
     return {
         'project': config.get('project', ''),
         'branch': config.get('development_branch', ''),
+        # The build poll is also the first cheap request that can see the
+        # newly installed descriptor. Return the file metadata with the
+        # status so the Plugins page does not keep rendering the pre-build
+        # version while it waits for the next full page refresh.
+        'plugin': {
+            key: plugin.get(key)
+            for key in ('filename', 'name', 'version', 'size', 'modified_ns', 'enabled', 'previous_version')
+        },
         'development_status': config.get('development_status'),
     }
 
