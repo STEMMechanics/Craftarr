@@ -2913,9 +2913,17 @@ function developerBuildRowStatus(state) {
   return latest && installed && latest === installed ? "Current" : "Not checked yet";
 }
 
-function updateDeveloperPluginRow(filename, state) {
+function updateDeveloperPluginRow(filename, state, metadata = null) {
   const plugin = pluginData.find((item) => item.filename === filename);
   if (!plugin) return false;
+  let metadataChanged = false;
+  if (metadata && typeof metadata === "object") {
+    for (const key of ["name", "version", "size", "modified_ns", "enabled", "previous_version"]) {
+      if (!Object.prototype.hasOwnProperty.call(metadata, key) || plugin[key] === metadata[key]) continue;
+      plugin[key] = metadata[key];
+      metadataChanged = true;
+    }
+  }
   const nextState = state || {status: "waiting"};
   const update = {...(plugin.update || {})};
   const latest = typeof nextState.latest_commit === "string" ? nextState.latest_commit : "";
@@ -2932,6 +2940,14 @@ function updateDeveloperPluginRow(filename, state) {
   update.developer_status = nextState.status || "waiting";
   update.monitoring = {...(update.monitoring || {}), development_status: nextState};
   plugin.update = update;
+
+  // The build endpoint reads the descriptor after every poll. Re-render the
+  // complete row when its metadata changes so the name, version, and file
+  // size all move together, not just the build-status pill.
+  if (metadataChanged) {
+    renderPlugins();
+    return true;
+  }
 
   const row = [...document.querySelectorAll(".plugin-row")]
     .find((candidate) => candidate.dataset.pluginFilename === filename);
@@ -2979,8 +2995,18 @@ async function refreshDeveloperPluginRow(filename, sequence) {
       return;
     }
     const state = data.development_status;
-    updateDeveloperPluginRow(filename, state);
-    if (!state || !["queued", "building"].includes(state.status)) stopDeveloperPluginRowPolling(filename);
+    const plugin = pluginData.find((item) => item.filename === filename);
+    const previousStatus = plugin?.update?.developer_status
+      || plugin?.update?.monitoring?.development_status?.status;
+    const wasBuilding = ["queued", "building"].includes(previousStatus);
+    updateDeveloperPluginRow(filename, state, data.plugin);
+    if (!state || !["queued", "building"].includes(state.status)) {
+      stopDeveloperPluginRowPolling(filename);
+      // Re-run the normal plugin discovery once the build has finished. The
+      // status poll updates the row immediately, while this refresh also
+      // recalculates version sources and update-monitor data from the new JAR.
+      if (wasBuilding) await updatePluginsPage();
+    }
   } catch {
     // Keep the current row state when a background refresh is unavailable.
   } finally {

@@ -374,6 +374,7 @@ def test_developer_build_status_uses_cheap_plugin_listing(db, tmp_path, monkeypa
     monkeypatch.setattr(web_plugins, 'list_plugin_files', lambda *_args: [{
         'filename': 'arbitrary-name.jar',
         'name': 'ViaVersion',
+        'version': None,
         'enabled': True,
         'previous_version': False,
     }])
@@ -387,6 +388,7 @@ def test_developer_build_status_uses_cheap_plugin_listing(db, tmp_path, monkeypa
 
     assert response.status_code == 200
     assert response.json()['project'] == 'viaversion/viaversion'
+    assert response.json()['plugin']['version'] == '5.5.0'
 
 
 def test_developer_build_status_drops_retained_previous_plugin_poll(db, tmp_path, monkeypatch):
