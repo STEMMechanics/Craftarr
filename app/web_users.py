@@ -19,7 +19,12 @@ from fastapi.templating import Jinja2Templates
 
 from sqlalchemy.orm import Session
 
-from .auth import hash_password
+from .auth import (
+    auth_session_version,
+    hash_password,
+    is_auth_session_valid,
+    password_policy_error,
+)
 from .audit import record_audit_event
 from .database import get_db
 from .models import AccessRole, Server, User
@@ -176,7 +181,11 @@ def current_web_user(
     if not user:
         return None
 
-    if not user.enabled:
+    if (
+        not user.enabled
+        or not is_auth_session_valid(request.session.get("auth_version"), user)
+    ):
+        request.session.clear()
         return None
 
     return user
@@ -225,9 +234,15 @@ def users_page(
     )
 
     context = build_web_context(db, admin)
+    errors = {
+        "password": "Password must be between 8 and 128 characters.",
+        "username": "That username is already in use.",
+        "role": "Choose a valid role.",
+    }
     context.update({
         "users": users,
         "roles": db.query(AccessRole).order_by(AccessRole.name).all(),
+        "error": errors.get(request.query_params.get("error")),
     })
 
     return templates.TemplateResponse(
@@ -258,6 +273,10 @@ def create_user(
         return RedirectResponse(
             "/dashboard"
         )
+
+    password_error = password_policy_error(password)
+    if password_error:
+        return RedirectResponse("/users?error=password", status_code=303)
 
     username = username.strip()
 
@@ -337,6 +356,11 @@ def edit_user_page(
         "servers": servers,
         "assigned_ids": assigned_ids,
         "roles": db.query(AccessRole).order_by(AccessRole.name).all(),
+        "error": (
+            "Password must be between 8 and 128 characters."
+            if request.query_params.get("error") == "password"
+            else None
+        ),
     })
 
     return templates.TemplateResponse(
@@ -419,11 +443,15 @@ def save_user(
     )
 
     if password.strip():
-        edit_user.password_hash = (
-            hash_password(
-                password
+        password_error = password_policy_error(password)
+        if password_error:
+            return RedirectResponse(
+                f"/users/{user_id}?error=password",
+                status_code=303,
             )
-        )
+        edit_user.password_hash = hash_password(password)
+        if edit_user.id == admin.id:
+            request.session["auth_version"] = auth_session_version(edit_user)
 
     db.commit()
 
@@ -579,6 +607,11 @@ def profile_page(
         )
 
     context = build_web_context(db, user)
+    context["error"] = (
+        "Password must be between 8 and 128 characters."
+        if request.query_params.get("error") == "password"
+        else None
+    )
 
     return templates.TemplateResponse(
         request=request,
@@ -626,14 +659,15 @@ def save_profile(
             status_code=303,
         )
 
-    user.username = username
-
     if password.strip():
-        user.password_hash = (
-            hash_password(
-                password
-            )
-        )
+        password_error = password_policy_error(password)
+        if password_error:
+            return RedirectResponse("/profile?error=password", status_code=303)
+
+    user.username = username
+    if password.strip():
+        user.password_hash = hash_password(password)
+        request.session["auth_version"] = auth_session_version(user)
 
     db.commit()
 

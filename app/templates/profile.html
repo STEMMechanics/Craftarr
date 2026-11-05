@@ -11,6 +11,8 @@
         </div>
     </section>
 
+    {% if error %}<p role="alert">{{ error }}</p>{% endif %}
+
     <section class="overview-card settings-section">
         <div class="card-header"><i class="fa-solid fa-user" aria-hidden="true"></i> Account details</div>
         <form class="settings-content account-form" onsubmit="saveOwnProfile(event)">
@@ -24,7 +26,7 @@
             </label>
             <label class="property-field">
                 <span>New password</span>
-                <input id="settings-profile-password" type="password" autocomplete="new-password" minlength="8" oninvalid="this.value='';" placeholder="Leave blank to keep your current password">
+                <input id="settings-profile-password" type="password" autocomplete="new-password" minlength="8" maxlength="128" oninvalid="this.value='';" placeholder="Leave blank to keep your current password">
             </label>
             <div class="settings-save-row">
                 <span id="profile-save-status" class="muted-small" role="status" aria-live="polite"></span>

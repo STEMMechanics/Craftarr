@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 from datetime import datetime, timedelta, timezone
 
 from fastapi import (
@@ -45,6 +47,25 @@ def verify_password(
     )
 
 
+def password_policy_error(password) -> str | None:
+    if not isinstance(password, str):
+        return "Password must be text."
+    if len(password) < 8:
+        return "Password must be at least 8 characters."
+    if len(password) > 128:
+        return "Password must be no more than 128 characters."
+    return None
+
+
+def auth_session_version(user: User) -> str:
+    value = f"{user.id}:{user.password_hash}".encode("utf-8")
+    return hmac.new(SECRET_KEY.encode("utf-8"), value, hashlib.sha256).hexdigest()
+
+
+def is_auth_session_valid(value, user: User) -> bool:
+    return isinstance(value, str) and hmac.compare_digest(value, auth_session_version(user))
+
+
 def create_access_token(user: User) -> str:
     now = datetime.now(timezone.utc)
 
@@ -55,6 +76,7 @@ def create_access_token(user: User) -> str:
 
         "role": user.role_name,
         "role_id": user.role_id,
+        "auth_version": auth_session_version(user),
 
         "iat": now,
 
@@ -107,6 +129,9 @@ def get_current_user(
         raise auth_error
 
     if not user.enabled:
+        raise auth_error
+
+    if not is_auth_session_valid(payload.get("auth_version"), user):
         raise auth_error
 
     return user

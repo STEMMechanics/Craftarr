@@ -82,7 +82,7 @@ class ServerCreate(BaseModel):
 
     directory: str
 
-    service_name: str
+    service_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}$")
 
     minecraft_version: str | None = None
 
@@ -119,7 +119,7 @@ class ServerUpdate(BaseModel):
 
     directory: str | None = None
 
-    service_name: str | None = None
+    service_name: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}$")
 
     minecraft_version: str | None = None
 
@@ -139,6 +139,13 @@ class ServerUpdate(BaseModel):
     )
 
     enabled: bool | None = None
+
+    @field_validator("service_name")
+    @classmethod
+    def service_name_must_not_be_null(cls, value):
+        if value is None:
+            raise ValueError("Service name cannot be null")
+        return value
 
     @field_validator("memory", "min_memory", mode="before")
     @classmethod

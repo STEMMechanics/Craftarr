@@ -12,6 +12,8 @@
         <a class="button" href="/users"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back to users</a>
     </section>
 
+    {% if error %}<p role="alert">{{ error }}</p>{% endif %}
+
     <section class="overview-card settings-section">
         <div class="card-header"><i class="fa-solid fa-user-gear" aria-hidden="true"></i><span>Account details</span></div>
         <form class="settings-content user-edit-form" method="post" action="/users/{{ edit_user.id }}/save">
@@ -21,7 +23,7 @@
             </label>
             <label class="property-field">
                 <span>New password</span>
-                <input name="password" type="password" placeholder="Leave blank to keep the current password">
+                <input name="password" type="password" maxlength="128" placeholder="Leave blank to keep the current password">
             </label>
             <label class="property-field">
                 <span>Access level</span>

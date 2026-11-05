@@ -141,6 +141,17 @@ class User(Base):
         default=False,
     )
 
+    totp_failed_attempts = Column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+
+    totp_locked_until = Column(
+        DateTime,
+        nullable=True,
+    )
+
     must_change_password = Column(
         Boolean,
         nullable=False,

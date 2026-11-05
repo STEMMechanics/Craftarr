@@ -49,7 +49,8 @@ from .tfa import (
 )
 
 from .auth import (
-    hash_password,
+    auth_session_version,
+    password_policy_error,
     verify_password,
 )
 
@@ -552,6 +553,10 @@ async def update_profile(
         )
     )
 
+    password_error = password_policy_error(password) if password else None
+    if password_error:
+        return JSONResponse({"error": password_error}, status_code=400)
+
     if len(username) < 3:
         return JSONResponse(
             {
@@ -609,20 +614,9 @@ async def update_profile(
         user.email = None
 
     if password:
-
-        if len(password) < 8:
-            return JSONResponse(
-                {
-                    "error":
-                        "Password must be at least 8 characters."
-                },
-                status_code=400,
-            )
-
-        user.password_hash = hash_password(
-            password
-        )
+        user.password_hash = hash_password(password)
         user.must_change_password = False
+        request.session["auth_version"] = auth_session_version(user)
 
     db.commit()
 
@@ -747,14 +741,9 @@ async def create_user_settings(
             status_code=400,
         )
 
-    if len(password) < 8:
-        return JSONResponse(
-            {
-                "error":
-                    "Password must be at least 8 characters."
-            },
-            status_code=400,
-        )
+    password_error = password_policy_error(password)
+    if password_error:
+        return JSONResponse({"error": password_error}, status_code=400)
 
     existing = (
         db.query(User)
@@ -919,18 +908,13 @@ async def update_user_settings(
 
     if password:
 
-        if len(password) < 8:
-            return JSONResponse(
-                {
-                    "error":
-                        "Password must be at least 8 characters."
-                },
-                status_code=400,
-            )
+        password_error = password_policy_error(password)
+        if password_error:
+            return JSONResponse({"error": password_error}, status_code=400)
 
-        user.password_hash = hash_password(
-            password
-        )
+        user.password_hash = hash_password(password)
+        if user.id == admin.id:
+            request.session["auth_version"] = auth_session_version(user)
 
     if any(permission.key == "servers.view_all" for permission in access_role.permissions):
         user.servers.clear()
@@ -1324,6 +1308,8 @@ async def tfa_confirm(
 
 
     user.totp_enabled = True
+    user.totp_failed_attempts = 0
+    user.totp_locked_until = None
 
     db.commit()
 
@@ -1385,6 +1371,8 @@ async def tfa_disable(
 
     user.totp_enabled = False
     user.totp_secret = None
+    user.totp_failed_attempts = 0
+    user.totp_locked_until = None
 
     db.query(
         RecoveryCode

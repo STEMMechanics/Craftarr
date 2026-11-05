@@ -4,7 +4,6 @@ import threading
 import logging
 import json
 from pathlib import Path
-from calendar import monthrange
 from datetime import datetime, timedelta, timezone
 from .env import getenv
 
@@ -45,36 +44,62 @@ def wake_idle_restart_monitor() -> None:
     _idle_restart_wake.set()
 
 
+def _as_utc(value: datetime) -> datetime:
+    """Interpret naive scheduler timestamps as UTC and normalize aware ones."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _naive_utc(value: datetime) -> datetime:
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _valid_local_run(day, hour: int, minute: int, zone) -> datetime | None:
+    """Return a local wall time's first UTC instant, skipping DST gaps."""
+    wall_time = datetime(day.year, day.month, day.day, hour, minute)
+    candidate = wall_time.replace(tzinfo=zone, fold=0)
+    instant = candidate.astimezone(timezone.utc)
+    if instant.astimezone(zone).replace(tzinfo=None) != wall_time:
+        return None
+    return instant
+
+
+def _next_local_run(now_utc: datetime, zone, hour: int, minute: int, matches_day) -> datetime:
+    """Find the next valid wall time; ambiguous times run only in their first fold."""
+    first_day = now_utc.astimezone(zone).date()
+    for offset in range(366 * 5):
+        day = first_day + timedelta(days=offset)
+        if not matches_day(day):
+            continue
+        candidate = _valid_local_run(day, hour, minute, zone)
+        if candidate is not None and candidate > now_utc:
+            return _naive_utc(candidate)
+    raise ValueError("Schedule has no valid run time in the next five years")
+
+
 def next_task_run(task, now: datetime, schedule_timezone=None) -> datetime:
-    """Return the next naive UTC run in the configured local timezone."""
+    """Return the next naive UTC run, resolving DST gaps and folds explicitly."""
+    utc_now = _as_utc(now)
     if schedule_timezone is None and getattr(task, "schedule_timezone", None):
         try:
             schedule_timezone = ZoneInfo(task.schedule_timezone)
         except (ZoneInfoNotFoundError, ValueError):
             schedule_timezone = None
     if task.frequency == "hourly":
-        return now.replace(second=0, microsecond=0) + timedelta(hours=1)
+        return _naive_utc(utc_now.replace(second=0, microsecond=0) + timedelta(hours=1))
     if task.frequency == "custom":
-        return next_cron_run(task.cron_expression, now, schedule_timezone)
+        return next_cron_run(task.cron_expression, utc_now, schedule_timezone)
     if task.frequency in {"daily", "weekly", "monthly"}:
-        local_zone = schedule_timezone or SCHEDULE_TIMEZONE
-        local_now = now.replace(tzinfo=timezone.utc).astimezone(local_zone)
-        candidate = local_now.replace(
-            hour=task.run_hour or 0, minute=0, second=0, microsecond=0,
-        )
+        zone = schedule_timezone or SCHEDULE_TIMEZONE
         if task.frequency == "weekly":
-            candidate += timedelta(days=((task.run_weekday or 0) - candidate.weekday()) % 7)
+            matches_day = lambda day: day.weekday() == (task.run_weekday or 0)
         elif task.frequency == "monthly":
-            candidate = candidate.replace(day=1)
-        if candidate <= local_now:
-            if task.frequency == "weekly":
-                candidate += timedelta(days=7)
-            elif task.frequency == "monthly":
-                candidate = (candidate.replace(day=28) + timedelta(days=4)).replace(day=1)
-            else:
-                candidate += timedelta(days=1)
-        return candidate.astimezone(timezone.utc).replace(tzinfo=None)
-    return now + timedelta(minutes=task.interval_minutes)
+            matches_day = lambda day: day.day == 1
+        else:
+            matches_day = lambda day: True
+        return _next_local_run(utc_now, zone, task.run_hour or 0, 0, matches_day)
+    return _naive_utc(utc_now + timedelta(minutes=task.interval_minutes))
 
 
 def _cron_values(field: str, minimum: int, maximum: int, allow_sunday_7=False) -> set[int]:
@@ -121,13 +146,13 @@ def validate_cron_expression(expression: str) -> tuple[set[int], ...]:
 def next_cron_run(expression: str, now: datetime, schedule_timezone=None) -> datetime:
     minutes, hours, month_days, months, week_days = validate_cron_expression(expression or "")
     zone = schedule_timezone or SCHEDULE_TIMEZONE
-    local_now = now.replace(tzinfo=timezone.utc).astimezone(zone)
-    start_date = local_now.date()
+    utc_now = _as_utc(now)
+    start_date = utc_now.astimezone(zone).date()
     fields = expression.split()
     dom_any, dow_any = fields[2] == "*", fields[4] == "*"
     for offset in range(366 * 5):
         day = start_date + timedelta(days=offset)
-        if day.month not in months or day.day > monthrange(day.year, day.month)[1]:
+        if day.month not in months:
             continue
         cron_weekday = (day.weekday() + 1) % 7
         dom_match, dow_match = day.day in month_days, cron_weekday in week_days
@@ -135,10 +160,10 @@ def next_cron_run(expression: str, now: datetime, schedule_timezone=None) -> dat
             continue
         for hour in sorted(hours):
             for minute in sorted(minutes):
-                candidate = datetime(day.year, day.month, day.day, hour, minute, tzinfo=zone)
-                if candidate > local_now:
-                    return candidate.astimezone(timezone.utc).replace(tzinfo=None)
-    raise ValueError("Custom schedule has no run time in the next five years")
+                candidate = _valid_local_run(day, hour, minute, zone)
+                if candidate is not None and candidate > utc_now:
+                    return _naive_utc(candidate)
+    raise ValueError("Custom schedule has no valid run time in the next five years")
 
 
 def enforce_backup_retention(server, keep: int | None) -> None:
