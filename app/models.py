@@ -141,6 +141,12 @@ class User(Base):
         default=False,
     )
 
+    auth_session_generation = Column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+
     totp_failed_attempts = Column(
         Integer,
         nullable=False,
