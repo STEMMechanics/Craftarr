@@ -51,6 +51,7 @@ from .tfa import (
 from .auth import (
     auth_session_version,
     password_policy_error,
+    rotate_auth_session,
     verify_password,
 )
 
@@ -1310,8 +1311,10 @@ async def tfa_confirm(
     user.totp_enabled = True
     user.totp_failed_attempts = 0
     user.totp_locked_until = None
+    auth_version = rotate_auth_session(user)
 
     db.commit()
+    request.session["auth_version"] = auth_version
 
 
     recovery_codes = (
@@ -1373,6 +1376,7 @@ async def tfa_disable(
     user.totp_secret = None
     user.totp_failed_attempts = 0
     user.totp_locked_until = None
+    auth_version = rotate_auth_session(user)
 
     db.query(
         RecoveryCode
@@ -1382,6 +1386,7 @@ async def tfa_disable(
     ).delete()
 
     db.commit()
+    request.session["auth_version"] = auth_version
 
 
     return {
