@@ -58,8 +58,13 @@ def password_policy_error(password) -> str | None:
 
 
 def auth_session_version(user: User) -> str:
-    value = f"{user.id}:{user.password_hash}".encode("utf-8")
+    value = f"{user.id}:{user.password_hash}:{user.auth_session_generation or 0}".encode("utf-8")
     return hmac.new(SECRET_KEY.encode("utf-8"), value, hashlib.sha256).hexdigest()
+
+
+def rotate_auth_session(user: User) -> str:
+    user.auth_session_generation = (user.auth_session_generation or 0) + 1
+    return auth_session_version(user)
 
 
 def is_auth_session_valid(value, user: User) -> bool:
