@@ -93,13 +93,21 @@ def _safe_build_environment(home: Path) -> dict[str, str]:
 def _builder_identity(root: Path):
     username = os.environ.get("CRAFTARR_PLUGIN_BUILD_USER", "").strip()
     if not username:
-        return {}, _safe_build_environment(root)
-    if pwd is None:
+        raise RuntimeError(
+            "Plugin developer builds require CRAFTARR_PLUGIN_BUILD_USER to be configured"
+        )
+    if pwd is None or os.name != "posix":
         raise RuntimeError("The configured plugin build user is supported only on Linux")
+    if os.geteuid() != 0:
+        raise RuntimeError(
+            "The Craftarr process must run with privilege to switch to the dedicated build user"
+        )
     try:
         identity = pwd.getpwnam(username)
     except KeyError as error:
         raise RuntimeError(f"Configured plugin build user {username} does not exist") from error
+    if identity.pw_uid == 0 or identity.pw_uid == os.geteuid():
+        raise RuntimeError("The plugin build user must be a separate non-root account")
     os.chown(root, identity.pw_uid, identity.pw_gid)
     os.chmod(root, 0o700)
     os.chown(root / "tmp", identity.pw_uid, identity.pw_gid)

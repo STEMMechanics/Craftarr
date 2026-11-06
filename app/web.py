@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import (
@@ -16,18 +17,19 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from .version import APP_VERSION
-from .auth import verify_password
+from .auth import (
+    auth_session_version,
+    hash_password,
+    is_auth_session_valid,
+    password_policy_error,
+    verify_password,
+)
 from .database import get_db
 from .instance_identity import get_node_id
 from .models import Server, User
 from .hardware import collect_hardware_stats
 from .permissions import has_permission
-from .settings_manager import get_login_message
-
-from .auth import (
-    hash_password,
-    verify_password,
-)
+from .settings_manager import get_instance_settings, get_login_message
 
 from .emailer import send_email
 
@@ -57,6 +59,7 @@ from .web_render import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 templates = Jinja2Templates(
     directory="app/templates"
@@ -64,9 +67,9 @@ templates = Jinja2Templates(
 
 
 def _finish_web_login(request: Request, user: User) -> RedirectResponse:
+    request.session.clear()
     request.session["user_id"] = user.id
-    request.session.pop("pending_tfa_user_id", None)
-    request.session.pop("pending_tfa_expires", None)
+    request.session["auth_version"] = auth_session_version(user)
     return RedirectResponse(
         "/change-password" if user.must_change_password else "/dashboard",
         status_code=303,
@@ -131,6 +134,8 @@ def login_web(
 
     if user.totp_enabled:
 
+        request.session.clear()
+        request.session["pending_tfa_auth_version"] = auth_session_version(user)
         request.session[
             "pending_tfa_user_id"
         ] = user.id
@@ -184,13 +189,12 @@ def change_password(
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
 
-    error = None
-    if len(password) < 8:
-        error = "Password must be at least 8 characters."
-    elif password != confirm_password:
-        error = "Passwords do not match."
-    elif verify_password(password, user.password_hash):
-        error = "Choose a password different from the temporary password."
+    error = password_policy_error(password)
+    if error is None:
+        if password != confirm_password:
+            error = "Passwords do not match."
+        elif verify_password(password, user.password_hash):
+            error = "Choose a password different from the temporary password."
 
     if error:
         return templates.TemplateResponse(
@@ -202,6 +206,7 @@ def change_password(
 
     user.password_hash = hash_password(password)
     user.must_change_password = False
+    request.session["auth_version"] = auth_session_version(user)
     db.commit()
     return RedirectResponse("/dashboard", status_code=303)
 
@@ -392,28 +397,26 @@ def forgot_password(
 
         try:
 
-            token = create_reset_token(
-                db,
-                user,
-            )
-
-            reset_url = (
-                str(request.base_url)
-                + "reset-password?token="
-                + token
-            )
-
-            send_email(
-                db,
-                user.email,
-                "Reset your Craftarr password",
-                (
-                    "A password reset was requested "
-                    "for your Craftarr account.\n\n"
-                    f"{reset_url}\n\n"
-                    "This link expires in 30 minutes."
-                ),
-            )
+            public_url = get_instance_settings(db)["public_url"]
+            if public_url:
+                token = create_reset_token(
+                    db,
+                    user,
+                )
+                reset_url = f"{public_url}/reset-password?token={token}"
+                send_email(
+                    db,
+                    user.email,
+                    "Reset your Craftarr password",
+                    (
+                        "A password reset was requested "
+                        "for your Craftarr account.\n\n"
+                        f"{reset_url}\n\n"
+                        "This link expires in 30 minutes."
+                    ),
+                )
+            else:
+                logger.warning("Password reset email not sent because no public URL is configured")
 
         except Exception:
             pass
@@ -495,7 +498,8 @@ def reset_password(
         )
 
 
-    if len(password) < 8:
+    password_error = password_policy_error(password)
+    if password_error:
 
         return templates.TemplateResponse(
             request=request,
@@ -511,7 +515,7 @@ def reset_password(
                     True,
 
                 "error":
-                    "Password must be at least 8 characters.",
+                    password_error,
             },
             status_code=400,
         )
@@ -632,37 +636,43 @@ def login_tfa(
         )
 
 
-    valid = verify_totp(
-        user.totp_secret,
-        code,
-    )
-
-
-    if not valid:
-
-        valid = use_recovery_code(
-            db,
-            user,
-            code,
-        )
-
-
-    if not valid:
-
+    now = datetime.utcnow()
+    if user.totp_locked_until and user.totp_locked_until > now:
         return templates.TemplateResponse(
             request=request,
             name="login_tfa.html",
             context={
-                "app_version":
-                    APP_VERSION,
-
-                "error":
-                    "Invalid authentication code.",
+                "app_version": APP_VERSION,
+                "error": "Too many invalid authentication codes. Try again later.",
             },
-            status_code=401,
+            status_code=429,
         )
 
+    valid = verify_totp(user.totp_secret, code)
+    if not valid:
+        valid = use_recovery_code(db, user, code)
 
+    if not valid:
+        user.totp_failed_attempts = (user.totp_failed_attempts or 0) + 1
+        locked = user.totp_failed_attempts >= 5
+        if locked:
+            user.totp_failed_attempts = 0
+            user.totp_locked_until = now + timedelta(minutes=15)
+        db.commit()
+        message = (
+            "Too many invalid authentication codes. Try again in 15 minutes."
+            if locked else "Invalid authentication code."
+        )
+        return templates.TemplateResponse(
+            request=request,
+            name="login_tfa.html",
+            context={"app_version": APP_VERSION, "error": message},
+            status_code=429 if locked else 401,
+        )
+
+    user.totp_failed_attempts = 0
+    user.totp_locked_until = None
+    db.commit()
     return _finish_web_login(request, user)
 
 def get_pending_tfa_user(
@@ -725,6 +735,13 @@ def get_pending_tfa_user(
     )
 
     if not user:
+        return None
+
+    if not is_auth_session_valid(
+        request.session.get("pending_tfa_auth_version"),
+        user,
+    ):
+        request.session.clear()
         return None
 
     return user

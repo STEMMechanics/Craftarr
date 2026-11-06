@@ -157,6 +157,8 @@ async def web_delete_server(
     server = db.get(Server, server_id)
     if not server:
         return JSONResponse({"error": "Server not found"}, status_code=404)
+    if not has_permission(user, "servers.view_all") and server not in user.servers:
+        return JSONResponse({"error": "Server not found"}, status_code=404)
 
     data = await request.json()
     if data.get("confirmed") is not True:

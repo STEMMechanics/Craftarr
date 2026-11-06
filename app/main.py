@@ -15,6 +15,7 @@ from fastapi import FastAPI
 
 from .version import APP_VERSION
 from .config import COOKIE_SECURE, SECRET_KEY
+from .auth import is_auth_session_valid
 from .migrations import upgrade_database
 from .processes import register_server
 
@@ -154,6 +155,33 @@ async def force_password_change(request, call_next):
                 )
             return RedirectResponse("/change-password", status_code=303)
     return await call_next(request)
+
+
+@app.middleware("http")
+async def invalidate_stale_sessions(request, call_next):
+    user_id = request.session.get("user_id")
+    if not user_id:
+        return await call_next(request)
+
+    db = SessionLocal()
+    try:
+        user = db.get(User, user_id)
+        valid = bool(
+            user and user.enabled
+            and is_auth_session_valid(request.session.get("auth_version"), user)
+        )
+    finally:
+        db.close()
+
+    if valid:
+        return await call_next(request)
+
+    request.session.clear()
+    if request.url.path == "/login" or request.url.path.startswith("/static/"):
+        return await call_next(request)
+    if request.url.path.startswith("/api/"):
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    return RedirectResponse("/login", status_code=303)
 
 
 @app.middleware("http")
@@ -337,7 +365,13 @@ def startup():
                 server.java_path = selected
         db.commit()
         for server in servers:
-            register_server(server)
+            try:
+                register_server(server)
+            except (TypeError, ValueError) as error:
+                logging.getLogger(__name__).error(
+                    "Skipping invalid server configuration %s (%s): %s",
+                    server.id, server.name, error,
+                )
     finally:
         db.close()
     start_automation()

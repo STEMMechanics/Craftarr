@@ -173,10 +173,7 @@ def update_server(
     ),
 ):
 
-    server = db.get(
-        Server,
-        server_id,
-    )
+    server = get_server_for_user(db, server_id, admin)
 
     if not server:
 
@@ -254,10 +251,7 @@ def delete_server(
     ),
 ):
 
-    server = db.get(
-        Server,
-        server_id,
-    )
+    server = get_server_for_user(db, server_id, admin)
 
     if not server:
 

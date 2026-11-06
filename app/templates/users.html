@@ -11,6 +11,8 @@
         </div>
     </section>
 
+    {% if error %}<p role="alert">{{ error }}</p>{% endif %}
+
     <section class="overview-card settings-section">
         <div class="card-header"><span><i class="fa-solid fa-user-plus" aria-hidden="true"></i> Add a user</span></div>
         <form method="post" action="/users/create" class="settings-content user-form">
@@ -20,7 +22,7 @@
             </label>
             <label class="property-field">
                 <span>Password</span>
-                <input name="password" type="password" placeholder="Choose a password" minlength="8" required>
+                <input name="password" type="password" placeholder="Choose a password" minlength="8" maxlength="128" required>
             </label>
             <label class="property-field">
                 <span>Access level</span>
