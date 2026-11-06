@@ -817,7 +817,16 @@ def process_pending_automatic_updates() -> None:
 
 def _automation_loop() -> None:
     last_metrics = 0.0
+    schedules_reconciled = False
     while not _stop.is_set():
+        if not schedules_reconciled:
+            try:
+                reconcile_future_calendar_schedules()
+                schedules_reconciled = True
+            except Exception:
+                logger.exception("Scheduled task reconciliation failed; retrying before running scheduled tasks")
+                _stop.wait(POLL_SECONDS)
+                continue
         db = SessionLocal()
         try:
             has_pending_idle_restart = db.query(PendingIdleRestart.server_id).first() is not None
@@ -867,6 +876,44 @@ def _automation_loop() -> None:
             except Exception:
                 logger.exception("Historical metric collection failed")
             last_metrics = now
+
+
+def reconcile_future_calendar_schedules() -> None:
+    """Refresh persisted calendar schedule times using the current DST rules.
+
+    Leave overdue entries untouched so the scheduler can retain its existing
+    catch-up behavior.
+    """
+    now = datetime.utcnow()
+    db = SessionLocal()
+    changed = 0
+    try:
+        tasks = db.query(ScheduledTask).filter(
+            ScheduledTask.enabled.is_(True),
+            ScheduledTask.frequency.in_(("daily", "weekly", "monthly", "custom")),
+            ScheduledTask.next_run_at > now,
+        ).all()
+        for task in tasks:
+            try:
+                next_run_at = next_task_run(task, now)
+            except (TypeError, ValueError) as error:
+                logger.warning(
+                    "Could not reconcile scheduled task %s: %s",
+                    task.id,
+                    error,
+                )
+                continue
+            if task.next_run_at != next_run_at:
+                task.next_run_at = next_run_at
+                changed += 1
+        if changed:
+            db.commit()
+            logger.info("Reconciled next run times for %s scheduled tasks", changed)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 def start_automation() -> None:
