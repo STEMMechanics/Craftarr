@@ -3575,7 +3575,7 @@ function linkifyConsoleMessage(message) {
     if (!new Set(["http:", "https:"]).has(url.protocol) || !url.hostname) continue;
 
     html += escapeHtml(text.slice(cursor, start));
-    html += `<a class="console-link" href="${escapeHtml(url.href)}" data-domain="${escapeHtml(url.hostname.toLowerCase())}" rel="noopener noreferrer">${escapeHtml(candidate)}</a>`;
+    html += `<a class="console-link" href="${escapeHtml(url.href)}" data-domain="${escapeHtml(url.hostname.toLowerCase())}" target="_blank" rel="noopener noreferrer">${escapeHtml(candidate)}</a>`;
     html += escapeHtml(trailing);
     cursor = start + match[0].length;
   }
@@ -3651,19 +3651,17 @@ document.addEventListener("click", (event) => {
     : null;
   if (!link) return;
 
-  event.preventDefault();
   const target = {
     url: link.href,
     domain: link.dataset.domain,
     element: link,
   };
 
-  if (getTrustedConsoleLinkDomains().has(target.domain)) {
-    openConsoleLink(target.url);
-  } else {
-    showConsoleLinkDialog(target);
-  }
-});
+  if (getTrustedConsoleLinkDomains().has(target.domain)) return;
+
+  event.preventDefault();
+  showConsoleLinkDialog(target);
+}, true);
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !document.getElementById("console-link-modal")?.hidden) {
