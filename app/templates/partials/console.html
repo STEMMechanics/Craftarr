@@ -43,6 +43,25 @@
 
   <div id="console-output" class="console-output"></div>
 
+  <div id="console-link-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="console-link-title" hidden>
+    <div class="modal-card console-link-modal-card">
+      <h2 id="console-link-title">Open this link?</h2>
+      <p>Open this address in a new window?</p>
+      <code id="console-link-url" class="console-link-url"></code>
+      <p class="console-link-domain-row">Domain: <strong id="console-link-domain"></strong></p>
+
+      <label class="modal-checkbox">
+        <input id="console-link-trust" type="checkbox">
+        <span>Always trust this domain</span>
+      </label>
+
+      <div class="modal-actions">
+        <button class="button" type="button" onclick="closeConsoleLinkDialog()">Cancel</button>
+        <button id="console-link-open" class="button" type="button" onclick="confirmConsoleLinkOpen()">Open link</button>
+      </div>
+    </div>
+  </div>
+
 
   <div class="console-command">
 
