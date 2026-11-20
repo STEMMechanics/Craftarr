@@ -1761,6 +1761,8 @@ let consoleLines = [];
 const consoleLevels = ["INFO", "WARN", "ERROR", "DEBUG"];
 let consoleFilters = new Set();
 let lastConsoleSignature = "";
+let pendingConsoleLink = null;
+const trustedConsoleLinkDomainsKey = "stemcraft.trustedConsoleLinkDomains";
 let playerData = null;
 let playerFilter = "all";
 let playerSort = "last-online-desc";
@@ -3535,6 +3537,140 @@ function parseConsoleLine(line) {
   };
 }
 
+function linkifyConsoleMessage(message) {
+  const text = String(message);
+  const pattern = /https?:\/\/[^\s<>"']+|www\.[^\s<>"']+/gi;
+  let html = "";
+  let cursor = 0;
+
+  for (const match of text.matchAll(pattern)) {
+    const start = match.index;
+    let candidate = match[0];
+    let trailing = "";
+
+    while (/[.,!?;:]$/.test(candidate)) {
+      trailing = candidate.slice(-1) + trailing;
+      candidate = candidate.slice(0, -1);
+    }
+
+    for (const [closer, opener] of [[")", "("], ["]", "["], ["}", "{"]]) {
+      while (
+        candidate.endsWith(closer) &&
+        candidate.split(closer).length > candidate.split(opener).length
+      ) {
+        trailing = candidate.slice(-1) + trailing;
+        candidate = candidate.slice(0, -1);
+      }
+    }
+
+    if (!candidate) continue;
+
+    let url;
+    try {
+      url = new URL(/^www\./i.test(candidate) ? `https://${candidate}` : candidate);
+    } catch {
+      continue;
+    }
+
+    if (!new Set(["http:", "https:"]).has(url.protocol) || !url.hostname) continue;
+
+    html += escapeHtml(text.slice(cursor, start));
+    html += `<a class="console-link" href="${escapeHtml(url.href)}" data-domain="${escapeHtml(url.hostname.toLowerCase())}" rel="noopener noreferrer">${escapeHtml(candidate)}</a>`;
+    html += escapeHtml(trailing);
+    cursor = start + match[0].length;
+  }
+
+  return html + escapeHtml(text.slice(cursor));
+}
+
+function getTrustedConsoleLinkDomains() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(trustedConsoleLinkDomainsKey) || "[]");
+    return new Set(
+      Array.isArray(stored)
+        ? stored
+            .filter((domain) => typeof domain === "string")
+            .map((domain) => domain.toLowerCase())
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function openConsoleLink(url) {
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
+function showConsoleLinkDialog(link) {
+  const modal = document.getElementById("console-link-modal");
+  const url = document.getElementById("console-link-url");
+  const domain = document.getElementById("console-link-domain");
+  const trust = document.getElementById("console-link-trust");
+  const openButton = document.getElementById("console-link-open");
+  if (!modal || !url || !domain || !trust || !openButton) return;
+
+  pendingConsoleLink = link;
+  url.textContent = link.url;
+  domain.textContent = link.domain;
+  trust.checked = false;
+  modal.hidden = false;
+  openButton.focus();
+}
+
+function closeConsoleLinkDialog() {
+  const modal = document.getElementById("console-link-modal");
+  if (modal) modal.hidden = true;
+  const sourceLink = pendingConsoleLink?.element;
+  pendingConsoleLink = null;
+  if (sourceLink?.isConnected) sourceLink.focus();
+}
+
+function confirmConsoleLinkOpen() {
+  if (!pendingConsoleLink) return;
+
+  const trust = document.getElementById("console-link-trust");
+  if (trust?.checked) {
+    const domains = getTrustedConsoleLinkDomains();
+    domains.add(pendingConsoleLink.domain);
+    try {
+      localStorage.setItem(trustedConsoleLinkDomainsKey, JSON.stringify([...domains]));
+    } catch {
+      showToast("This browser could not save trusted link domains.", "warning");
+    }
+  }
+
+  const { url } = pendingConsoleLink;
+  closeConsoleLinkDialog();
+  openConsoleLink(url);
+}
+
+document.addEventListener("click", (event) => {
+  const link = event.target instanceof Element
+    ? event.target.closest("#console-output a.console-link")
+    : null;
+  if (!link) return;
+
+  event.preventDefault();
+  const target = {
+    url: link.href,
+    domain: link.dataset.domain,
+    element: link,
+  };
+
+  if (getTrustedConsoleLinkDomains().has(target.domain)) {
+    openConsoleLink(target.url);
+  } else {
+    showConsoleLinkDialog(target);
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !document.getElementById("console-link-modal")?.hidden) {
+    closeConsoleLinkDialog();
+  }
+});
+
 function renderConsoleLines() {
   updateConsoleFilterButtons();
   const output = document.getElementById(
@@ -3571,7 +3707,7 @@ function renderConsoleLines() {
         escapeHtml(line.level) +
         "</span>" +
         '<span class="console-message">' +
-        escapeHtml(line.message) +
+        linkifyConsoleMessage(line.message) +
         "</span>" +
         "</div>"
       );
